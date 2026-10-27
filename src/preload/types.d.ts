@@ -25,7 +25,7 @@ interface Api {
   validateToken: () => Promise<{ valid: boolean; error?: string }>
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
   getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
-  getAnimeCache: (id: number) => Promise<{ data: AnimeDetail; cachedAt: number } | null>
+  getAnimeCache: (id: number) => Promise<AnimeCacheResult | null>
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>
   getEpisodesBatch: (
     episodeIds: number[],
@@ -301,8 +301,8 @@ interface Api {
   shikimoriMarkEpisodeWatched: (malId: number, epNum: number) => Promise<ShikiUserRate | null>
   shikimoriGetFriendsRates: (malId: number) => Promise<ShikiFriendRate[]>
   shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
-  shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>
-  shikimoriGetCalendar: (force?: boolean) => Promise<CalendarEntry[]>
+  shikimoriGetFriendsActivity: () => Promise<ShikiSnapshotResult<ShikiFriendActivityEntry[]>>
+  shikimoriGetCalendar: (force?: boolean) => Promise<ShikiSnapshotResult<CalendarEntry[]>>
   shikimoriGetRelated: (malId: number) => Promise<ShikiRelatedEntry[]>
   onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => Unsubscribe
   onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => Unsubscribe

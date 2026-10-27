@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import DownloadsView from '../../../src/renderer/src/components/views/DownloadsView.vue'
+import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
 
 function item(overrides: Partial<DownloadProgressItem> = {}): DownloadProgressItem {
   return {
@@ -40,8 +41,9 @@ function group(id: number, overrides: Partial<EpisodeGroup> = {}): EpisodeGroup 
   }
 }
 
-function stubApi(groups: EpisodeGroup[]): void {
+function stubApi(groups: EpisodeGroup[], offline: OfflineApi = offlineApi()): void {
   const real: Record<string, unknown> = {
+    ...offline.api,
     downloadGetQueue: vi.fn().mockResolvedValue(groups)
   }
   ;(window as unknown as { api: unknown }).api = new Proxy(real, {
@@ -143,5 +145,60 @@ describe('DownloadsView — status left-border card class', () => {
 
     expect(wrapper.find('.empty-state').exists()).toBe(true)
     expect(wrapper.find('.dl-card').exists()).toBe(false)
+  })
+})
+
+describe('DownloadsView — offline (#568)', () => {
+  const queued = (): EpisodeGroup =>
+    group(1, { video: item({ status: 'queued', bytesReceived: 0 }) })
+
+  it('offline: a queued item reads "waiting for connection" and keeps its queued class', async () => {
+    stubApi([queued()], offlineApi('offline-auto'))
+    const wrapper = mount(DownloadsView)
+    await flushPromises()
+
+    const status = wrapper.find('.dl-status')
+    expect(status.text()).toBe('waiting for connection')
+    expect(status.classes()).toContain('queued')
+    expect(wrapper.find('.r-status').attributes('title')).toBe('Waiting for connection')
+  })
+
+  it('online: a queued item reads "queued" — today', async () => {
+    stubApi([queued()])
+    const wrapper = mount(DownloadsView)
+    await flushPromises()
+
+    expect(wrapper.find('.dl-status').text()).toBe('queued')
+    expect(wrapper.find('.r-status').attributes('title')).toBeUndefined()
+  })
+
+  it('offline: cancel and merge stay available', async () => {
+    stubApi(
+      [queued(), group(2, { video: item({ status: 'completed' }), mergeStatus: 'pending' })],
+      offlineApi('offline-manual')
+    )
+    const wrapper = mount(DownloadsView)
+    await flushPromises()
+
+    const cancel = wrapper.find('.dl-card.queued .iconbtn.cancel')
+    expect(cancel.exists()).toBe(true)
+    expect(cancel.attributes('disabled')).toBeUndefined()
+    const merge = wrapper
+      .findAll('.topbar-actions button')
+      .find((b) => b.text() === 'Merge finished')
+    expect(merge?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('the label follows the offline state without a reload', async () => {
+    const offline = offlineApi()
+    stubApi([queued()], offline)
+    const wrapper = mount(DownloadsView)
+    await flushPromises()
+    offline.emit('offline-manual')
+    await flushPromises()
+    expect(wrapper.find('.dl-status').text()).toBe('waiting for connection')
+    offline.emit('online')
+    await flushPromises()
+    expect(wrapper.find('.dl-status').text()).toBe('queued')
   })
 })

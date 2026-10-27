@@ -25,6 +25,8 @@ src/renderer/src/
                                 Both toggles are poster overlays inside .poster-wrap (star top-right,
                                 priority flag stacked below it) so they can never collide with the title/meta.
       CleanupModal.vue
+      OfflineNotice.vue         The one offline empty state (#568): icon, props { reason, compact? }, and a
+                                button that turns Work offline off (manual) or probes now (auto, "Retry")
       Sidebar.vue
       SidebarUpdateBanner.vue   Update prompt pinned above the profile chip (reads settings store updateStatus)
     detail/                    AnimeDetailView sub-components + injection keys
@@ -75,10 +77,25 @@ The six stores in `src/renderer/src/stores/` own cross-view state and, where app
 | `useSettingsStore` | `settings.ts` | `shortcuts`, `ffmpegDownloading`/`Progress`, `fpcalcDownloading`/`Progress`, `updateStatus` | `onFfmpegDownloadProgress`, `onFpcalcDownloadProgress`, `onUpdateStatus` (lifetime-scoped) |
 | `useShikimoriStore` | `shikimori.ts` | `user`, `profile`, `friends`, `recommendations`, `loggedIn` (computed), `rates`, `animeDetails`, `syncStatus`, `offlineQueueLength` | `onShikimoriRateUpdated`, `onShikimoriRatesRefreshed`, `onShikimoriProfileRefreshed`, `onShikimoriFriendsRefreshed`, `onShikimoriRecommendationsRefreshed`, `onShikimoriAnimeDetailsUpdated`, `onShikimoriOfflineQueueChanged`, `onShikimoriSyncStatus` (lifetime-scoped) |
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
-| `useOfflineStore` | `offline.ts` | `state` (`OfflineState`), `isOffline`/`isManual` (computed), `retrying`, `setManual(on)`, `retry()` — backs the Sidebar Offline pill and the Settings › General Work offline switch (#567) | `onOfflineStateChanged` (lifetime-scoped) |
+| `useOfflineStore` | `offline.ts` | `state` (`OfflineState`), `isOffline`/`isManual` (computed), `retrying`, `setManual(on)`, `retry()` — backs the Sidebar Offline pill and the Settings › General Work offline switch (#567), `OfflineNotice`, and each view's offline state (#568, see below) | `onOfflineStateChanged` (lifetime-scoped) |
 | `useSyncplayStore` | `syncplay.ts` | `status` (`SyncplayStatus`), `roomUsers`, `isActive` (computed), `refresh()` re-seed from `get-status`/`get-room-users` | `onSyncplayConnectionStatus`, `onSyncplayRoomUsers` (lifetime-scoped) |
 
 Stores singleton-own their broadcast subscriptions and never dispose them — they live for the app's lifetime. Component-local subscriptions (per-anime, per-player-instance) bind to `onUnmounted` instead. See [IPC](./ipc.md) for the full ownership rule and the CI gate.
+
+### Views offline (#568)
+
+Every view reads `isOffline` from `useOfflineStore` (a `watch` in setup, stopped on unmount; no view subscribes to the broadcast itself) and none probes the network. Toggling Work offline updates an open view without a reload, and the online edge refetches a view that was showing offline data once.
+
+| View | Offline |
+|---|---|
+| `SearchView` | `OfflineNotice` "Search needs an internet connection" in place of the results; the input stays enabled, a submit doesn't call `searchAnime` and runs once on the online edge |
+| `CalendarView` | Paints main's snapshot with "Last updated <relative>" (`formatAgo`) in the topbar; with none (`fetchedAt: null`), `OfflineNotice` "Calendar needs an internet connection". The stamp also shows online when `stale` (a failed fetch served the snapshot), worded without "offline" |
+| `FriendsActivityView` (Activity tab) | The same, with "Friends activity needs an internet connection" |
+| `DownloadsView` | A queued group's status reads "waiting for connection"; pause, cancel and merge are unchanged |
+| `WatchTogetherView` | Join room is disabled with the tooltip "Watch Together needs an internet connection", plus a compact `OfflineNotice`; a session S1a ended still shows its `status.error` |
+| `AnimeDetailView` | Paints from `get-anime-cache` (no TTL offline) with a "Saved <date>, offline" chip in place of the OFFLINE chip; with no cache entry, `OfflineNotice` "This title needs an internet connection". `useEpisodeDownloads` takes `isOffline` and exposes `downloadBlockedReason`: Download all and each row's download button are disabled with it as the tooltip, and both actions refuse |
+
+Tests: one component test per view under `offline: true` and `offline: false` in `test/renderer/components/`, and `e2e/offline-views.spec.ts` on a `workOffline` profile seeded with a library title and a past-TTL detail cache. A component test that mounts an offline-aware view spreads `test/helpers/offline-api.ts` into its `window.api` stub: a permissive stub answers `offlineGetState()` with a function, which reads as offline.
 
 ## Composables
 

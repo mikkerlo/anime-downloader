@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import SearchView from '../../../src/renderer/src/components/views/SearchView.vue'
 import LibraryView from '../../../src/renderer/src/components/views/LibraryView.vue'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
+import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
 
 function anime(id: number, typeTitle: string): AnimeSearchResult {
   return {
@@ -20,9 +21,10 @@ function anime(id: number, typeTitle: string): AnimeSearchResult {
   }
 }
 
-function stubApi(overrides: Record<string, unknown>): void {
-  ;(window as unknown as { api: unknown }).api = new Proxy(overrides, {
-    get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : () => () => {})
+function stubApi(overrides: Record<string, unknown>, offline: OfflineApi = offlineApi()): void {
+  const target = { ...offline.api, ...overrides }
+  ;(window as unknown as { api: unknown }).api = new Proxy(target, {
+    get: (t, prop, recv) => (prop in t ? Reflect.get(t, prop, recv) : () => () => {})
   })
 }
 
@@ -97,6 +99,71 @@ describe('SearchView', () => {
 
     expect(wrapper.find('.poster-grid').exists()).toBe(false)
     expect(wrapper.find('.empty-state p').text()).toContain('No titles match')
+  })
+})
+
+describe('SearchView — offline (#568)', () => {
+  function apis(): Record<string, ReturnType<typeof vi.fn>> {
+    return {
+      searchAnime: vi.fn().mockResolvedValue({ data: [anime(1, 'TV')] }),
+      libraryHas: vi.fn().mockResolvedValue(false),
+      libraryGetPriority: vi.fn().mockResolvedValue([])
+    }
+  }
+
+  async function submit(wrapper: ReturnType<typeof mount>, q: string): Promise<void> {
+    await wrapper.find('input.search-input').setValue(q)
+    await wrapper.find('form.search-wrap').trigger('submit')
+    await flushPromises()
+  }
+
+  it('offline: shows the OfflineNotice, keeps the input enabled, never calls searchAnime', async () => {
+    const api = apis()
+    stubApi(api, offlineApi('offline-manual'))
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="offline-notice"] p').text()).toBe(
+      'Search needs an internet connection'
+    )
+    const input = wrapper.find('input.search-input')
+    expect(input.attributes('disabled')).toBeUndefined()
+    await submit(wrapper, 'frieren')
+
+    expect(api.searchAnime).not.toHaveBeenCalled()
+    expect(wrapper.find('.poster-grid').exists()).toBe(false)
+  })
+
+  it('online: no notice and the search runs — today', async () => {
+    const api = apis()
+    stubApi(api)
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="offline-notice"]').exists()).toBe(false)
+
+    await submit(wrapper, 'frieren')
+    expect(api.searchAnime).toHaveBeenCalledWith('frieren')
+    expect(wrapper.findAll('.poster-grid .acard')).toHaveLength(1)
+  })
+
+  it('a search submitted offline runs once when the app goes back online', async () => {
+    const api = apis()
+    const offline = offlineApi('offline-auto')
+    stubApi(api, offline)
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'frieren')
+    expect(api.searchAnime).not.toHaveBeenCalled()
+
+    offline.emit('online')
+    await flushPromises()
+    expect(api.searchAnime).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('.poster-grid .acard')).toHaveLength(1)
+
+    offline.emit('offline-auto')
+    offline.emit('online')
+    await flushPromises()
+    expect(api.searchAnime).toHaveBeenCalledTimes(1)
   })
 })
 

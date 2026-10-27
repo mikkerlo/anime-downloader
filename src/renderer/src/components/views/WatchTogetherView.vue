@@ -6,14 +6,19 @@
 // then adopts the already-open connection and announces our file.
 import { ref, computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
+import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useSyncplayStore } from '../../stores/syncplay';
 import { useLibraryStore } from '../../stores/library';
+import { useOfflineStore } from '../../stores/offline';
 import { useOpenEpisode } from '../../composables/use-open-episode';
 
 const syncplayStore = useSyncplayStore();
 const libraryStore = useLibraryStore();
 const { status, roomUsers, isActive } = storeToRefs(syncplayStore);
+const { isOffline } = storeToRefs(useOfflineStore());
 const { openEpisode } = useOpenEpisode();
+
+const OFFLINE_REASON = 'Watch Together needs an internet connection';
 
 const roomInput = ref('');
 const busy = ref(false);
@@ -31,6 +36,7 @@ const otherUsers = computed(() =>
 const appPeerCount = computed(() => otherUsers.value.filter((u) => u.animeDlAppMeta).length);
 
 async function connect(): Promise<void> {
+  if (isOffline.value) return;
   actionError.value = '';
   const cfg = (await window.api.getSetting('syncplay')) as {
     lastHost?: string;
@@ -138,13 +144,22 @@ onMounted(async () => {
           placeholder="room name"
           @keyup.enter="connect"
         />
-        <button class="wt-btn primary" :disabled="busy" @click="connect">Join room</button>
+        <button
+          class="wt-btn primary"
+          :disabled="busy || isOffline"
+          :title="isOffline ? OFFLINE_REASON : undefined"
+          data-testid="wt-connect"
+          @click="connect"
+        >
+          Join room
+        </button>
       </div>
       <div v-else class="wt-connect-row">
         <button class="wt-btn" @click="disconnect">Disconnect</button>
       </div>
 
       <div v-if="!isActive && status.error" class="wt-error">{{ status.error }}</div>
+      <OfflineNotice v-if="!isActive && isOffline" compact :reason="OFFLINE_REASON" />
       <div v-if="actionError" class="wt-error">{{ actionError }}</div>
       <p class="wt-hint">
         Server and username come from

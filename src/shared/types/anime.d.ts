@@ -9,6 +9,16 @@ interface ApiResponse<T> {
   source: 'api' | 'cache'
 }
 
+/**
+ * `get-anime-cache`. Online an entry past the 24 h TTL reads as null; offline
+ * it is returned with `stale: true` (#568).
+ */
+interface AnimeCacheResult {
+  data: AnimeDetail
+  cachedAt: number
+  stale: boolean
+}
+
 interface AnimeSearchResult {
   id: number
   title: string

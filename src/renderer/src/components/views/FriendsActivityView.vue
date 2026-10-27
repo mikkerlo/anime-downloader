@@ -2,12 +2,16 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
+import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { useOfflineStore } from '../../stores/offline';
+import { formatAgo } from '../../utils';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
 const { friends } = storeToRefs(shikimoriStore);
+const { isOffline } = storeToRefs(useOfflineStore());
 
 type Tab = 'all' | 'online' | 'activity';
 const tab = ref<Tab>('all');
@@ -24,6 +28,14 @@ const error = ref('');
 const activities = ref<ShikiFriendActivityEntry[]>([]);
 let activityLoadedAt = 0;
 const ACTIVITY_CACHE_MS = 5 * 60 * 1000;
+// Main's snapshot (#568): `stale` when served offline or after a failed fetch,
+// `activityFetchedAt` null offline with none.
+const activityFetchedAt = ref<number | null>(null);
+const activityStale = ref(false);
+const activityLoaded = ref(false);
+const showActivityStamp = computed(
+  () => activityFetchedAt.value !== null && (activityStale.value || isOffline.value)
+);
 
 const onlineCount = computed(() => friends.value.filter((f) => f.online).length);
 const displayedFriends = computed(() =>
@@ -92,8 +104,13 @@ async function loadActivity(force = false): Promise<void> {
   if (!shikimoriStore.loggedIn) return;
   loadingActivity.value = true;
   try {
-    activities.value = await window.api.shikimoriGetFriendsActivity();
-    activityLoadedAt = Date.now();
+    const res = await window.api.shikimoriGetFriendsActivity();
+    activities.value = res.data;
+    activityFetchedAt.value = res.fetchedAt;
+    activityStale.value = res.stale;
+    activityLoaded.value = true;
+    // A snapshot isn't a fresh load: the next visit to the tab fetches again.
+    activityLoadedAt = res.stale ? 0 : Date.now();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load friends activity';
   } finally {
@@ -127,6 +144,13 @@ function openExternal(url: string): void {
 // Lazily load the activity feed the first time the Activity tab is opened.
 watch(tab, (t) => {
   if (t === 'activity') void loadActivity();
+});
+
+// Back online: one refetch of an activity feed that was served offline.
+watch(isOffline, (offline) => {
+  if (!offline && tab.value === 'activity' && activityLoaded.value && activityStale.value) {
+    void loadActivity(true);
+  }
 });
 
 onMounted(() => loadFriends());
@@ -263,10 +287,17 @@ onMounted(() => loadFriends());
           <div v-if="loadingActivity && activities.length === 0" class="status-text">
             Loading activity…
           </div>
+          <OfflineNotice
+            v-else-if="isOffline && activityLoaded && activityFetchedAt === null"
+            reason="Friends activity needs an internet connection"
+          />
           <div v-else-if="activities.length === 0" class="status-text">
             No recent activity from your Shikimori friends.
           </div>
-          <div v-else class="feed">
+          <div v-if="showActivityStamp" class="stamp" data-testid="activity-stamp">
+            Last updated {{ formatAgo(activityFetchedAt!) }}
+          </div>
+          <div v-if="activities.length > 0" class="feed">
             <div
               v-for="(entry, idx) in activities"
               :key="entry.friendId + '-' + entry.createdAt + '-' + idx"
@@ -661,6 +692,12 @@ onMounted(() => loadFriends());
   display: flex;
   flex-direction: column;
   max-width: 720px;
+}
+
+.stamp {
+  color: var(--text-3);
+  font-size: 0.85rem;
+  margin-bottom: 10px;
 }
 
 .feed-row {

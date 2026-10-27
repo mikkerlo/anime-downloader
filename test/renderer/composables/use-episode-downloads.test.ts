@@ -629,6 +629,60 @@ describe('useEpisodeDownloads — actions', () => {
   })
 })
 
+describe('useEpisodeDownloads — offline (#568)', () => {
+  function offlineDl(isOffline: boolean): {
+    dl: ReturnType<typeof useEpisodeDownloads>
+    enqueue: ReturnType<typeof vi.fn>
+    cancel: ReturnType<typeof vi.fn>
+    row: EpisodeRow
+  } {
+    const enqueue = vi.fn().mockResolvedValue(undefined)
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    setApi({
+      getSetting: vi.fn().mockResolvedValue('valid-token'),
+      downloadEnqueue: enqueue,
+      downloadedAnimeAdd: vi.fn().mockResolvedValue(undefined),
+      downloadCancelByEpisode: cancel
+    })
+    const row = mkRow({ episodeId: 1, episodeInt: '1', selectedTrId: 50 })
+    const dl = useEpisodeDownloads(
+      makeDeps({
+        anime: ref({ id: 1 } as unknown as AnimeDetail),
+        episodeRows: computed(() => [row]),
+        isOffline: ref(isOffline)
+      })
+    )
+    return { dl, enqueue, cancel, row }
+  }
+
+  it('offline: both download actions are refused and the reason is exposed', async () => {
+    const { dl, enqueue, row } = offlineDl(true)
+    expect(dl.downloadBlockedReason.value).toBe('Downloads need an internet connection')
+    await dl.downloadEpisode(row)
+    await dl.downloadAll()
+    expect(enqueue).not.toHaveBeenCalled()
+  })
+
+  it('offline: cancel still reaches main', async () => {
+    const { dl, cancel } = offlineDl(true)
+    await dl.cancelEpisodeDownload('Episode 1')
+    await dl.cancelAllDownloads()
+    expect(cancel).toHaveBeenCalledTimes(2)
+  })
+
+  it('online: both enqueue and there is no reason — today', async () => {
+    const { dl, enqueue, row } = offlineDl(false)
+    expect(dl.downloadBlockedReason.value).toBeNull()
+    await dl.downloadEpisode(row)
+    await dl.downloadAll()
+    expect(enqueue).toHaveBeenCalledTimes(2)
+  })
+
+  it('without an isOffline dep it reads as online', () => {
+    expect(useEpisodeDownloads(makeDeps()).downloadBlockedReason.value).toBeNull()
+  })
+})
+
 describe('useEpisodeDownloads — pure utilities', () => {
   it('dlProgress returns 0 on null/zero totalBytes, otherwise percent', () => {
     const dl = useEpisodeDownloads(makeDeps())

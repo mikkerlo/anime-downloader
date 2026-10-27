@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import AnimeDetailView from '../../../src/renderer/src/components/views/AnimeDetailView.vue'
+import { offlineApi } from '../../helpers/offline-api'
 
 // A callable + thenable stub: unknown window.api.* methods return this, so both
 // `await api.x()` (resolves undefined) and `unsub = api.onX(cb); unsub()` (callable)
@@ -56,6 +57,7 @@ function detail(overrides: Partial<AnimeDetail> = {}): AnimeDetail {
 function stubApi(): void {
   ;(window as unknown as { api: unknown }).api = new Proxy(
     {
+      ...offlineApi().api,
       getAnimeCache: vi.fn().mockResolvedValue(null),
       getAnime: vi.fn().mockResolvedValue({ source: 'api', data: detail() }),
       getSetting: vi.fn().mockResolvedValue(null),

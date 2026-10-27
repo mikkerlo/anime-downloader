@@ -7,10 +7,7 @@ const api = {
   searchAnime: (query: string) => ipcRenderer.invoke(CHANNELS.SEARCH_ANIME, query),
   getAnime: (id: number) => ipcRenderer.invoke(CHANNELS.GET_ANIME, id),
   getAnimeCache: (id: number) =>
-    ipcRenderer.invoke(CHANNELS.GET_ANIME_CACHE, id) as Promise<{
-      data: AnimeDetail
-      cachedAt: number
-    } | null>,
+    ipcRenderer.invoke(CHANNELS.GET_ANIME_CACHE, id) as Promise<AnimeCacheResult | null>,
   getEpisode: (id: number, animeId?: number) =>
     ipcRenderer.invoke(CHANNELS.GET_EPISODE, id, animeId),
   getEpisodesBatch: (episodeIds: number[], animeId?: number) =>
@@ -413,10 +410,12 @@ const api = {
     >,
   shikimoriGetFriendsActivity: () =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_FRIENDS_ACTIVITY) as Promise<
-      ShikiFriendActivityEntry[]
+      ShikiSnapshotResult<ShikiFriendActivityEntry[]>
     >,
   shikimoriGetCalendar: (force = false) =>
-    ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_CALENDAR, force) as Promise<CalendarEntry[]>,
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_CALENDAR, force) as Promise<
+      ShikiSnapshotResult<CalendarEntry[]>
+    >,
   shikimoriGetRelated: (malId: number) =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_RELATED, malId) as Promise<ShikiRelatedEntry[]>,
   onShikimoriRateUpdated: subscribe<ShikiAnimeRateEntry>(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED),

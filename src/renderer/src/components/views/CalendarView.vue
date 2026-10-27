@@ -1,10 +1,23 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { storeToRefs } from 'pinia';
+import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
+import { useOfflineStore } from '../../stores/offline';
+import { formatAgo } from '../../utils';
 
 const libraryStore = useLibraryStore();
+const { isOffline } = storeToRefs(useOfflineStore());
 
 const entries = ref<CalendarEntry[]>([]);
+// From main's snapshot (#568): `stale` when served offline or after a failed
+// fetch; `fetchedAt` null offline with no snapshot at all.
+const fetchedAt = ref<number | null>(null);
+const stale = ref(false);
+const loaded = ref(false);
+const showStamp = computed(
+  () => fetchedAt.value !== null && (stale.value || isOffline.value) && !error.value
+);
 const loading = ref(false);
 const error = ref('');
 const weeksPerPage = ref(1);
@@ -163,7 +176,11 @@ async function load(force = false): Promise<void> {
   error.value = '';
   try {
     now.value = new Date();
-    entries.value = await window.api.shikimoriGetCalendar(force);
+    const res = await window.api.shikimoriGetCalendar(force);
+    entries.value = res.data;
+    fetchedAt.value = res.fetchedAt;
+    stale.value = res.stale;
+    loaded.value = true;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load calendar';
   } finally {
@@ -189,6 +206,11 @@ async function loadAutoDlSubscriptions(): Promise<void> {
   }
 }
 
+// Back online: one refetch of what was served offline.
+watch(isOffline, (offline) => {
+  if (!offline && (stale.value || fetchedAt.value === null)) void load();
+});
+
 onMounted(() => {
   window.addEventListener('calendar-view-changed', onCalendarViewChanged);
   load();
@@ -204,6 +226,9 @@ onBeforeUnmount(() => {
   <main class="calendar-view">
     <header class="topbar">
       <h2>Airing Calendar</h2>
+      <span v-if="showStamp" class="stamp" data-testid="calendar-stamp"
+        >Last updated {{ formatAgo(fetchedAt!) }}</span
+      >
       <div class="topbar-controls">
         <button
           class="icon-btn"
@@ -281,6 +306,10 @@ onBeforeUnmount(() => {
         </div>
         <p>{{ error }}</p>
       </div>
+      <OfflineNotice
+        v-else-if="isOffline && loaded && fetchedAt === null"
+        reason="Calendar needs an internet connection"
+      />
       <div v-else-if="totalCount === 0" class="empty-state">
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -393,6 +422,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.stamp {
+  margin-right: auto;
+  color: var(--text-3);
+  font-size: 0.85rem;
 }
 
 .icon-btn {

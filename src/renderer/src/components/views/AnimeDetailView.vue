@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { getAnimeName as _getAnimeName } from '../../utils';
+import { storeToRefs } from 'pinia';
 import CleanupModal from '../shared/CleanupModal.vue';
+import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
+import { useOfflineStore } from '../../stores/offline';
 import { usePlayerStore } from '../../stores/player';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useDownloadsStore } from '../../stores/downloads';
@@ -50,6 +53,20 @@ const { shikiRelated, relatedLoading, relatedCollapsed } = chronology;
 
 const dataSource = ref<'api' | 'cache' | null>(null);
 const isOffline = computed(() => dataSource.value === 'cache');
+const { isOffline: appOffline } = storeToRefs(useOfflineStore());
+const cachedAt = ref<number | null>(null);
+// Offline (#568) a cache paint says when it was saved, in place of the chip.
+const savedBadge = computed(() => {
+  if (!appOffline.value || dataSource.value !== 'cache') return null;
+  const date = cachedAt.value
+    ? new Date(cachedAt.value).toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      })
+    : null;
+  return date ? `Saved ${date}, offline` : 'Saved, offline';
+});
 
 let loadGeneration = 0;
 let disposed = false;
@@ -157,13 +174,15 @@ const downloads = useEpisodeDownloads({
   downloadsStore,
   playerStore,
   playerMode,
-  pageSize: PAGE_SIZE
+  pageSize: PAGE_SIZE,
+  isOffline: appOffline
 });
 provide(EpisodeDownloadsKey, downloads);
 
 const {
   downloading,
   errorMessage,
+  downloadBlockedReason,
   continueReady,
   continueLabel,
   hasActiveDownloads,
@@ -214,54 +233,7 @@ onMounted(async () => {
     })
     .catch(() => {});
 
-  const gen = ++loadGeneration;
-  let renderedFromCache = false;
-  try {
-    const cached = await window.api.getAnimeCache(props.animeId);
-    if (cached && !disposed && gen === loadGeneration) {
-      anime.value = cached.data;
-      dataSource.value = 'cache';
-      loading.value = false;
-      renderedFromCache = true;
-      // Single file scan per open (#196) — the background getAnime refresh below
-      // does NOT re-run it.
-      await loadPageEpisodes();
-      await checkFileStatus();
-      if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault();
-    }
-  } catch (err) {
-    console.error('Failed to read anime cache:', err);
-  }
-
-  if (renderedFromCache) {
-    // Background, non-blocking refresh (#196): patch anime.value when getAnime
-    // returns, but never block the mount-tail (watch-progress / Shikimori) on it.
-    // A FAILING refresh keeps dataSource at 'cache' so the offline chip never
-    // flips after a successful cache paint.
-    void refreshAnimeInBackground(gen);
-  } else {
-    // Cold open (no cache, e.g. non-library): fetch the detail, then run the
-    // episode batch + file scan concurrently so the user waits on one round-trip
-    // instead of two stacked.
-    try {
-      const res = await window.api.getAnime(props.animeId);
-      if (disposed || gen !== loadGeneration) return;
-      anime.value = res.data;
-      dataSource.value = res.source;
-      // No setAnimeCache here: the get-anime handler already persisted the
-      // fresh detail on an 'api' response, so a renderer echo would only
-      // rewrite the store file a second time.
-      await Promise.all([loadPageEpisodes(), checkFileStatus()]);
-      if (disposed || gen !== loadGeneration) return;
-      if (!props.initialPrefs?.translationType) {
-        applyDownloadedTranslationDefault();
-      }
-    } catch (err) {
-      console.error('Failed to load anime detail view:', err);
-    } finally {
-      if (!disposed && gen === loadGeneration) loading.value = false;
-    }
-  }
+  if (!(await loadDetail())) return;
 
   // Render the queue snapshot the store already holds, then watch for any
   // future updates — the store owns the onDownloadProgress subscription.
@@ -291,6 +263,69 @@ onMounted(async () => {
   void loadSkipDetections();
   void hydrateSkipStatus();
 });
+
+// Back online with nothing painted (the offline no-cache notice): load once.
+watch(appOffline, (offline) => {
+  if (offline || anime.value || loading.value || disposed) return;
+  loading.value = true;
+  void loadDetail().then((current) => {
+    if (current && anime.value) void shikimori.loadShikimoriData(chronology.loadRelated);
+  });
+});
+
+// Cache paint, then the network (#196). False when the mount was superseded.
+async function loadDetail(): Promise<boolean> {
+  const gen = ++loadGeneration;
+  let renderedFromCache = false;
+  try {
+    const cached = await window.api.getAnimeCache(props.animeId);
+    if (cached && !disposed && gen === loadGeneration) {
+      anime.value = cached.data;
+      dataSource.value = 'cache';
+      cachedAt.value = cached.cachedAt;
+      loading.value = false;
+      renderedFromCache = true;
+      // Single file scan per open (#196) — the background getAnime refresh below
+      // does NOT re-run it.
+      await loadPageEpisodes();
+      await checkFileStatus();
+      if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault();
+    }
+  } catch (err) {
+    console.error('Failed to read anime cache:', err);
+  }
+
+  if (renderedFromCache) {
+    // Background, non-blocking refresh (#196): patch anime.value when getAnime
+    // returns, but never block the mount-tail (watch-progress / Shikimori) on it.
+    // A FAILING refresh keeps dataSource at 'cache' so the offline chip never
+    // flips after a successful cache paint.
+    void refreshAnimeInBackground(gen);
+  } else {
+    // Cold open (no cache, e.g. non-library): fetch the detail, then run the
+    // episode batch + file scan concurrently so the user waits on one round-trip
+    // instead of two stacked.
+    try {
+      const res = await window.api.getAnime(props.animeId);
+      if (disposed || gen !== loadGeneration) return false;
+      anime.value = res.data;
+      dataSource.value = res.source;
+      // No setAnimeCache here: the get-anime handler already persisted the
+      // fresh detail on an 'api' response, so a renderer echo would only
+      // rewrite the store file a second time.
+      await Promise.all([loadPageEpisodes(), checkFileStatus()]);
+      if (disposed || gen !== loadGeneration) return false;
+      if (!props.initialPrefs?.translationType) {
+        applyDownloadedTranslationDefault();
+      }
+    } catch (err) {
+      console.error('Failed to load anime detail view:', err);
+    } finally {
+      if (!disposed && gen === loadGeneration) loading.value = false;
+    }
+  }
+  return true;
+}
 
 // Mirror store-owned download progress into the local episode-row projection.
 watch(
@@ -531,7 +566,10 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
               {{ anime.titles.romaji || anime.titles.ja }}
             </div>
             <div class="detail-tags">
-              <span v-if="isOffline" class="chip offline">OFFLINE</span>
+              <span v-if="savedBadge" class="chip saved" data-testid="saved-offline-badge">{{
+                savedBadge
+              }}</span>
+              <span v-else-if="isOffline" class="chip offline">OFFLINE</span>
               <span v-if="anime.typeTitle" class="chip neutral">{{ anime.typeTitle }}</span>
               <span v-for="g in genreTags" :key="g.key" class="chip outline">{{ g.label }}</span>
             </div>
@@ -716,8 +754,12 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
             <div class="grow"></div>
             <button
               class="btn btn-primary"
+              data-testid="download-all"
               @click="downloadAll"
-              :disabled="episodeRows.every((r) => !r.selectedTr) || downloading"
+              :disabled="
+                episodeRows.every((r) => !r.selectedTr) || downloading || !!downloadBlockedReason
+              "
+              :title="downloadBlockedReason ?? undefined"
             >
               {{
                 downloading
@@ -775,6 +817,7 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
         </aside>
       </div>
     </div>
+    <OfflineNotice v-else-if="appOffline" reason="This title needs an internet connection" />
     <CleanupModal
       v-if="cleanupModalOpen && anime"
       :anime-id="props.animeId"
@@ -991,6 +1034,11 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
 .chip.outline {
   background: none;
   border: 1px solid var(--border-strong);
+  color: var(--text-3);
+}
+
+.chip.saved {
+  background: var(--surface-2);
   color: var(--text-3);
 }
 

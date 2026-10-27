@@ -91,6 +91,7 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | `src/renderer/src/components/shared/Sidebar.vue` | Navigation menu |
 | `src/renderer/src/components/shared/AnimeCard.vue` | Reusable anime poster card |
 | `src/renderer/src/components/shared/CleanupModal.vue` | Disk-cleanup confirmation modal — used by AnimeDetailView + DownloadsView storage cleanups |
+| `src/renderer/src/components/shared/OfflineNotice.vue` | The shared offline empty state (#568): a one-line reason and a go-online / Retry button. See [Renderer › Views offline](./renderer.md#views-offline-568) |
 | `src/renderer/src/components/views/HomeView.vue` | Continue Watching landing view: Resume + Next-up entries |
 | `src/renderer/src/components/views/SearchView.vue` | Anime search + results grid (persistent across tab switches) |
 | `src/renderer/src/components/views/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
@@ -134,5 +135,7 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | Shikimori background | `services/shikimori-sync` (`isOffline` dep), `ipc/shikimori.ipc.ts` | The drain (and so the 60 s timer) and the details prefetch return early; `refreshShikimoriRatesInBackground` too. Writes keep queueing |
 | First-launch binaries | `ensureFfmpeg` / `ensureFpcalc` (`isOffline` argument) | An install that would download is skipped (resolves `''`, no error modal) and retried by the online kick-off. One that the offline switch interrupts mid-way — an `OfflineError`, e.g. between the ffmpeg and ffprobe archives, or, once offline, a timeout or a network-coded error (`isTransportError`; a bare `TypeError` is a bug and still fails) — sends `status: 'deferred'` instead of `'failed'` and is retried the same way. Boot and the retry share one in-flight install per binary (`lib/binary-installs.ts`, `singleFlight`), so two never extract into the same directory. A merge in that same session still sees ffmpeg as unavailable — `ffmpegReady` resolved at boot — as after any failed first install |
 | Downloads | `download-manager.ts` | See its row above |
+
+What the views show offline (#568): `get-anime-cache` drops its 24 h TTL and `get-anime` answers from the cache without calling the API (`OfflineError` with no entry); `shikimori:get-calendar` and `shikimori:get-friends-activity` serve the shikimori-sync service's in-memory snapshots ([Shikimori › Offline snapshots](./shikimori.md#offline-snapshots-568)). The renderer side is in [Renderer › Views offline](./renderer.md#views-offline-568).
 
 The `test/net-adoption-guard.test.ts` AST guard pins it: no bare `fetch` outside `lib/net.ts`, `net.createConnection` only in `syncplay.ts`, `autoUpdater.` only in `ipc/app.ipc.ts`, and `bypassOffline` only in the probe.

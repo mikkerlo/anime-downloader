@@ -35,7 +35,8 @@ const {
   canPlayPartial,
   playPartial,
   downloadEpisode,
-  cancelEpisodeDownload
+  cancelEpisodeDownload,
+  downloadBlockedReason
 } = downloads;
 
 const watchedToggleLabel = computed(() =>
@@ -337,8 +338,10 @@ const watchedToggleLabel = computed(() =>
         <button
           v-if="props.row.selectedTr && !props.row.isLocked && !selectedTrHasFile(props.row)"
           class="iconbtn"
+          data-testid="ep-download"
+          :disabled="!!downloadBlockedReason"
           @click="downloadEpisode(props.row)"
-          title="Download this episode"
+          :title="downloadBlockedReason || 'Download this episode'"
         >
           <svg
             viewBox="0 0 24 24"
@@ -601,9 +604,14 @@ const watchedToggleLabel = computed(() =>
   transition: all 0.15s;
 }
 
-.iconbtn:hover {
+.iconbtn:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.iconbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .iconbtn.solid {

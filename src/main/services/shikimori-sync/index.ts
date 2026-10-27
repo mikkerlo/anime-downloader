@@ -341,6 +341,12 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
           console.warn('[shikimori sync] auth error, stopping drain:', err)
           break
         }
+        if (err instanceof shikimori.ShikiApiError && err.status === 429) {
+          aborted = true
+          lastSyncError = 'Shikimori rate limit — will retry'
+          console.warn('[shikimori sync] rate limited, stopping drain:', err)
+          break
+        }
         console.warn('[shikimori sync] dropping item', item.malId, err)
         dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
       }
@@ -466,6 +472,10 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
             (err.status === 401 || err.status === 403)
           ) {
             console.warn('[shikimori prefetch] auth error, aborting loop:', err)
+            break
+          }
+          if (err instanceof shikimori.ShikiApiError && err.status === 429) {
+            console.warn('[shikimori prefetch] rate limited, aborting loop:', err)
             break
           }
           if (err instanceof shikimori.ShikiApiError && err.status === 404) {

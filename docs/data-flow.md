@@ -223,7 +223,11 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
         'downloading' (a pause, cancel, resume or restart landed while the
         stream closed), the failed attempt only gives back its own slot and
         schedules nothing. Both deletes of the controller only remove the
-        attempt's own, so a resumed attempt stays pausable
+        attempt's own, so a resumed attempt stays pausable. Every attempt
+        gives its concurrency slot back exactly once, keyed on what it did
+        (a retry, the 416 restart or the ownership return released it
+        already), never on the item's status, which a pause + resume can
+        turn 'queued' before an aborted attempt's catch runs
       - Progress-aware rung (#597): an attempt that grew the on-disk .part
         by >= 256 KiB (PROGRESS_RETRY_MIN_BYTES) past its own starting size
         (0 after a 200) retries at the SAME rung after a fixed 250 ms

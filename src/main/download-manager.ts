@@ -1747,6 +1747,7 @@ export class DownloadManager {
           /* ignore */
         }
         this.abortControllers.delete(item.id)
+        slotReleased = true
         this.activeCount--
         item.status = 'queued'
         item.bytesReceived = 0
@@ -1921,12 +1922,14 @@ export class DownloadManager {
         const progress = partSize(partPath) - existingBytes
         if (progress >= PROGRESS_RETRY_MIN_BYTES) {
           item.status = 'queued'
+          slotReleased = true
           this.activeCount--
           setTimeout(() => this.startDownload(item, retryCount, attempts), PROGRESS_RETRY_DELAY_MS)
           return
         }
         if (retryCount < RETRY_LIMIT) {
           item.status = 'queued'
+          slotReleased = true
           this.activeCount--
           const delay = Math.pow(2, retryCount) * 1000
           setTimeout(() => this.startDownload(item, retryCount + 1, attempts), delay)
@@ -1939,7 +1942,10 @@ export class DownloadManager {
       item.speed = 0
       this.schedulePersist()
     } finally {
-      if (!slotReleased && item.status !== 'queued') {
+      // Whether the slot is released depends on what this attempt did, never
+      // on the status: a pause + resume can leave the item 'queued' before
+      // the aborted attempt's catch runs (#597 review).
+      if (!slotReleased) {
         if (this.abortControllers.get(item.id) === controller) this.abortControllers.delete(item.id)
         this.activeCount--
         this.processQueue()

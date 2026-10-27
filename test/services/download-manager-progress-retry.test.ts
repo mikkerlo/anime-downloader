@@ -53,6 +53,7 @@ type Internals = {
   abortControllers: Map<string, AbortController>
   startDownload: (item: DownloadItem, retryCount?: number, attemptCount?: number) => Promise<void>
   waitForPartClose: (stream: fs.WriteStream) => Promise<void>
+  getConcurrentLimit: () => number
 }
 
 /** Bytes that differ at every offset a duplicated or dropped range could land on. */
@@ -139,6 +140,7 @@ function server(
     const start = range ? Number(/^bytes=(\d+)-$/.exec(range)![1]) : 0
     const cut = plan[starts.length] ?? 'full'
     starts.push(start)
+    if (start >= src.length) return new Response(null, { status: 416 })
     const end =
       cut === 'full' ? src.length : Math.min(src.length, start + (cut === 'stall' ? CHUNK : cut))
     const data = src.subarray(start, end)
@@ -475,5 +477,46 @@ describe('DownloadManager — progress-aware retry rung (#597)', () => {
     expect((s.fetch.mock.calls[1][1] as RequestInit).signal!.aborted).toBe(true)
     await until(() => internals.activeCount === 0)
     expect(item.status).toBe('paused')
+  })
+
+  // #597 review: with every slot taken, a pause + resume in one tick leaves the
+  // item 'queued' before the aborted attempt's catch runs. That attempt must
+  // still give its slot back, or the queue never starts anything again.
+  it('an aborted attempt gives its slot back even when a resume left the item queued', async () => {
+    internals.getConcurrentLimit = () => 1
+    const src = source(512 * KIB)
+    const s = serve(server(src, ['stall', 'full'], partPath))
+
+    void internals.startDownload(item)
+    await until(() => partSize(partPath) === CHUNK)
+    dm.pause(item.id)
+    dm.resume(item.id)
+    expect(item.status).toBe('queued')
+    expect(s.fetch).toHaveBeenCalledTimes(1)
+
+    await until(() => item.status === 'completed')
+    expect(s.fetch).toHaveBeenCalledTimes(2)
+    expect(s.starts[1]).toBe(CHUNK)
+    expect(internals.activeCount).toBe(0)
+    expect(fs.readFileSync(finalPath).equals(src)).toBe(true)
+  })
+
+  // The 416 restart gives its slot back itself; `finally` must not do it twice.
+  it('a 416 restart releases its slot exactly once and restarts from zero', async () => {
+    const src = source(512 * KIB)
+    fs.mkdirSync(path.dirname(partPath), { recursive: true })
+    fs.writeFileSync(partPath, Buffer.alloc(src.length + 10))
+    const s = serve(server(src, ['full'], partPath))
+
+    void internals.startDownload(item)
+    await until(() => item.status === 'queued')
+    expect(internals.activeCount).toBe(0)
+    expect(fs.existsSync(partPath)).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(500)
+    await until(() => item.status === 'completed')
+    expect(s.starts).toEqual([src.length + 10, 0])
+    expect(internals.activeCount).toBe(0)
+    expect(fs.readFileSync(finalPath).equals(src)).toBe(true)
   })
 })

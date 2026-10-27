@@ -1,4 +1,6 @@
-const API_BASE = 'https://smotret-anime.ru/api'
+import { smotretApiBase } from './lib/api-bases'
+import { fetchWithTimeout } from './lib/net'
+
 const USER_AGENT = 'smotret-anime-dl'
 
 export interface AnimeSearchResult {
@@ -83,10 +85,10 @@ export class SmotretApi {
   private async request(path: string): Promise<unknown> {
     const token = this.getToken()
     const url = token
-      ? `${API_BASE}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`
-      : `${API_BASE}${path}`
+      ? `${smotretApiBase()}${path}${path.includes('?') ? '&' : '?'}access_token=${token}`
+      : `${smotretApiBase()}${path}`
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: { 'User-Agent': USER_AGENT }
     })
 
@@ -209,8 +211,8 @@ export class SmotretApi {
   async fetchSubtitleContent(translationId: number): Promise<string | null> {
     const url = this.getSubtitlesUrl(translationId)
     try {
-      const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
-      if (response.ok) return response.text()
+      const response = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } })
+      if (response.ok) return await response.text()
       return null
     } catch {
       return null
@@ -220,7 +222,9 @@ export class SmotretApi {
   async fetchPoster(posterUrl: string): Promise<Buffer | null> {
     if (!posterUrl) return null
     try {
-      const response = await fetch(posterUrl, { headers: { 'User-Agent': USER_AGENT } })
+      const response = await fetchWithTimeout(posterUrl, {
+        headers: { 'User-Agent': USER_AGENT }
+      })
       if (!response.ok || !response.body) return null
       return Buffer.from(await response.arrayBuffer())
     } catch {
@@ -232,9 +236,10 @@ export class SmotretApi {
     const token = this.getToken()
     if (!token) return { valid: false, error: 'No token configured' }
     try {
-      const response = await fetch(`${API_BASE}/translations/embed/4336179?access_token=${token}`, {
-        headers: { 'User-Agent': USER_AGENT }
-      })
+      const response = await fetchWithTimeout(
+        `${smotretApiBase()}/translations/embed/4336179?access_token=${token}`,
+        { headers: { 'User-Agent': USER_AGENT } }
+      )
       const json = (await response.json()) as {
         error?: { code: number; message: string }
         data?: unknown

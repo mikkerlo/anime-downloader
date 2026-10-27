@@ -328,4 +328,42 @@ describe('SmotretApi — fixture replay', () => {
       await expect(makeApi().searchAnime('foo')).resolves.toEqual({ error: null, data: [] })
     })
   })
+
+  describe('fetchSubtitleContent (#567)', () => {
+    // A subtitle body that stops sending now rejects with `TimeoutError` after
+    // the 30 s idle deadline. That has to stay inside the method's own
+    // `try`, so playback goes on without subtitles instead of losing the
+    // whole stream.
+    it('returns null when the subtitle body stalls', async () => {
+      vi.useFakeTimers()
+      try {
+        global.fetch = vi.fn(
+          async () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start(c) {
+                  c.enqueue(new TextEncoder().encode('[Script Info]\n'))
+                }
+              })
+            )
+        )
+        let outcome: unknown = 'pending'
+        makeApi()
+          .fetchSubtitleContent(1)
+          .then(
+            (v) => (outcome = v),
+            (e: unknown) => (outcome = e)
+          )
+        await vi.advanceTimersByTimeAsync(30_000)
+        expect(outcome).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('returns the body when it arrives', async () => {
+      global.fetch = vi.fn(async () => new Response('[Script Info]\n'))
+      expect(await makeApi().fetchSubtitleContent(1)).toBe('[Script Info]\n')
+    })
+  })
 })

@@ -42,6 +42,10 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `get-quality-mismatch-count` | invoke | Get number of collected mismatches |
 | `dump-quality-mismatches` | invoke | Write mismatches to JSON file in download dir |
 | `home:get-continue-watching` | invoke | Build merged Resume + Next-up list (capped at 24) for the Home view from local stores; no network |
+| `offline:get-state` | invoke | The `OfflineService` state `{ mode: 'online' \| 'offline-auto' \| 'offline-manual', since, lastProbeAt }` (#567), for the `useOfflineStore` seed |
+| `offline:set-manual` | invoke | Work offline on/off (`boolean`). Persists `workOffline` and returns the new state; turning it off runs the online kick-off |
+| `offline:retry` | invoke | Probe both API hosts now, joining a probe in flight, and return the resulting state — the auto-mode pill's "check again" instead of waiting out the 15 s → 2 min backoff. A no-op in manual mode |
+| `offline:state-changed` | main→renderer | Broadcast on every mode change and after every probe; payload is the same state. Consumed by `useOfflineStore` |
 | `library-get` | invoke | List all starred + downloaded anime (merged) |
 | `library-toggle` | invoke | Add/remove from starred library |
 | `library-has` | invoke | Check if anime is starred |

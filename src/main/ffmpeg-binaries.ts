@@ -212,7 +212,15 @@ async function fetchComponent(
   }
 }
 
-export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
+/**
+ * Resolves `''` without downloading while `isOffline()` is true (#567): the
+ * install is skipped, not failed, so no error modal, and the caller retries it
+ * when the app is online again.
+ */
+export async function ensureFfmpeg(
+  win?: BrowserWindow,
+  isOffline: () => boolean = () => false
+): Promise<string> {
   const dest = getFfmpegDir()
   const ext = process.platform === 'win32' ? '.exe' : ''
   const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
@@ -222,6 +230,11 @@ export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
     ffmpegPath = ffmpegBin
     ffprobePath = ffprobeBin
     return ffmpegBin
+  }
+
+  if (isOffline()) {
+    console.log('[ffmpeg] Offline: install deferred until the app is online')
+    return ''
   }
 
   const sendProgress = (status: string, progress?: number, message?: string): void => {

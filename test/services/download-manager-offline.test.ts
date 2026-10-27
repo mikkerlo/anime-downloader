@@ -180,3 +180,162 @@ describe('DownloadManager — stalled transfer (#567)', () => {
     expect(observer.onFailure.mock.calls[0][0]).toBeInstanceOf(TimeoutError)
   })
 })
+
+// Offline gates (#567): the pump starts nothing, the retry timer re-checks the
+// pump's gates, a failure that arrives while offline spends no rung, and
+// entering offline suspends active transfers back to 'queued'.
+describe('DownloadManager — offline (#567)', () => {
+  let userDataDir: string
+  let downloadDir: string
+  let dm: DownloadManager
+  let realFetch: typeof globalThis.fetch
+  let offline: boolean
+
+  type OfflineInternals = Internals & { processQueue: () => void }
+  const internals = (): OfflineInternals => dm as unknown as OfflineInternals
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-off-ud-'))
+    downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-off-dl-'))
+    dm = new DownloadManager(downloadDir, { getSubtitlesUrl: () => 's' } as never, userDataDir)
+    offline = false
+    dm.setOfflineCheck(() => offline)
+    realFetch = globalThis.fetch
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    dm.destroy()
+    globalThis.fetch = realFetch
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    fs.rmSync(userDataDir, { recursive: true, force: true })
+    fs.rmSync(downloadDir, { recursive: true, force: true })
+  })
+
+  function stubFetch(impl: () => Promise<Response>): Mock {
+    const stub = vi.fn(impl)
+    globalThis.fetch = stub as unknown as typeof fetch
+    return stub
+  }
+
+  it('while offline the pump starts nothing and items stay queued', () => {
+    const fetchStub = stubFetch(async () => stalledResponse())
+    const item = makeItem()
+    internals().queue = [item]
+    offline = true
+    internals().processQueue()
+    expect(item.status).toBe('queued')
+    expect(internals().activeCount).toBe(0)
+    expect(fetchStub).not.toHaveBeenCalled()
+  })
+
+  it('going online starts the queue', async () => {
+    const fetchStub = stubFetch(async () => stalledResponse())
+    const item = makeItem()
+    internals().queue = [item]
+    offline = true
+    internals().processQueue()
+    offline = false
+    dm.resumeAfterOffline()
+    expect(item.status).toBe('downloading')
+    await until(() => fetchStub.mock.calls.length === 1)
+  })
+
+  it('a retry timer that fires while offline does not call fetch and leaves the item queued', async () => {
+    const fetchStub = stubFetch(async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })
+    })
+    const item = makeItem()
+    internals().queue = [item]
+    void internals().startDownload(item)
+    await until(() => item.status === 'queued')
+    expect(fetchStub).toHaveBeenCalledTimes(1)
+    offline = true
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchStub).toHaveBeenCalledTimes(1)
+    expect(item.status).toBe('queued')
+    expect(internals().activeCount).toBe(0)
+  })
+
+  it('a retry timer does not double-start an item the pump already started', async () => {
+    let calls = 0
+    const fetchStub = stubFetch(async () => {
+      calls++
+      if (calls === 1) throw new TypeError('fetch failed')
+      return stalledResponse()
+    })
+    const item = makeItem()
+    internals().queue = [item]
+    void internals().startDownload(item)
+    await until(() => item.status === 'queued')
+    internals().processQueue()
+    expect(item.status).toBe('downloading')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchStub).toHaveBeenCalledTimes(2)
+    expect(internals().activeCount).toBe(1)
+  })
+
+  it('a failure that arrives while offline goes back to queued without spending a retry', async () => {
+    let reject!: (err: unknown) => void
+    const fetchStub = stubFetch(() => new Promise<Response>((_r, j) => (reject = j)))
+    const item = makeItem()
+    internals().queue = [item]
+    void internals().startDownload(item)
+    await until(() => fetchStub.mock.calls.length === 1)
+    offline = true
+    reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENETUNREACH' } }))
+    await until(() => item.status === 'queued')
+    expect(internals().activeCount).toBe(0)
+    expect(item.error).toBeUndefined()
+    // No rung was scheduled: online, nothing restarts it but the pump.
+    offline = false
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchStub).toHaveBeenCalledTimes(1)
+  })
+
+  it('suspendForOffline() returns an active item to queued, activeCount to 0, and the next start sends Range', async () => {
+    const fetchStub = stubFetch(async () => stalledResponse())
+    const item = makeItem()
+    internals().queue = [item]
+    const partPath = path.join(downloadDir, item.filename) + '.part'
+    const inFlight = internals().startDownload(item)
+    await until(() => fs.existsSync(partPath) && fs.statSync(partPath).size === HEAD.length)
+    expect(internals().activeCount).toBe(1)
+
+    offline = true
+    dm.suspendForOffline()
+    expect(item.status).toBe('queued')
+    await inFlight
+    expect(item.status).toBe('queued')
+    expect(internals().activeCount).toBe(0)
+    expect(fs.statSync(partPath).size).toBe(HEAD.length)
+
+    offline = false
+    dm.resumeAfterOffline()
+    await until(() => fetchStub.mock.calls.length === 2)
+    const init = fetchStub.mock.calls[1] as unknown as [string, RequestInit]
+    expect(init[1].headers).toMatchObject({ Range: `bytes=${HEAD.length}-` })
+    expect(internals().activeCount).toBe(1)
+  })
+
+  it('a pause after a suspend-and-resume still settles activeCount exactly once', async () => {
+    stubFetch(async () => stalledResponse())
+    const item = makeItem()
+    internals().queue = [item]
+    const first = internals().startDownload(item)
+    await until(() => internals().activeCount === 1 && item.status === 'downloading')
+    offline = true
+    dm.suspendForOffline()
+    await first
+    offline = false
+    dm.resumeAfterOffline()
+    expect(internals().activeCount).toBe(1)
+    dm.pause(item.id)
+    await until(() => internals().activeCount === 0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(internals().activeCount).toBe(0)
+    expect(item.status).toBe('paused')
+  })
+})

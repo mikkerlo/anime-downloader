@@ -4,7 +4,10 @@ import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { isPortableBuild, checkLatestRelease, RELEASES_LATEST_PAGE } from '../lib/manual-update'
 import type { AppDeps } from './index'
 
-export function register({ store }: AppDeps): void {
+export const OFFLINE_UPDATE_ERROR = 'Offline'
+
+export function register({ store, offlineService }: AppDeps): void {
+  const isOffline = (): boolean => offlineService?.isOffline() ?? false
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
 
@@ -55,6 +58,12 @@ export function register({ store }: AppDeps): void {
   ipcMain.handle(CHANNELS.APP_VERSION, () => app.getVersion())
 
   ipcMain.handle(CHANNELS.UPDATE_CHECK, async () => {
+    // electron-updater does not go through `fetchWithTimeout`, so it is gated
+    // here (#567).
+    if (isOffline()) {
+      broadcastUpdateStatus({ status: 'error', error: OFFLINE_UPDATE_ERROR })
+      return
+    }
     try {
       if (manualUpdate) {
         await checkForUpdateManually()
@@ -76,6 +85,10 @@ export function register({ store }: AppDeps): void {
   })
 
   ipcMain.handle(CHANNELS.UPDATE_DOWNLOAD, async () => {
+    if (isOffline()) {
+      broadcastUpdateStatus({ status: 'error', error: OFFLINE_UPDATE_ERROR })
+      return
+    }
     try {
       if (manualUpdate) {
         await shell.openExternal(manualReleaseUrl)
@@ -106,7 +119,7 @@ export function register({ store }: AppDeps): void {
   })
 
   const lastCheck = (store.get('lastUpdateCheck') as number) || 0
-  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
+  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000 && !isOffline()) {
     if (manualUpdate) {
       checkForUpdateManually().catch(() => {})
     } else {

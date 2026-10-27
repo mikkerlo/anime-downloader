@@ -13,6 +13,7 @@ import type { StreamingService } from '../streaming'
 import type { Mp4StatsService } from '../services/mp4-stats'
 import type { PlayerLockService } from '../services/player-lock'
 import type { PlayerPresenceService } from '../services/player-presence'
+import type { OfflineService } from '../services/offline'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -33,6 +34,7 @@ import * as autoDownloadRouter from './auto-download.ipc'
 import * as playerRouter from './player.ipc'
 import * as syncplayRouter from './syncplay.ipc'
 import * as debugRouter from './debug.ipc'
+import * as offlineRouter from './offline.ipc'
 import type { FileCheckResult } from '../lib/episode-file-scan'
 
 export interface FfmpegInfo {
@@ -111,6 +113,8 @@ export interface AppDeps {
   playerLockService: PlayerLockService
   /** Whether any player view is open — holds new merges (#516). */
   playerPresenceService: PlayerPresenceService
+  /** Offline state (#567): Work offline, auto-detect, and the gates that read it. */
+  offlineService: OfflineService
 }
 
 /**
@@ -166,4 +170,5 @@ function registerAllRouters(deps: AppDeps): void {
   playerRouter.register(deps)
   syncplayRouter.register(deps)
   debugRouter.register(deps)
+  offlineRouter.register(deps)
 }

@@ -72,6 +72,11 @@ export interface ShikimoriSyncServiceDeps {
   offlineQueueChangedChannel: string
   rateUpdatedChannel: string
   animeDetailsUpdatedChannel: string
+  /**
+   * While offline (#567) the drain and the prefetch return before touching the
+   * network; writes keep queueing, and the online edge drains them.
+   */
+  isOffline?: () => boolean
 }
 
 export interface ShikimoriSyncService {
@@ -235,7 +240,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   }
 
   async function syncShikimoriQueue(): Promise<void> {
-    if (syncInProgress) return
+    if (syncInProgress || deps.isOffline?.()) return
     const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
     if (queue.length === 0) {
       stopSyncTimer()
@@ -426,7 +431,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   }
 
   async function prefetchShikimoriDetails(): Promise<void> {
-    if (prefetchInProgress) return
+    if (prefetchInProgress || deps.isOffline?.()) return
     const creds = store.get('shikimoriCredentials') as shikimori.ShikiCredentials | null
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!creds || !user) return

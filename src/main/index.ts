@@ -26,7 +26,11 @@ import { parseEpisodeFromFilename } from './lib/filename'
 import { createEpisodeCompletionHandlers } from './lib/episode-completion'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import type { ParkedQueues } from './lib/shikimori-queue'
-import { applyApiBaseOverrides } from './lib/api-bases'
+import { applyApiBaseOverrides, shikimoriOrigin, smotretApiBase } from './lib/api-bases'
+import { setNetworkObserver, setOfflineCheck } from './lib/net'
+import { installOfflineRequestGate } from './lib/offline-request-gate'
+import { createOfflineService } from './services/offline'
+import { createOfflineKickoff, type OfflineKickoff } from './services/offline/kickoff'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
@@ -173,7 +177,8 @@ const STORE_DEFAULTS = {
   shikimoriProfile: null as ShikimoriProfile | null,
   shikimoriFriends: [] as ShikiFriendCard[],
   shikimoriRecommendations: [] as RecommendationEntry[],
-  priorityAnimeIds: [] as string[]
+  priorityAnimeIds: [] as string[],
+  workOffline: false
 }
 
 applyApiBaseOverrides(process.env, app.isPackaged)
@@ -364,13 +369,28 @@ const coldStorageService = createColdStorageService({
   fileEpisodesChangedChannel: EVENT_CHANNELS.FILE_EPISODES_CHANGED
 })
 
+// Offline mode (#567). `net.ts` asks the service before every request and
+// reports every outcome to it; the edges reach the rest of the app through the
+// kick-off, which `bootstrap()` builds once the download manager exists.
+let offlineKickoff: OfflineKickoff | null = null
+const offlineService = createOfflineService({
+  store,
+  probeUrls: () => [smotretApiBase(), shikimoriOrigin()],
+  onOnline: () => offlineKickoff?.onOnline(),
+  onOffline: () => offlineKickoff?.onOffline()
+})
+const isOffline = (): boolean => offlineService.isOffline()
+setOfflineCheck(isOffline)
+setNetworkObserver(offlineService.observer)
+
 const shikimoriSyncService = createShikimoriSyncService({
   store,
   broadcast: broadcastToAll,
   syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
   offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
   rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
-  animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
+  animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
+  isOffline
 })
 // `ensureFreshToken` is where a dead refresh token is detected, but that module
 // only knows about the store. Give it a way to push the transition out so the
@@ -606,7 +626,8 @@ function registerIpcHandlers(): void {
     streamingService,
     mp4StatsService,
     playerLockService,
-    playerPresenceService
+    playerPresenceService,
+    offlineService
   })
 }
 
@@ -655,6 +676,11 @@ async function bootstrap(): Promise<void> {
   // Satisfy Shikimori's image hotlink protection so friend avatars (loaded by
   // the renderer straight from shikimori.io) render instead of coming back blank.
   installShikimoriReferer(session.defaultSession)
+  installOfflineRequestGate(
+    session.defaultSession,
+    isOffline,
+    is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+  )
 
   // Handle anime-video:// protocol for local video playback with Range request support.
   // Only one URL shape: anime-video://{absolute-path}. MKV streaming now uses MSE via IPC.
@@ -688,6 +714,8 @@ async function bootstrap(): Promise<void> {
   downloadManager.loadQueue()
   downloadManager.setFileLockCheck(playerLockService.isLocked)
   downloadManager.setMergeHoldCheck(playerPresenceService.isOpen)
+  downloadManager.setOfflineCheck(isOffline)
+  syncplay.setOfflineCheck(isOffline)
 
   const showBackgroundNotification = (title: string, body: string): void => {
     if (BrowserWindow.getFocusedWindow() !== null) return
@@ -757,15 +785,18 @@ async function bootstrap(): Promise<void> {
 
   // First-launch binary downloads run in the background — nothing else in
   // bootstrap may wait on the network. checkFfmpeg() never rejects; a failed
-  // install resolves ffmpegReady with { available: false }.
+  // install resolves ffmpegReady with { available: false }. Offline (#567) the
+  // install is skipped rather than failed, and the online kick-off retries it.
   void (async () => {
     try {
-      await ensureFfmpeg(mainWin)
+      await ensureFfmpeg(mainWin, isOffline)
     } catch (err) {
       console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
     }
     // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
-    ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
+    ensureFpcalc(mainWin, isOffline).catch((err) =>
+      console.error('[fpcalc] Failed to ensure fpcalc:', err)
+    )
     resolveFfmpegReady(await checkFfmpeg())
     // Crash recovery (#63): no locks exist at boot, so any 'deferred' episode
     // restored from queue.json gets its rename + merge now.
@@ -780,7 +811,21 @@ async function bootstrap(): Promise<void> {
     downloadManager,
     broadcast: broadcastToAll,
     isShikimoriLoggedIn: () => Boolean(store.get('shikimoriCredentials')),
-    refreshShikimoriDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId)
+    refreshShikimoriDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId),
+    isOffline
+  })
+  offlineKickoff = createOfflineKickoff({
+    syncShikimoriQueue: () => shikimoriSyncService.syncShikimoriQueue(),
+    suspendDownloads: () => downloadManager.suspendForOffline(),
+    resumeDownloads: () => downloadManager.resumeAfterOffline(),
+    suspendSyncplay: () => syncplay.suspendForOffline(),
+    resumeSyncplay: () => syncplay.resumeAfterOffline(),
+    retryBinaries: async () => {
+      await ensureFfmpeg(mainWin, isOffline)
+      await ensureFpcalc(mainWin, isOffline)
+    },
+    runAutoDownloadTick: () => runAutoDownloadTick('timer'),
+    prefetchShikimoriDetails: () => shikimoriSyncService.prefetchShikimoriDetails()
   })
   startAutoDownloaderTimer()
   setTimeout(() => {

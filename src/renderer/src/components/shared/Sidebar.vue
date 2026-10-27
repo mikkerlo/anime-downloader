@@ -4,14 +4,30 @@ import { storeToRefs } from 'pinia';
 import { useLibraryStore, type LibraryView } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useDownloadsStore } from '../../stores/downloads';
+import { useOfflineStore } from '../../stores/offline';
 import SidebarUpdateBanner from './SidebarUpdateBanner.vue';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
 const downloadsStore = useDownloadsStore();
+const offlineStore = useOfflineStore();
 const { currentView } = storeToRefs(libraryStore);
 const { user, loggedIn, offlineQueueLength, syncStatus } = storeToRefs(shikimoriStore);
 const { groups } = storeToRefs(downloadsStore);
+const { isOffline, isManual, retrying } = storeToRefs(offlineStore);
+
+// Offline pill (#567). Auto mode: a click probes now instead of waiting out the
+// backoff. Manual mode: a click turns Work offline off.
+const offlineLabel = computed(() => (isManual.value ? 'Offline (manual)' : 'Offline'));
+const offlineTitle = computed(() =>
+  isManual.value
+    ? 'Work offline is on. Click to go online.'
+    : 'The servers are unreachable. Click to check again now.'
+);
+function onOfflinePill(): void {
+  if (isManual.value) void offlineStore.setManual(false);
+  else void offlineStore.retry();
+}
 
 type MenuItem = { id: LibraryView; label: string; icon: string };
 
@@ -167,6 +183,18 @@ const syncLabel = computed(() => {
 
     <div class="sidebar-bottom">
       <SidebarUpdateBanner />
+      <button
+        v-if="isOffline"
+        type="button"
+        class="offline-pill"
+        :class="{ manual: isManual }"
+        :title="offlineTitle"
+        :disabled="retrying"
+        data-testid="offline-pill"
+        @click="onOfflinePill"
+      >
+        <span class="dot"></span>{{ retrying ? 'Checking…' : offlineLabel }}
+      </button>
       <div v-if="loggedIn && user" class="sidebar-foot">
         <div class="user-chip">
           <img v-if="user.avatar" :src="user.avatar" :alt="user.nickname" class="user-avatar" />

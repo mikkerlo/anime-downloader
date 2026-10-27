@@ -1077,6 +1077,32 @@ describe('ShikimoriSyncService — owner guard', () => {
     expect(svc.getSyncStatus().lastSyncError).toBeNull()
     await vi.waitFor(() => expect(getUserRate).toHaveBeenCalledWith('access-token-b', 2, 77))
   })
+
+  // The new owner has nothing queued, so no drain of theirs would ever clear a
+  // message the old account's item left behind (#599 review).
+  it.each([
+    ['401', 401],
+    ['403', 403],
+    ['429', 429],
+    ['503', 503]
+  ])(
+    "an old-account %s on the item in flight across a switch doesn't reach the new owner's lastSyncError",
+    async (_label, status) => {
+      const { svc, store } = makeService({ shikimoriUpdateQueue: [entry(1, 1)] })
+      getUserRate.mockImplementationOnce(async () => {
+        store.set('shikimoriUser', { id: 2, nickname: 'b' })
+        store.set('shikimoriUpdateQueue', [])
+        store.set('shikimoriParkedQueues', {
+          '1': { nickname: 'a', entries: [entry(1, 1)], parkedAt: 5 }
+        } satisfies Parked)
+        throw new ShikiApiError(`Shikimori API error: ${status}`, status)
+      })
+
+      await svc.syncShikimoriQueue()
+
+      expect(svc.getSyncStatus()).toMatchObject({ queueLength: 0, lastSyncError: null })
+    }
+  )
 })
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {

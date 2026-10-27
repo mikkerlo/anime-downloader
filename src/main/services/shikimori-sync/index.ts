@@ -358,15 +358,18 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
           aborted = true
           break
         }
+        // After a switch mid-item the error is the previous account's, so it
+        // must not reach the session that signed in meanwhile.
+        const ownerCurrent = currentUserId() === user.id
         if (err instanceof shikimori.ShikiApiError && (err.status === 401 || err.status === 403)) {
           aborted = true
-          lastSyncError = err.message
+          if (ownerCurrent) lastSyncError = err.message
           console.warn('[shikimori sync] auth error, stopping drain:', err)
           break
         }
         if (err instanceof shikimori.ShikiApiError && err.status === 429) {
           aborted = true
-          lastSyncError = 'Shikimori rate limit — will retry'
+          if (ownerCurrent) lastSyncError = 'Shikimori rate limit — will retry'
           console.warn('[shikimori sync] rate limited, stopping drain:', err)
           break
         }
@@ -382,7 +385,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
             dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
           } else {
             hadServerError = true
-            lastSyncError = 'Shikimori server error — will retry'
+            if (ownerCurrent) lastSyncError = 'Shikimori server error — will retry'
             console.warn('[shikimori sync] server error, keeping item', item.malId, err.status)
           }
         } else {

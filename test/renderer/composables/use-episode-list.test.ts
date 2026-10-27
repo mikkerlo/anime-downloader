@@ -465,7 +465,9 @@ describe('useEpisodeList — helpers', () => {
 })
 
 describe('useEpisodeList — onEpisodeTranslationChange', () => {
-  it('updates overrides and persists via IPC', async () => {
+  // `'choice'`, never `'playback'`: picking a translation is not watching, so it
+  // must not move the row's position clock (#572).
+  it("updates overrides and persists via IPC as a 'choice' save", async () => {
     const save = vi.fn().mockResolvedValue(undefined)
     setApi({ watchProgressSave: save })
     const deps = makeDeps({
@@ -476,7 +478,7 @@ describe('useEpisodeList — onEpisodeTranslationChange', () => {
     const list = useEpisodeList(deps)
     list.onEpisodeTranslationChange(7, '3', 99)
     expect(list.episodeOverrides.value.get(7)).toBe(99)
-    expect(save).toHaveBeenCalledWith(1, '3', 60, 1440, undefined, 99)
+    expect(save).toHaveBeenCalledWith(1, '3', 60, 1440, undefined, 99, 'choice')
   })
 })
 

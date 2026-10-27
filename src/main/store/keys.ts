@@ -60,7 +60,9 @@ export const PERSISTED_STORE_KEYS = [
   'shikimoriProfile',
   'shikimoriFriends',
   'shikimoriRecommendations',
-  'priorityAnimeIds'
+  'priorityAnimeIds',
+  'installId',
+  'syncMeta'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

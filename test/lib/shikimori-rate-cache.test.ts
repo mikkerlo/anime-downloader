@@ -40,6 +40,12 @@ describe('buildRateCacheEntries', () => {
     expect(entry.shikiAnime.id).toBe(54595)
   })
 
+  it("keeps the server's updated_at as serverUpdatedAt, which local writes never move (#572)", () => {
+    const [entry] = buildRateCacheEntries([animeRatesRow(54595)], {})
+    expect(entry.rate.serverUpdatedAt).toBe('2023-12-31T01:08:08.723+03:00')
+    expect(entry.rate.updated_at).toBe('2023-12-31T01:08:08.723+03:00')
+  })
+
   it('leaves smotretAnime null when the mal map has no match', () => {
     const [entry] = buildRateCacheEntries([animeRatesRow(54595)], {})
     expect(entry.smotretAnime).toBeNull()

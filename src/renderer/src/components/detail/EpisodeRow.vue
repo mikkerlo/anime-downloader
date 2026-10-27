@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject } from 'vue';
+import { computed, inject } from 'vue';
 import { formatSpeed, formatEta } from '../../utils';
 import { TRANSLATION_TYPES, typeChip } from './translation-types';
 import { EpisodeListKey, EpisodeDownloadsKey } from './keys';
@@ -25,6 +25,8 @@ const {
   hasAnyFile,
   selectedTrHasFile,
   isEpisodeWatched,
+  isEpisodeWatchedLocally,
+  toggleEpisodeWatched,
   episodeProgressPercent,
   openFile,
   showInFolder,
@@ -35,6 +37,10 @@ const {
   downloadEpisode,
   cancelEpisodeDownload
 } = downloads;
+
+const watchedToggleLabel = computed(() =>
+  isEpisodeWatchedLocally(props.row.episode.episodeInt) ? 'Mark as unwatched' : 'Mark as watched'
+);
 </script>
 
 <template>
@@ -220,6 +226,29 @@ const {
       </div>
 
       <div class="ep-actions">
+        <button
+          class="iconbtn ghost ep-watched-toggle"
+          :title="watchedToggleLabel"
+          :aria-label="watchedToggleLabel"
+          @click="toggleEpisodeWatched(props.row.episode.episodeInt)"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="15"
+            height="15"
+          >
+            <path
+              v-if="isEpisodeWatchedLocally(props.row.episode.episodeInt)"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"
+            />
+            <path v-else stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        </button>
         <template v-if="selectedTrHasFile(props.row)">
           <button class="iconbtn" @click="openFile(props.row)" title="Open file">
             <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15">

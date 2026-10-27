@@ -59,7 +59,11 @@ function stalledResponse(): Response {
 
 /** Real I/O (the `.part` write) still runs under fake setTimeout; spin until `cond`. */
 async function until(cond: () => boolean): Promise<void> {
-  for (let i = 0; i < 500 && !cond(); i++) await new Promise((r) => setImmediate(r))
+  // Bounded by wall time, not by spins: a loaded CI runner can take far more
+  // than a few hundred event-loop turns to finish the file write and rename.
+  // Kept under Vitest's 5 s test timeout so a miss reports here.
+  const deadline = Date.now() + 4_000
+  while (!cond() && Date.now() < deadline) await new Promise((r) => setImmediate(r))
   expect(cond()).toBe(true)
 }
 

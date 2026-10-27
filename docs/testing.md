@@ -1155,10 +1155,12 @@ land and `endOfStream()` is never called, because the seeked run's
 `player:stream-end` reached the renderer before the `player:stream-seek`
 reply, which then clears it. That is a player race, not a spec timing
 problem, and the spec keeps failing on it until #607 is fixed: a red run
-reading `endOfStream was never called after the seek` is that bug, so start
-from #607 rather than from the spec. Before the player opens, the spec calls
-`endOfStream()` on a closed MediaSource and asserts the wrapper records it as
-thrown, then drops that entry.
+reading `endOfStream was never called after the seek` whose timeline has no
+`endOfStream` entry at all is that bug, so start from #607 rather than from
+the spec. The same message also covers a call followed by an append, which
+the timeline shows as an `appendBuffer` after the `endOfStream`. Before the
+player opens, the spec calls `endOfStream()` on a closed MediaSource and
+asserts the wrapper records it as thrown, then drops that entry.
 
 Each case also records how long each phase took (`build`: the cached fixture
 plus the pre-launch ffmpeg checks; `launch`; `ready`: `ffmpegCheck()` and the

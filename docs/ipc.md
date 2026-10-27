@@ -32,8 +32,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 |---------|-----------|---------|
 | `validate-token` | invoke | Validate API token against smotret-anime.ru |
 | `search-anime` | invoke | Search anime by query |
-| `get-anime` | invoke | Fetch anime details by ID |
-| `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint (returns null if missing or older than 24h) |
+| `get-anime` | invoke | Fetch anime details by ID. Offline (#568) it returns the cache entry as `{ data, source: 'cache' }` without calling the API, and throws `OfflineError` with no entry |
+| `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint: `AnimeCacheResult` `{ data, cachedAt, stale }`, or null if missing. Online an entry older than 24h is null; offline (#568) it is returned with `stale: true` |
 | `get-episode` | invoke | Fetch episode translations (single episode) |
 | `get-episodes-batch` | invoke | Bulk-fetch translations for a page of episodes in one request (collapses the per-episode cold-load waterfall, #155); caches each result, falls back to cached episodes on failure (via the shared `readCachedEpisodes` helper) |
 | `get-episodes-batch-cached` | invoke | Cache-first read (#196): returns the already-cached translations for a page of episodes with no network, so the episode list paints instantly for previously-viewed anime; the renderer then background-refreshes via `get-episodes-batch` and patches. Shares `readCachedEpisodes` with the network-first fallback. Always `source: 'cache'`; empty `data` means nothing was cached |
@@ -140,8 +140,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `shikimori:friends-refreshed` | send | Friend cards re-assembled in background; FriendsView replaces its grid |
 | `shikimori:get-recommendations` | invoke | Returns the cached `RecommendationEntry[]` "For You" feed instantly (if available) + triggers a background refresh; first call seeds from the user's top-rated titles, fans out `/api/animes/:id/similar`, ranks locally (genre affinity + seed score + popularity), and resolves each MAL ID via `lookupByMalIds`. `null` when logged out, `[]` when too few ratings to seed. Powers RecommendationsView (#193) |
 | `shikimori:recommendations-refreshed` | send | Recommendation feed rebuilt in background; RecommendationsView replaces its grid |
-| `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
-| `shikimori:get-calendar` | invoke | Fetch Shikimori `/api/calendar`, filter to MAL IDs the user tracks as `watching`/`rewatching`/`planned`, resolve each via `lookupByMalIds`. 5-min in-memory main-side cache invalidated on `shikimori:rate-updated`/`shikimori:rates-refreshed`/logout. Optional `force` flag bypasses the cache |
+| `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved. Returns `ShikiSnapshotResult` `{ data, fetchedAt, stale }` (#568): offline, the in-memory snapshot (or `{ data: [], fetchedAt: null, stale: true }`) before any token refresh or lookup; online, a failed fetch falls back to the snapshot with `stale: true` ([Shikimori › Offline snapshots](./shikimori.md#offline-snapshots-568)) |
+| `shikimori:get-calendar` | invoke | Fetch Shikimori `/api/calendar`, filter to MAL IDs the user tracks as `watching`/`rewatching`/`planned`, resolve each via `lookupByMalIds`. 5-min in-memory main-side cache, invalidated (marked, not dropped) on `shikimori:rate-updated`/`shikimori:rates-refreshed`, dropped on logout/account switch. Optional `force` flag bypasses the cache online. Returns `ShikiSnapshotResult` `{ data, fetchedAt, stale }` (#568), served from the snapshot offline and after a failed fetch, like friends activity |
 | `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/franchise`, resolve each related MAL ID to a smotret-anime entry |
 | `auto-dl:get-subscription` | invoke | Get the auto-download subscription for a smotret-anime ID, or `null` |
 | `auto-dl:set-subscription` | invoke | Toggle auto-download for a show. On enable, stamps `lastEnqueuedEpisodeInt` to the current `episodes_aired` (forward-only) and kicks a manual tick |

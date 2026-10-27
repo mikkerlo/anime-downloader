@@ -32,9 +32,21 @@ export interface CalendarEntry {
   userStatus: shikimori.ShikiUserRateStatus
 }
 
-interface CachedCalendar {
+// In-memory display snapshots (#568), each kept for the Shikimori user it was
+// fetched for: a mismatch reads as no snapshot. Offline they are served
+// whatever their age; S2 (#570) persists them.
+export interface CachedCalendar {
   data: CalendarEntry[]
   fetchedAt: number
+  userId: number | null
+  /** Set by `invalidateCalendarCache()`: online a miss, offline still served. */
+  invalidated: boolean
+}
+
+export interface CachedFriendsActivity {
+  data: ShikiFriendActivityEntry[]
+  fetchedAt: number
+  userId: number | null
 }
 
 const SYNC_TIMER_MS = 60_000
@@ -95,7 +107,12 @@ export interface ShikimoriSyncService {
   abortPrefetch(): void
   invalidateCalendarCache(): void
   getCachedCalendar(): CachedCalendar | null
-  setCachedCalendar(data: CalendarEntry[]): void
+  /** `userId` defaults to the signed-in user; stored only while that user is signed in. */
+  setCachedCalendar(data: CalendarEntry[], userId?: number | null): CachedCalendar
+  getCachedFriendsActivity(): CachedFriendsActivity | null
+  setCachedFriendsActivity(userId: number, data: ShikiFriendActivityEntry[]): CachedFriendsActivity
+  /** Drops both snapshots: logout and account switch. */
+  clearOfflineSnapshots(): void
 }
 
 function sleep(ms: number): Promise<void> {
@@ -139,6 +156,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   let onDetailsPrefetched: (() => void) | undefined
 
   let calendarCache: CachedCalendar | null = null
+  let friendsActivityCache: CachedFriendsActivity | null = null
 
   function getQueueLength(): number {
     return (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).length
@@ -562,16 +580,48 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     prefetchAbort = true
   }
 
+  function isCurrentUser(userId: number | null): boolean {
+    return userId === (currentUserId() ?? null)
+  }
+
+  function ownSnapshot<T extends { userId: number | null }>(snapshot: T | null): T | null {
+    return snapshot && isCurrentUser(snapshot.userId) ? snapshot : null
+  }
+
   function invalidateCalendarCache(): void {
-    calendarCache = null
+    if (calendarCache) calendarCache = { ...calendarCache, invalidated: true }
   }
 
   function getCachedCalendar(): CachedCalendar | null {
-    return calendarCache
+    return ownSnapshot(calendarCache)
   }
 
-  function setCachedCalendar(data: CalendarEntry[]): void {
-    calendarCache = { data, fetchedAt: Date.now() }
+  function setCachedCalendar(
+    data: CalendarEntry[],
+    userId: number | null = currentUserId() ?? null
+  ): CachedCalendar {
+    const snapshot: CachedCalendar = { data, fetchedAt: Date.now(), userId, invalidated: false }
+    // A fetch that outlived an account switch must not evict the new user's snapshot.
+    if (isCurrentUser(userId)) calendarCache = snapshot
+    return snapshot
+  }
+
+  function getCachedFriendsActivity(): CachedFriendsActivity | null {
+    return ownSnapshot(friendsActivityCache)
+  }
+
+  function setCachedFriendsActivity(
+    userId: number,
+    data: ShikiFriendActivityEntry[]
+  ): CachedFriendsActivity {
+    const snapshot: CachedFriendsActivity = { data, fetchedAt: Date.now(), userId }
+    if (isCurrentUser(userId)) friendsActivityCache = snapshot
+    return snapshot
+  }
+
+  function clearOfflineSnapshots(): void {
+    calendarCache = null
+    friendsActivityCache = null
   }
 
   return {
@@ -588,6 +638,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     abortPrefetch,
     invalidateCalendarCache,
     getCachedCalendar,
-    setCachedCalendar
+    setCachedCalendar,
+    getCachedFriendsActivity,
+    setCachedFriendsActivity,
+    clearOfflineSnapshots
   }
 }

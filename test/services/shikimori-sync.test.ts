@@ -743,13 +743,87 @@ describe('ShikimoriSyncService — calendar cache', () => {
     expect(cached?.data[0].name).toBe('A')
   })
 
-  it('invalidateCalendarCache clears it', () => {
+  it('invalidateCalendarCache marks the snapshot invalid but keeps it for offline (#568)', () => {
+    const { svc } = makeService()
+    svc.setCachedCalendar([calEntry('A')])
+    svc.invalidateCalendarCache()
+    const cached = svc.getCachedCalendar()
+    expect(cached?.invalidated).toBe(true)
+    expect(cached?.data.map((e) => e.name)).toEqual(['A'])
+  })
+
+  it('a fresh setCachedCalendar clears the invalid mark', () => {
     const { svc } = makeService()
     svc.setCachedCalendar([])
     svc.invalidateCalendarCache()
+    svc.setCachedCalendar([calEntry('B')])
+    expect(svc.getCachedCalendar()?.invalidated).toBe(false)
+  })
+
+  it('stamps the snapshot with the signed-in user and serves it to that user only', () => {
+    const { svc, store } = makeService()
+    svc.setCachedCalendar([calEntry('A')])
+    expect(svc.getCachedCalendar()?.userId).toBe(1)
+    store.set('shikimoriUser', { id: 2, nickname: 'b' })
+    expect(svc.getCachedCalendar()).toBeNull()
+    store.set('shikimoriUser', { id: 1, nickname: 'a' })
+    expect(svc.getCachedCalendar()?.data).toHaveLength(1)
+  })
+
+  it('an explicit userId wins over the signed-in user', () => {
+    const { svc } = makeService()
+    svc.setCachedCalendar([calEntry('A')], 9)
     expect(svc.getCachedCalendar()).toBeNull()
   })
 })
+
+describe('ShikimoriSyncService — friends-activity snapshot (#568)', () => {
+  it('starts empty and returns what was set, for its own user only', () => {
+    const { svc, store } = makeService()
+    expect(svc.getCachedFriendsActivity()).toBeNull()
+    const set = svc.setCachedFriendsActivity(1, [])
+    expect(set).toMatchObject({ userId: 1, data: [] })
+    expect(svc.getCachedFriendsActivity()).toEqual(set)
+    store.set('shikimoriUser', { id: 2, nickname: 'b' })
+    expect(svc.getCachedFriendsActivity()).toBeNull()
+  })
+
+  it("a fetch that outlived an account switch doesn't evict the new user's snapshots", () => {
+    const { svc, store } = makeService()
+    store.set('shikimoriUser', { id: 8, nickname: 'b' })
+    svc.setCachedCalendar([calEntry('B')])
+    svc.setCachedFriendsActivity(8, [])
+
+    // Results of fetches user 1 started, landing after the switch to 8.
+    expect(svc.setCachedCalendar([calEntry('A')], 1)).toMatchObject({ userId: 1 })
+    expect(svc.setCachedFriendsActivity(1, [])).toMatchObject({ userId: 1 })
+
+    expect(svc.getCachedCalendar()?.data.map((e) => e.name)).toEqual(['B'])
+    expect(svc.getCachedFriendsActivity()?.userId).toBe(8)
+  })
+
+  it('clearOfflineSnapshots drops both snapshots', () => {
+    const { svc } = makeService()
+    svc.setCachedCalendar([calEntry('A')])
+    svc.setCachedFriendsActivity(1, [])
+    svc.clearOfflineSnapshots()
+    expect(svc.getCachedCalendar()).toBeNull()
+    expect(svc.getCachedFriendsActivity()).toBeNull()
+  })
+})
+
+function calEntry(name: string) {
+  return {
+    malId: 1,
+    animeId: null,
+    name,
+    posterUrl: '',
+    kind: 'tv',
+    episodeInt: '1',
+    nextEpisodeAt: '2026-01-01',
+    userStatus: 'watching' as const
+  }
+}
 
 describe('ShikimoriSyncService — refreshShikimoriDetailsForMalId', () => {
   it('returns null when not logged in', async () => {

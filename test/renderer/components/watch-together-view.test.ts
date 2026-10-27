@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import WatchTogetherView from '../../../src/renderer/src/components/views/WatchTogetherView.vue'
+import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
 
 const READY_STATUS: SyncplayStatus = {
   state: 'ready',
@@ -29,6 +30,7 @@ const MPV_PEER: SyncplayRoomUser = {
 function stubApi(opts: {
   status?: SyncplayStatus
   users?: SyncplayRoomUser[]
+  offline?: OfflineApi
 }): Record<string, ReturnType<typeof vi.fn>> {
   const real: Record<string, ReturnType<typeof vi.fn>> = {
     syncplayGetStatus: vi.fn().mockResolvedValue(opts.status ?? { state: 'idle' }),
@@ -42,6 +44,8 @@ function stubApi(opts: {
     onSyncplayConnectionStatus: vi.fn(() => () => {}),
     onSyncplayRoomUsers: vi.fn(() => () => {})
   }
+  // Tests add methods to `real` after the stub is installed, so it stays the target.
+  Object.assign(real, (opts.offline ?? offlineApi()).api)
   ;(window as unknown as { api: unknown }).api = new Proxy(real, {
     get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : () => () => {})
   })
@@ -160,5 +164,63 @@ describe('WatchTogetherView', () => {
     const { usePlayerStore } = await import('../../../src/renderer/src/stores/player')
     expect(usePlayerStore().playerState?.episodeLabel).toBe('12')
     expect(wrapper.find('.wt-error').exists()).toBe(false)
+  })
+})
+
+describe('WatchTogetherView — offline (#568)', () => {
+  const REASON = 'Watch Together needs an internet connection'
+
+  it('offline: Join room is disabled with the reason, and Enter does not connect', async () => {
+    const api = stubApi({ status: { state: 'idle' }, offline: offlineApi('offline-manual') })
+    const wrapper = mount(WatchTogetherView)
+    await flushPromises()
+
+    const join = wrapper.find('[data-testid="wt-connect"]')
+    expect(join.attributes('disabled')).toBeDefined()
+    expect(join.attributes('title')).toBe(REASON)
+    expect(wrapper.find('[data-testid="offline-notice"] p').text()).toBe(REASON)
+
+    await wrapper.find('.wt-input').trigger('keyup.enter')
+    await flushPromises()
+    expect(api.syncplayConnect).not.toHaveBeenCalled()
+  })
+
+  it('shows why a session open when the app went offline was ended', async () => {
+    stubApi({
+      status: { state: 'disconnected', error: 'Offline — Watch Together needs the network' },
+      offline: offlineApi('offline-auto')
+    })
+    const wrapper = mount(WatchTogetherView)
+    await flushPromises()
+    expect(wrapper.find('.wt-error').text()).toBe('Offline — Watch Together needs the network')
+  })
+
+  it('online: Join room is enabled and connects — today', async () => {
+    const api = stubApi({ status: { state: 'idle' } })
+    const wrapper = mount(WatchTogetherView)
+    await flushPromises()
+
+    const join = wrapper.find('[data-testid="wt-connect"]')
+    expect(join.attributes('disabled')).toBeUndefined()
+    expect(join.attributes('title')).toBeUndefined()
+    expect(wrapper.find('[data-testid="offline-notice"]').exists()).toBe(false)
+    await join.trigger('click')
+    await flushPromises()
+    expect(api.syncplayConnect).toHaveBeenCalledTimes(1)
+  })
+
+  it('toggling offline on the view disables and re-enables Join room without a reload', async () => {
+    const offline = offlineApi()
+    stubApi({ status: { state: 'idle' }, offline })
+    const wrapper = mount(WatchTogetherView)
+    await flushPromises()
+    const join = (): ReturnType<typeof wrapper.find> => wrapper.find('[data-testid="wt-connect"]')
+
+    offline.emit('offline-manual')
+    await flushPromises()
+    expect(join().attributes('disabled')).toBeDefined()
+    offline.emit('online')
+    await flushPromises()
+    expect(join().attributes('disabled')).toBeUndefined()
   })
 })

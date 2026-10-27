@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import AnimeDetailView from '../../../src/renderer/src/components/views/AnimeDetailView.vue'
+import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
 
 /** A callable that also carries `then`/`catch`/`finally`. The three are optional
  *  so the bare arrow can be assigned before they are filled in below. */
@@ -69,6 +70,7 @@ function episodeDetail(translationId: number): EpisodeDetail {
 interface ApiOverrides {
   getAnimeCache?: ReturnType<typeof vi.fn>
   getAnime?: ReturnType<typeof vi.fn>
+  offline?: OfflineApi
 }
 
 function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typeof vi.fn>> {
@@ -94,7 +96,8 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
     shikimoriGetSyncStatus: vi.fn().mockResolvedValue({ state: 'idle', queueLength: 0 }),
     shikimoriGetOfflineQueueLength: vi.fn().mockResolvedValue(0)
   }
-  ;(window as unknown as { api: unknown }).api = new Proxy(base, {
+  const target = { ...(overrides.offline ?? offlineApi()).api, ...base }
+  ;(window as unknown as { api: unknown }).api = new Proxy(target, {
     get: (t, p, r) => (p in t ? Reflect.get(t, p, r) : () => makeThenable())
   })
   return base
@@ -179,6 +182,159 @@ describe('AnimeDetailView — load path (#196)', () => {
     expect(api.getAnime).toHaveBeenCalledTimes(1)
     expect(api.fileCheckEpisodes).toHaveBeenCalledTimes(1)
     expect(api.downloadedEpisodesGet).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+})
+
+describe('AnimeDetailView — offline (#568)', () => {
+  const THREE_DAYS_AGO = new Date(2026, 9, 24, 12, 0, 0).getTime()
+  const savedLabel = `Saved ${new Date(THREE_DAYS_AGO).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })}, offline`
+
+  function staleCache(): ReturnType<typeof vi.fn> {
+    return vi.fn().mockResolvedValue({ data: detail(), cachedAt: THREE_DAYS_AGO, stale: true })
+  }
+
+  it('offline: paints from cache without awaiting getAnime, with a "Saved <date>, offline" badge', async () => {
+    const api = installApi({
+      getAnimeCache: staleCache(),
+      getAnime: vi.fn(() => new Promise(() => {})),
+      offline: offlineApi('offline-manual')
+    })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('h1').text()).toBe('Tesuto')
+    expect(api.watchProgressGetAll).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').text()).toBe(savedLabel)
+    expect(wrapper.find('.chip.offline').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('offline: Download all and the episode download button are disabled with the reason', async () => {
+    installApi({ getAnimeCache: staleCache(), offline: offlineApi('offline-auto') })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    const all = wrapper.find('[data-testid="download-all"]')
+    expect(all.attributes('disabled')).toBeDefined()
+    expect(all.attributes('title')).toBe('Downloads need an internet connection')
+    const ep = wrapper.find('[data-testid="ep-download"]')
+    expect(ep.exists()).toBe(true)
+    expect(ep.attributes('disabled')).toBeDefined()
+    expect(ep.attributes('title')).toBe('Downloads need an internet connection')
+    wrapper.unmount()
+  })
+
+  it('online: no badge, and the download buttons are enabled — today', async () => {
+    installApi({ getAnimeCache: vi.fn().mockResolvedValue(null) })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(false)
+    const all = wrapper.find('[data-testid="download-all"]')
+    expect(all.attributes('disabled')).toBeUndefined()
+    expect(all.attributes('title')).toBeUndefined()
+    const ep = wrapper.find('[data-testid="ep-download"]')
+    expect(ep.attributes('disabled')).toBeUndefined()
+    expect(ep.attributes('title')).toBe('Download this episode')
+    wrapper.unmount()
+  })
+
+  it('going offline disables the download buttons without a reload', async () => {
+    const offline = offlineApi()
+    installApi({ offline })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="ep-download"]').attributes('disabled')).toBeUndefined()
+
+    offline.emit('offline-manual')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="ep-download"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="download-all"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('a cache paint made offline refreshes once on the online edge: chip gone, new episode listed', async () => {
+    const offline = offlineApi('offline-manual')
+    const ep = (n: number): EpisodeSummary => ({
+      id: 9 + n,
+      episodeInt: String(n),
+      episodeFull: `Episode ${n}`,
+      episodeType: 'tv',
+      isActive: 1
+    })
+    // Offline, main answers get-anime from the cache (one episode); back
+    // online, the API has a second one.
+    const getAnime = vi
+      .fn()
+      .mockResolvedValueOnce({ source: 'cache', data: detail() })
+      .mockResolvedValue({
+        source: 'api',
+        data: detail({ numberOfEpisodes: 2, episodes: [ep(1), ep(2)] })
+      })
+    const api = installApi({ getAnimeCache: staleCache(), getAnime, offline })
+    const byIds = (ids: number[]): { data: EpisodeDetail[] } => ({
+      data: ids.map((id) => ({ ...episodeDetail(700), id, episodeInt: String(id - 9) }))
+    })
+    api.getEpisodesBatchCached.mockImplementation(async (ids: number[]) => ({
+      ...byIds(ids.filter((id) => id === 10)),
+      source: 'cache'
+    }))
+    api.getEpisodesBatch.mockImplementation(async (ids: number[]) => byIds(ids))
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(true)
+    expect(getAnime).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('.ep-row')).toHaveLength(1)
+
+    offline.emit('online')
+    await flushPromises()
+
+    expect(getAnime).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(false)
+    expect(wrapper.find('.chip.offline').exists()).toBe(false)
+    expect(wrapper.findAll('.ep-row')).toHaveLength(2)
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([11], 1)
+
+    offline.emit('offline-manual')
+    await flushPromises()
+    offline.emit('online')
+    await flushPromises()
+    // Now painted from the API: another edge doesn't refetch.
+    expect(getAnime).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('offline with no cache entry: the OfflineNotice; back online loads once', async () => {
+    const offline = offlineApi('offline-manual')
+    const getAnime = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Offline: network access is turned off'))
+      .mockResolvedValue({ source: 'api', data: detail() })
+    installApi({ getAnimeCache: vi.fn().mockResolvedValue(null), getAnime, offline })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="offline-notice"] p').text()).toBe(
+      'This title needs an internet connection'
+    )
+    expect(wrapper.find('h1').exists()).toBe(false)
+
+    offline.emit('online')
+    await flushPromises()
+    expect(getAnime).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="offline-notice"]').exists()).toBe(false)
+    expect(wrapper.find('h1').text()).toBe('Tesuto')
+
+    offline.emit('offline-manual')
+    await flushPromises()
+    offline.emit('online')
+    await flushPromises()
+    expect(getAnime).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 })

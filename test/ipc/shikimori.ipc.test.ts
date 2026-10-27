@@ -46,6 +46,7 @@ type SyncStub = {
   stopSyncTimer: Mock
   syncShikimoriQueue: Mock
   invalidateCalendarCache: Mock
+  clearOfflineSnapshots: Mock
   abortPrefetch: Mock
   setOnDetailsPrefetched: Mock
   prefetchShikimoriDetails: Mock
@@ -90,6 +91,7 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     stopSyncTimer: vi.fn(),
     syncShikimoriQueue: vi.fn(async () => undefined),
     invalidateCalendarCache: vi.fn(),
+    clearOfflineSnapshots: vi.fn(),
     abortPrefetch: vi.fn(),
     setOnDetailsPrefetched: vi.fn(),
     prefetchShikimoriDetails: vi.fn(async () => undefined),
@@ -617,6 +619,7 @@ describe('shikimori IPC — unsynced changes on logout and account switch (#588)
     expect(store.get('shikimoriProfile')).toBeNull()
     expect(store.get('shikimoriFriends')).toEqual([])
     expect(sync.abortPrefetch).toHaveBeenCalled()
+    expect(sync.clearOfflineSnapshots).toHaveBeenCalled()
     expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
       length: 0
     })
@@ -675,6 +678,7 @@ describe('shikimori IPC — unsynced changes on logout and account switch (#588)
     expect(store.get('shikimoriUserRates')).toEqual([cachedRate(42)])
     expect(parkedOf(store)).toEqual({})
     expect(sync.abortPrefetch).not.toHaveBeenCalled()
+    expect(sync.clearOfflineSnapshots).not.toHaveBeenCalled()
   })
 
   it('the same user signing back in gets their kept changes back verbatim', async () => {

@@ -205,6 +205,18 @@ interface CalendarEntry {
   userStatus: ShikiUserRateStatus
 }
 
+/**
+ * `shikimori:get-calendar` / `shikimori:get-friends-activity` (#568). `stale` is
+ * true when `data` is main's in-memory snapshot because the app is offline or
+ * the fetch failed. `fetchedAt` is null only offline with no snapshot, where
+ * `data` is empty.
+ */
+interface ShikiSnapshotResult<T> {
+  data: T
+  fetchedAt: number | null
+  stale: boolean
+}
+
 interface ShikiRelatedAnimeInfo {
   id: number
   name: string

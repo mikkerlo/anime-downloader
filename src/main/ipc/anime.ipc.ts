@@ -2,8 +2,14 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
 import type { EpisodeDetail } from '../smotret-api'
+import { OfflineError } from '../lib/net'
 
-export function register({ smotretApi, animeCacheService, rememberAnimeMeta }: AppDeps): void {
+export function register({
+  smotretApi,
+  animeCacheService,
+  rememberAnimeMeta,
+  offlineService
+}: AppDeps): void {
   // Shared cache read for the cache-first channel + the network-first
   // error-fallback (#196) so the two reads can't drift: id → cached episode
   // translation, undefined entries filtered out.
@@ -22,6 +28,12 @@ export function register({ smotretApi, animeCacheService, rememberAnimeMeta }: A
   })
 
   ipcMain.handle(CHANNELS.GET_ANIME, async (_event, id: number) => {
+    // Offline (#568) the cache is the answer, without a refused round trip.
+    if (offlineService?.isOffline()) {
+      const cached = animeCacheService.getEntry(id)
+      if (cached?.animeDetail) return { data: cached.animeDetail, source: 'cache' }
+      throw new OfflineError()
+    }
     try {
       const result = await smotretApi.getAnime(id)
       animeCacheService.updateAnimeDetail(id, result.data)

@@ -58,9 +58,12 @@ export function useEpisodeDownloads(deps: {
   playerStore: ReturnType<typeof usePlayerStore>
   playerMode: Ref<'system' | 'builtin'>
   pageSize: number
+  // The offline store's `isOffline` (#568); absent reads as online.
+  isOffline?: Ref<boolean>
 }): {
   downloading: Ref<boolean>
   errorMessage: Ref<string>
+  downloadBlockedReason: ComputedRef<string | null>
   continueTarget: ComputedRef<EpisodeSummary | null>
   continueReady: ComputedRef<boolean>
   continueLabel: ComputedRef<string>
@@ -98,6 +101,10 @@ export function useEpisodeDownloads(deps: {
 } {
   const downloading = ref(false)
   const errorMessage = ref('')
+  // Offline nothing new is enqueued; pause, cancel and merge stay available.
+  const downloadBlockedReason = computed(() =>
+    deps.isOffline?.value ? 'Downloads need an internet connection' : null
+  )
 
   async function loadWatchProgress(): Promise<void> {
     try {
@@ -354,7 +361,7 @@ export function useEpisodeDownloads(deps: {
   }
 
   async function downloadAll(): Promise<void> {
-    if (!deps.anime.value) return
+    if (!deps.anime.value || downloadBlockedReason.value) return
     if (!(await checkToken())) return
 
     const name = deps.getAnimeName()
@@ -386,7 +393,7 @@ export function useEpisodeDownloads(deps: {
   }
 
   async function downloadEpisode(row: EpisodeRow): Promise<void> {
-    if (!row.selectedTr || !deps.anime.value) return
+    if (!row.selectedTr || !deps.anime.value || downloadBlockedReason.value) return
     if (!(await checkToken())) return
 
     await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(deps.anime.value)))
@@ -594,6 +601,7 @@ export function useEpisodeDownloads(deps: {
   return {
     downloading,
     errorMessage,
+    downloadBlockedReason,
     continueTarget,
     continueReady,
     continueLabel,

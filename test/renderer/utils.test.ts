@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  formatAgo,
   previewSeek,
   resolveSeekTarget,
   resolveMkvSpawnTarget,
@@ -511,5 +512,20 @@ describe('resolveEpisodeTranslation', () => {
       f.fill
     )
     expect(first.outcome === 'resolved' && first.translation.id).toBe(100)
+  })
+})
+
+describe('formatAgo (#568)', () => {
+  const NOW = 1_000_000_000_000
+  it.each([
+    [0, 'just now'],
+    [59_000, 'just now'],
+    [60_000, '1 min ago'],
+    [59 * 60_000, '59 min ago'],
+    [2 * 3_600_000, '2 h ago'],
+    [3 * 86_400_000, '3 d ago'],
+    [-5_000, 'just now']
+  ])('%i ms ago reads %s', (ago, label) => {
+    expect(formatAgo(NOW - ago, NOW)).toBe(label)
   })
 })

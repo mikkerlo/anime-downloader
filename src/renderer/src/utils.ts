@@ -372,3 +372,13 @@ export async function resolveEpisodeTranslation(
   if (!resolvedTr) return { outcome: 'unreachable' }
   return { outcome: 'resolved', translation: resolvedTr, translations, forceLocal }
 }
+
+/** "just now" / "5 min ago" / "3 h ago" / "2 d ago", for offline stamps (#568). */
+export function formatAgo(ts: number, now: number = Date.now()): string {
+  const min = Math.floor(Math.max(0, now - ts) / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min} min ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} h ago`
+  return `${Math.floor(hr / 24)} d ago`
+}

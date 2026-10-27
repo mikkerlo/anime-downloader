@@ -1,9 +1,21 @@
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue';
+import { ref, reactive, computed, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import AnimeCard from '../shared/AnimeCard.vue';
+import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
+import { useOfflineStore } from '../../stores/offline';
 
 const libraryStore = useLibraryStore();
+const { isOffline } = storeToRefs(useOfflineStore());
+// A search submitted offline runs once on the next online edge (#568).
+let pendingOfflineQuery = false;
+watch(isOffline, (offline) => {
+  if (!offline && pendingOfflineQuery) {
+    pendingOfflineQuery = false;
+    void search();
+  }
+});
 
 const query = ref('');
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -36,6 +48,10 @@ const filteredResults = computed(() =>
 async function search(): Promise<void> {
   const q = query.value.trim();
   if (!q) return;
+  if (isOffline.value) {
+    pendingOfflineQuery = true;
+    return;
+  }
 
   loading.value = true;
   searched.value = true;
@@ -90,7 +106,9 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
   <main class="search-view">
     <header class="topbar">
       <h2>Search</h2>
-      <span v-if="searched && !loading" class="sub">· {{ results.length }} titles</span>
+      <span v-if="searched && !loading && !isOffline" class="sub"
+        >· {{ results.length }} titles</span
+      >
     </header>
     <div class="body">
       <form class="search-wrap" @submit.prevent="search">
@@ -116,7 +134,7 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
         />
       </form>
 
-      <div v-if="availableTypes.length > 1" class="filter-row">
+      <div v-if="!isOffline && availableTypes.length > 1" class="filter-row">
         <div class="pill-tabs">
           <button
             class="pill-tab"
@@ -137,7 +155,8 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
         </div>
       </div>
 
-      <div v-if="loading" class="status-text">Searching…</div>
+      <OfflineNotice v-if="isOffline" reason="Search needs an internet connection" />
+      <div v-else-if="loading" class="status-text">Searching…</div>
       <div v-else-if="filteredResults.length > 0" class="poster-grid">
         <AnimeCard
           v-for="anime in filteredResults"

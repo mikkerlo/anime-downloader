@@ -1629,7 +1629,7 @@ export class SyncplayClient extends EventEmitter {
     // kill is the thing a later PR deletes with no way to tell it mattered.
     //
     // The text keys on `=== false` for the same reason the roster dots do
-    // (WatchTogetherView.vue:167 and SyncplayMenu.vue:65): so that in the one
+    // (WatchTogetherView.vue:182 and SyncplayMenu.vue:65): so that in the one
     // non-conforming case above the log agrees with the UI instead of reading
     // "not ready" next to a green dot. Identical for every reachable value.
     const setBy = typeof data.setBy === 'string' ? data.setBy : undefined

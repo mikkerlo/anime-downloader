@@ -2,10 +2,18 @@
 import { ref, onMounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDownloadsStore } from '../../stores/downloads';
+import { useOfflineStore } from '../../stores/offline';
 import { formatBytes, formatSpeed, formatEta } from '../../utils';
 
 const downloadsStore = useDownloadsStore();
 const { groups } = storeToRefs(downloadsStore);
+// Offline main leaves queued items queued (#567); say why they don't start (#568).
+const { isOffline } = storeToRefs(useOfflineStore());
+const WAITING = 'waiting for connection';
+
+function rowStatusTitle(item: DownloadProgressItem): string | undefined {
+  return isOffline.value && item.status === 'queued' ? 'Waiting for connection' : undefined;
+}
 
 onMounted(() => {
   void downloadsStore.refreshQueue();
@@ -44,6 +52,8 @@ function statusLabel(g: EpisodeGroup): string {
       return 'merge interrupted';
     case 'merge-failed':
       return 'merge failed';
+    case 'queued':
+      return isOffline.value ? WAITING : s;
     default:
       return s;
   }
@@ -226,7 +236,9 @@ async function mergeFinished(): Promise<void> {
             <!-- Video row -->
             <div v-if="g.video" class="dl-row">
               <span class="dl-kind">VIDEO</span>
-              <span class="r-status" :class="g.video.status">{{ g.video.status }}</span>
+              <span class="r-status" :class="g.video.status" :title="rowStatusTitle(g.video)">{{
+                g.video.status
+              }}</span>
               <template v-if="g.video.status === 'downloading'">
                 <div class="pbar thin">
                   <span :style="{ width: progress(g.video) + '%' }"></span>
@@ -295,7 +307,12 @@ async function mergeFinished(): Promise<void> {
             <!-- Subtitle row -->
             <div v-if="g.subtitle" class="dl-row">
               <span class="dl-kind sub">SUB</span>
-              <span class="r-status" :class="g.subtitle.status">{{ g.subtitle.status }}</span>
+              <span
+                class="r-status"
+                :class="g.subtitle.status"
+                :title="rowStatusTitle(g.subtitle)"
+                >{{ g.subtitle.status }}</span
+              >
               <template v-if="g.subtitle.status === 'downloading'">
                 <div class="pbar thin sub">
                   <span :style="{ width: progress(g.subtitle) + '%' }"></span>

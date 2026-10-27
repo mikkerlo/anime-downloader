@@ -1132,6 +1132,42 @@ screenshot, which the paused controls' gradient covers. Once three reads repeat
 it asserts both sentinels are white, the subtitle code is 165, and only then
 that the video code equals it. With #556's fix reverted the picture reads 160.
 
+A second case (#560) runs the same steps on a 100 s fixture whose audio lands
+~0.38 s before every keyframe (the video's DTS shifted by `setts`) and runs 2 s
+past the picture, with T = 82.6. Anchored on the video instead of the audio
+landing, the picture reads 164 and `buffered` ends ~0.3 s past the audio.
+After the band check it compares the end of `buffered` with the file's audio
+end (`audioEnd()`, ffprobe's last packet) and fails when they are 5 ms or more
+apart. That comparison is the #560 guard. Before `endOfStream()` the range is
+the intersection of the tracks and ends with the picture at 100.02, so the
+spec waits for the call itself (#604). Before opening the player it wraps
+`MediaSource.prototype.addSourceBuffer`, `MediaSource.prototype.endOfStream`
+and `SourceBuffer.prototype.appendBuffer` in the page and records each call's
+time and the source's `readyState` (the `addSourceBuffer` wrap maps each
+SourceBuffer to its MediaSource), and whether an `endOfStream()` threw. It
+marks the seek in the same timeline and waits up to 20 s for an
+`endOfStream()` after the seek that did not throw, with no append after it.
+The `buffered after EOS` annotation carries the timeline from the seek on
+(append runs folded into one entry), so a red run shows whether the call never
+came, threw, or was followed by an append that re-opened the source. The
+intermittent local reds (#604) are the first kind: all of the run's appends
+land and `endOfStream()` is never called, because the seeked run's
+`player:stream-end` reached the renderer before the `player:stream-seek`
+reply, which then clears it. That is a player race, not a spec timing
+problem, and the spec keeps failing on it. Before the player opens, the spec
+calls `endOfStream()` on a closed MediaSource and asserts the wrapper records
+it as thrown, then drops that entry.
+
+Each case also records how long each phase took (`build`: the cached fixture
+plus the pre-launch ffmpeg checks; `launch`; `ready`: `ffmpegCheck()` and the
+player's first frame; `settle`: the pause, the seek and its settle; `reads`;
+`eos`) as `phase <name> ms` annotations, and prints each one as it ends,
+because the local `list` reporter shows stdout but not annotations and a case
+that times out never reaches a summary. Under 48 busy loops on 24 cores (load
+about 50, 30 runs) the slowest phase was `reads` at 6.7 s and the slowest case
+32 s, 20 s of it the EOS wait on a red run, so the 120 s budget is unchanged;
+the one 120 s timeout seen locally was at load 46 with other work running.
+
 It is tagged `@mkv-sync`. The `quality` job's shared e2e step leaves it out
 with `--grep-invert`, a blocking `--grep @mkv-sync --list` step fails when the
 tag selects nothing, and the spec runs in its own `continue-on-error` step

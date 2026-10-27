@@ -64,8 +64,137 @@ const AUDIO_EARLIEST_CASE: SeekCase = {
 
 const STABLE_READS = 3
 // Before endOfStream `buffered` is the intersection of the tracks and ends with
-// the picture at 100 s; only after it does the range reach the audio's end.
-const AUDIO_EOS_FLOOR = 100.5
+// the picture at 100 s; only after it does the range reach the audio's end. So
+// the check waits for the call itself, not for the range to grow.
+const EOS_TIMEOUT_MS = 20_000
+
+interface MseEvent {
+  ev: 'seek' | 'addSourceBuffer' | 'appendBuffer' | 'endOfStream'
+  /** `performance.now()` in the page. */
+  t: number
+  /** The MediaSource's readyState when the call was made. */
+  readyState: string
+  bytes?: number
+  /** The call threw, e.g. InvalidStateError while the SourceBuffer is updating. */
+  threw?: true
+}
+
+// Records MediaSource.endOfStream and SourceBuffer.appendBuffer calls, so the
+// EOS check waits on the call and a red run shows whether it never came or a
+// later append re-opened the source. Installed before the player opens.
+function instrumentMse(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    const timeline: MseEvent[] = []
+    ;(window as unknown as { __mseTimeline: MseEvent[] }).__mseTimeline = timeline
+    const owner = new WeakMap<SourceBuffer, MediaSource>()
+    const rec = (ev: MseEvent['ev'], ms: MediaSource | undefined, bytes?: number): MseEvent => {
+      const e: MseEvent = { ev, t: performance.now(), readyState: ms?.readyState ?? 'unknown' }
+      if (bytes !== undefined) e.bytes = bytes
+      timeline.push(e)
+      return e
+    }
+    const addSourceBuffer = MediaSource.prototype.addSourceBuffer
+    MediaSource.prototype.addSourceBuffer = function (type: string) {
+      const sb = addSourceBuffer.call(this, type)
+      owner.set(sb, this)
+      rec('addSourceBuffer', this)
+      return sb
+    }
+    const endOfStream = MediaSource.prototype.endOfStream
+    MediaSource.prototype.endOfStream = function (error?: EndOfStreamError) {
+      const e = rec('endOfStream', this)
+      try {
+        return endOfStream.call(this, error)
+      } catch (err) {
+        e.threw = true
+        throw err
+      }
+    }
+    const appendBuffer = SourceBuffer.prototype.appendBuffer
+    SourceBuffer.prototype.appendBuffer = function (data: BufferSource) {
+      rec('appendBuffer', owner.get(this), data.byteLength)
+      return appendBuffer.call(this, data)
+    }
+  })
+}
+
+// True once the last endOfStream after the seek that didn't throw has no
+// append after it.
+function eosAfterSeek(timeline: MseEvent[]): boolean {
+  let seek = -1
+  let eos = -1
+  let append = -1
+  timeline.forEach((e, i) => {
+    if (e.ev === 'seek') seek = i
+    else if (e.ev === 'endOfStream' && !e.threw) eos = i
+    else if (e.ev === 'appendBuffer') append = i
+  })
+  return seek >= 0 && eos > seek && eos > append
+}
+
+function eosThrewAfterSeek(timeline: MseEvent[]): boolean {
+  const seek = timeline.findIndex((e) => e.ev === 'seek')
+  return seek >= 0 && timeline.slice(seek).some((e) => e.ev === 'endOfStream' && e.threw)
+}
+
+// The timeline from the seek on, ms after it, with runs of appends folded into
+// one entry, and the calls before it as counts.
+function summarizeTimeline(timeline: MseEvent[]): unknown {
+  let seekAt = timeline.findIndex((e) => e.ev === 'seek')
+  if (seekAt < 0) seekAt = timeline.length
+  const before: Record<string, number> = {}
+  for (const e of timeline.slice(0, seekAt)) before[e.ev] = (before[e.ev] ?? 0) + 1
+  const t0 = seekAt < timeline.length ? timeline[seekAt].t : 0
+  const ms = (t: number): number => Math.round(t - t0)
+  const after: Record<string, unknown>[] = []
+  let run: {
+    ev: string
+    n: number
+    bytes: number
+    from: number
+    to: number
+    readyState: string[]
+  } | null = null
+  for (const e of timeline.slice(seekAt)) {
+    if (e.ev === 'appendBuffer') {
+      if (!run) {
+        run = { ev: 'appendBuffer', n: 0, bytes: 0, from: ms(e.t), to: 0, readyState: [] }
+        after.push(run)
+      }
+      run.n++
+      run.bytes += e.bytes ?? 0
+      run.to = ms(e.t)
+      if (!run.readyState.includes(e.readyState)) run.readyState.push(e.readyState)
+    } else {
+      run = null
+      after.push({
+        ev: e.ev,
+        t: ms(e.t),
+        readyState: e.readyState,
+        ...(e.threw && { threw: true })
+      })
+    }
+  }
+  return { before, after }
+}
+
+function mseTimeline(page: Page): Promise<MseEvent[]> {
+  return page.evaluate(() => (window as unknown as { __mseTimeline: MseEvent[] }).__mseTimeline)
+}
+
+// Elapsed ms per phase, as `phase <name> ms` annotations and printed as each
+// phase ends: the local `list` reporter shows stdout but not annotations, and a
+// timed-out case never reaches a later summary.
+function phaseTimer(): (name: string) => void {
+  let mark = performance.now()
+  return (name) => {
+    const now = performance.now()
+    const ms = String(Math.round(now - mark))
+    mark = now
+    test.info().annotations.push({ type: `phase ${name} ms`, description: ms })
+    console.log(`[mkv-sync] ${test.info().title}: ${name} ${ms} ms`)
+  }
+}
 
 interface Bands {
   video: number[]
@@ -144,6 +273,7 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
     test.skip(!ffmpegReady && !process.env.CI, `${FFMPEG} with libx264 not found on PATH`)
     expect(ffmpegReady, `CI must put ${FFMPEG} (with libx264) and ${FFPROBE} on PATH`).toBe(true)
     test.setTimeout(120_000)
+    const phase = phaseTimer()
 
     // A broken fixture fails here, before Electron launches.
     const fixture = buildTickFixture(c.fixture)
@@ -153,6 +283,7 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
       sentinel: true,
       code: EXPECTED_TICK
     })
+    phase('build')
 
     // The helper links ffmpeg and ffprobe into the profile's userData; without
     // both the app downloads its own and the player falls back to legacy remux
@@ -169,6 +300,7 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
         const consoleLines: string[] = []
         page.on('console', (m) => consoleLines.push(m.text()))
         await page.waitForLoadState('domcontentloaded')
+        phase('launch')
 
         await expect
           .poll(() =>
@@ -185,6 +317,21 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
           )
 
         await page.waitForFunction(() => typeof (window as any).__openTestPlayer === 'function')
+        await instrumentMse(page)
+        // The wrapper must record a throw: endOfStream on a closed source throws
+        // InvalidStateError. The probe entry is dropped before the player opens.
+        expect(
+          await page.evaluate(() => {
+            const timeline = (window as unknown as { __mseTimeline: MseEvent[] }).__mseTimeline
+            try {
+              new MediaSource().endOfStream()
+            } catch {
+              /* expected */
+            }
+            const probe = timeline.splice(0)
+            return probe.map((e) => ({ ev: e.ev, readyState: e.readyState, threw: e.threw }))
+          })
+        ).toEqual([{ ev: 'endOfStream', readyState: 'closed', threw: true }])
         // subtitleContent '' makes the embedded track arrive over
         // player:stream-subtitles, the real extraction path.
         await page.evaluate((filePath) => {
@@ -220,6 +367,7 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
           await page.evaluate(() => document.querySelector('video')!.currentSrc),
           'MKV must play through MSE, not the legacy remux fallback'
         ).toMatch(/^blob:/)
+        phase('ready')
 
         // A timeupdate from the pause can pump the append queue during the
         // 250 ms respawn debounce and land the seek inside the buffer, so let it
@@ -229,6 +377,11 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
         await page.waitForTimeout(500)
         const firstLine = consoleLines.length
         await page.evaluate((t) => {
+          ;(window as unknown as { __mseTimeline: MseEvent[] }).__mseTimeline.push({
+            ev: 'seek',
+            t: performance.now(),
+            readyState: 'n/a'
+          })
           document.querySelector('video')!.currentTime = t
         }, c.target)
 
@@ -255,6 +408,7 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
           (buffered.length > 0 && buffered[0][0] >= c.bufferLeftFloor) || respawnLogged,
           `seek never left the buffer, so this run tests nothing: ${JSON.stringify(seek)}`
         ).toBe(true)
+        phase('settle')
 
         // Both bands were stable ~0.85 s after the seek in review; poll rather
         // than sleep.
@@ -282,24 +436,33 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
         expect(final.sub.sentinel, `subtitle band sentinel not white: ${summary}`).toBe(true)
         expect(final.sub.code, `subtitles show the wrong tick: ${summary}`).toBe(EXPECTED_TICK)
         expect(final.video.code, `picture and subtitles disagree: ${summary}`).toBe(final.sub.code)
+        phase('reads')
 
         if (c.checkAudioEnd) {
           // Exact to the ms and needs no audio output: after endOfStream the
           // range ends at timestampOffset + the run's audio end, which is the
           // file's audio end only when the offset is the audio's zero.
           const expectedEnd = audioEnd(fixture.mkv)
-          let end = 0
-          for (let i = 0; i < 100 && end < AUDIO_EOS_FLOOR; i++) {
-            await page.waitForTimeout(200)
-            const { buffered: ranges } = await videoState(page)
-            end = ranges.length > 0 ? ranges[ranges.length - 1][1] : 0
-          }
-          const eos = JSON.stringify({ end, expectedEnd, final: await videoState(page) })
+          const eosCalled = await expect
+            .poll(async () => eosAfterSeek(await mseTimeline(page)), { timeout: EOS_TIMEOUT_MS })
+            .toBe(true)
+            .then(
+              () => true,
+              () => false
+            )
+          const state = await videoState(page)
+          const { buffered: ranges } = state
+          const end = ranges.length > 0 ? ranges[ranges.length - 1][1] : 0
+          const raw = await mseTimeline(page)
+          const timeline = summarizeTimeline(raw)
+          const eos = JSON.stringify({ end, expectedEnd, final: state, timeline })
           test.info().annotations.push({ type: 'buffered after EOS', description: eos })
-          expect(end, `endOfStream never reached: ${eos}`).toBeGreaterThan(AUDIO_EOS_FLOOR)
+          const missing = eosThrewAfterSeek(raw) ? 'threw' : 'was never called'
+          expect(eosCalled, `endOfStream ${missing} after the seek: ${eos}`).toBe(true)
           expect(Math.abs(end - expectedEnd), `buffered ends off the audio: ${eos}`).toBeLessThan(
             0.005
           )
+          phase('eos')
         }
         assertNoDownloads(launched)
       } finally {

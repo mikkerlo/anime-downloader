@@ -6,6 +6,7 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { InMemoryStorage } from '../../helpers/in-memory-storage'
 import { projectSyncDoc } from '../../../src/main/lib/sync-state/project'
+import { applySyncDoc } from '../../../src/main/lib/sync-state/apply'
 
 type Profile = {
   watchProgress: Record<string, WatchProgressEntry>
@@ -108,6 +109,27 @@ describe('legacy profile → SyncDoc', () => {
     const { store, writes } = load()
     projectSyncDoc(store, titleIds, { resolveEpisodeFile: () => null })
     expect(writes).toEqual([])
+    expect(store.get('watchProgress')).toEqual(PROFILE.watchProgress)
+  })
+})
+
+// The apply side of "lazy": S9's first merge on a pre-#572 profile applies a
+// doc that, for everything unchanged, is the profile's own projection. That
+// must not touch a legacy row (its `updatedAt` orders continue-watching and
+// the resume pick) or stamp legacy clocks into `syncMeta`.
+describe('legacy profile → SyncDoc → applySyncDoc', () => {
+  it("applying the profile's own projection writes nothing", () => {
+    const { store, writes } = load()
+    const doc = projectSyncDoc(store, titleIds, { resolveEpisodeFile: () => null })
+
+    const report = applySyncDoc(store, doc, titleIds, {
+      now: () => Date.UTC(2030, 0, 1),
+      localEpisodeFile: () => null,
+      skipAlgorithm: {} as ShowSkipDetections['algorithm']
+    })
+
+    expect(writes).toEqual([])
+    expect(report).toEqual({ applied: [], unapplied: [], clamped: [] })
     expect(store.get('watchProgress')).toEqual(PROFILE.watchProgress)
   })
 })

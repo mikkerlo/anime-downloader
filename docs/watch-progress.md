@@ -55,7 +55,8 @@ Watch state carries per-field clocks so another PC's copy can be merged with it 
 
 **`applySyncDoc(store, doc, scope, deps)`** writes a merged doc back, touching only in-scope titles. It returns `{ applied, unapplied, clamped }`.
 - It clamps first: any `at` more than 120 s in the future becomes now, and each clamp is reported.
-- Watch rows take the doc's values and clocks.
+- Watch rows take the doc's values and clocks. A row whose values and projected clocks already match is left alone; legacy rows and missing clocks compare as they project. Applying a store's own projection therefore writes nothing, and a pre-#572 profile's `updatedAt` order (continue-watching, the resume pick) survives the first merge. A row that does change takes `updatedAt` from the doc's `position` clock, never moving it back, so episodes brought in by a sync keep their own recency.
+- Legacy `{ at: 0, origin: 'legacy' }` star and priority clocks are not stamped into `syncMeta` when it has none.
 - **`starred = true`** needs an `AnimeSearchResult` to create the `library` row. It looks in local `library`, then `downloadedAnime`, then `deps.sharedSearchResult` (the Shared Library's `meta/<animeId>.json` `searchResult`). With none, the field is reported `unapplied`, and S9 does not advance its base, so it is retried.
 - `priority` needs the `library` row, and an unstar also unprioritises.
 - **`priorityOrder`** is written back into the slots that in-scope ids occupy in the local list. Out-of-scope ids keep their positions, new in-scope members go at the end, and leftover slots are dropped.

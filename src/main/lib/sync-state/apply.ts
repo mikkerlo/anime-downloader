@@ -4,7 +4,7 @@
 
 import type { StorageService } from '../../store/types'
 import { updateSyncMeta } from '../../store/sync-meta'
-import { clampSyncDoc } from './clock'
+import { LEGACY_ORIGIN, clampSyncDoc, watchSyncOf } from './clock'
 import { reconcileOrder, sameValue } from './field-table'
 import {
   KNOWN_DOC_FIELDS,
@@ -36,6 +36,12 @@ export interface ApplyDeps extends Pick<ProjectDeps, 'pendingRates'> {
    * rate change is reported unapplied.
    */
   applyRate?(animeId: string, rate: SyncRateState): true | string
+}
+
+// The clock a legacy star or priority projects with when `syncMeta` has none.
+// Stamping it back would be a write that records nothing.
+function isLegacyClock(clock: SyncClock): boolean {
+  return clock.at === 0 && clock.origin === LEGACY_ORIGIN
 }
 
 function read<T>(store: StorageService, key: string, fallback: T): T {
@@ -81,6 +87,8 @@ export function applySyncDoc(
   const dismissedBefore = read<string[]>(store, 'dismissedContinueWatching', [])
   let dismissed = [...dismissedBefore]
   const skipDetections = read<Record<string, ShowSkipDetections>>(store, 'skipDetections', {})
+  const metaBefore = store.get<SyncMeta | undefined>('syncMeta')
+  const missingClock = { at: 0, origin: store.get<string | undefined>('installId') ?? '' }
   const metaEdits: ((meta: SyncMeta) => void)[] = []
   const changed = new Set<string>()
 
@@ -99,7 +107,7 @@ export function applySyncDoc(
       const next: WatchProgressEntry = {
         position: entry.position.value.position,
         duration: entry.position.value.duration,
-        updatedAt: prev?.updatedAt ?? now,
+        updatedAt: prev?.updatedAt ?? entry.position.at,
         watched: entry.watched.value,
         watchedAt: entry.watchedAt ?? undefined,
         translationId: entry.position.value.translationId,
@@ -108,8 +116,21 @@ export function applySyncDoc(
           watched: { at: entry.watched.at, origin: entry.watched.origin }
         }
       }
-      if (prev && sameValue(next, prev)) continue
-      next.updatedAt = now
+      // A row compares by the clocks it projects (a legacy row's, or `at: 0`
+      // for a missing one), so applying a store's own projection leaves it as it is.
+      const clocks = prev && watchSyncOf(prev)
+      const seen = prev && {
+        ...prev,
+        watched: !!prev.watched,
+        sync: {
+          position: clocks!.position ?? missingClock,
+          watched: clocks!.watched ?? missingClock
+        }
+      }
+      if (seen && sameValue(next, seen)) continue
+      // From the doc's clock, as `watch-progress:save` does: rows brought in by
+      // a sync keep their own recency instead of all reading "now".
+      next.updatedAt = Math.max(prev?.updatedAt ?? 0, entry.position.at)
       watchProgress[key] = next
       changed.add('watchProgress')
       report.applied.push(`${path}.watch.${episodeInt}`)
@@ -130,7 +151,9 @@ export function applySyncDoc(
           })
         }
       }
-      if (library[id]) metaEdits.push((m) => ((m.titles[id] ??= {}).starred = clock))
+      if (library[id] && !(isLegacyClock(clock) && !metaBefore?.titles?.[id]?.starred)) {
+        metaEdits.push((m) => ((m.titles[id] ??= {}).starred = clock))
+      }
     } else if (stones.starred) {
       const stone = stones.starred
       if (library[id]) {
@@ -150,7 +173,9 @@ export function applySyncDoc(
           priority.push(id)
           report.applied.push(`${path}.priority`)
         }
-        metaEdits.push((m) => ((m.titles[id] ??= {}).priority = clock))
+        if (!(isLegacyClock(clock) && !metaBefore?.titles?.[id]?.priority)) {
+          metaEdits.push((m) => ((m.titles[id] ??= {}).priority = clock))
+        }
       }
     } else if (stones.priority || stones.starred) {
       // Rule 9's invariant: an unstarred title is not prioritised either.
@@ -257,7 +282,6 @@ export function applySyncDoc(
   if (changed.has('priorityAnimeIds')) store.set('priorityAnimeIds', nextPriority)
   if (changed.has('dismissedContinueWatching')) store.set('dismissedContinueWatching', dismissed)
   if (changed.has('skipDetections')) store.set('skipDetections', skipDetections)
-  const metaBefore = store.get<SyncMeta | undefined>('syncMeta')
   const draft = structuredClone(metaBefore ?? { titles: {}, rates: {} })
   draft.titles ??= {}
   draft.rates ??= {}

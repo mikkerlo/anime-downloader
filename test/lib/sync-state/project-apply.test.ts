@@ -456,6 +456,102 @@ describe('apply: clamps and no-ops', () => {
   })
 })
 
+describe('apply: legacy rows and clocks are left alone, changed rows keep their own recency', () => {
+  const legacyRow = { position: 600, duration: 1420, updatedAt: 5, watched: true, watchedAt: 6 }
+
+  it('a legacy row applied back unchanged is not rewritten, and keeps updatedAt', () => {
+    const { store, writes } = counted({
+      installId: 'pc-a',
+      watchProgress: { [`${A}:1`]: legacyRow }
+    })
+    const doc = projectSyncDoc(store, [A], projectDeps)
+
+    const report = applySyncDoc(store, doc, [A], applyDeps({ now: () => 999999 }))
+
+    expect(writes).toEqual([])
+    expect(report.applied).toEqual([])
+    expect(
+      (store.get('watchProgress') as Record<string, WatchProgressEntry>)[`${A}:1`].updatedAt
+    ).toBe(5)
+  })
+
+  it('a row with no `watched` key, or with a missing clock, is not rewritten either', () => {
+    const { store, writes } = counted({
+      installId: 'pc-a',
+      watchProgress: {
+        [`${A}:1`]: { position: 300, duration: 1420, updatedAt: 7 },
+        [`${A}:2`]: { position: 0, duration: 1420, updatedAt: 8, watched: false, sync: {} }
+      }
+    })
+    applySyncDoc(
+      store,
+      projectSyncDoc(store, [A], projectDeps),
+      [A],
+      applyDeps({ now: () => 999999 })
+    )
+    expect(writes).toEqual([])
+  })
+
+  it('legacy star and priority clocks are not stamped into syncMeta', () => {
+    const { store, writes } = counted({
+      installId: 'pc-a',
+      library: { [A]: anime(A) },
+      priorityAnimeIds: [A]
+    })
+    applySyncDoc(store, projectSyncDoc(store, [A], projectDeps), [A], applyDeps())
+    expect(writes).toEqual([])
+  })
+
+  it('30 episodes brought in by a sync each take updatedAt from their own clock, not now', () => {
+    const rows: Record<string, WatchProgressEntry> = {}
+    for (let ep = 1; ep <= 30; ep++) {
+      const at = 1_000_000 + ep * 3_600_000
+      rows[`${A}:${ep}`] = {
+        position: 0,
+        duration: 1420,
+        updatedAt: at,
+        watched: true,
+        watchedAt: at,
+        sync: { position: { at, origin: 'pc-b' }, watched: { at, origin: 'pc-b' } }
+      }
+    }
+    const doc = projectSyncDoc(
+      new InMemoryStorage({ installId: 'pc-b', watchProgress: rows }),
+      [A],
+      projectDeps
+    )
+    const target = new InMemoryStorage({ installId: 'pc-a' })
+
+    applySyncDoc(target, doc, [A], applyDeps({ now: () => NOW }))
+
+    const applied = target.get('watchProgress') as Record<string, WatchProgressEntry>
+    expect(Object.keys(applied)).toHaveLength(30)
+    for (const [key, row] of Object.entries(rows))
+      expect(applied[key].updatedAt).toBe(row.updatedAt)
+  })
+
+  it('a changed row never moves its updatedAt backwards', () => {
+    const s = new InMemoryStorage({
+      installId: 'pc-a',
+      watchProgress: {
+        [`${A}:1`]: { ...legacyRow, watched: false, watchedAt: undefined, updatedAt: 5000 }
+      }
+    })
+    const doc = projectSyncDoc(s, [A], projectDeps)
+    doc.titles[A].watch!['1'].position = {
+      value: { position: 900, duration: 1420 },
+      at: 4000,
+      origin: 'pc-b'
+    }
+
+    applySyncDoc(s, doc, [A], applyDeps({ now: () => NOW }))
+
+    expect((s.get('watchProgress') as Record<string, WatchProgressEntry>)[`${A}:1`].updatedAt).toBe(
+      5000
+    )
+  })
+})
+
 describe('round trip: project → apply on an empty store → project', () => {
   function richStore(): InMemoryStorage {
     return new InMemoryStorage({

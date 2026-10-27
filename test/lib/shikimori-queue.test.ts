@@ -4,6 +4,10 @@ import {
   dropFromParked,
   mergeQueues,
   parkEntries,
+  recordServerError,
+  recordServerErrorInParked,
+  SERVER_ERROR_GAP_MS,
+  SERVER_ERROR_WINDOW_MS,
   takeParked,
   type ParkedQueues,
   type QueuedShikimoriUpdate
@@ -121,5 +125,72 @@ describe('parked queues (#588)', () => {
     const parked = parkEntries({}, A, [mk(1, 100, 3)], 1000)
     expect(dropFromParked(parked, '8', 1, [100])).toBe(parked)
     expect(dropFromParked({}, '8', 1, [100])).toEqual({})
+  })
+
+  it('park, take and merge keep the 5xx clock fields (#599)', () => {
+    const stamped = { ...mk(1, 100, 3), firstServerErrorAt: 5_000, lastServerErrorAt: 9_000 }
+    const parked = parkEntries({}, A, [stamped], 1000)
+    expect(parked['7'].entries).toEqual([stamped])
+    const taken = takeParked(parked, '7')
+    expect(taken.entries).toEqual([stamped])
+    expect(mergeQueues([mk(2, 50, 1)], taken.entries)).toEqual([mk(2, 50, 1), stamped])
+  })
+})
+
+describe('recordServerError (#599)', () => {
+  const H = SERVER_ERROR_GAP_MS
+  const D = SERVER_ERROR_WINDOW_MS
+
+  it('starts the clock on the newest consumed entry by queuedAt, not by position', () => {
+    const entries = [mk(1, 200, 5), mk(1, 100, 3), mk(2, 300, 1)]
+    const { entries: out, expired } = recordServerError(entries, 1, [100, 200], 7_000)
+    expect(expired).toBe(false)
+    expect(out).toEqual([
+      { ...mk(1, 200, 5), firstServerErrorAt: 7_000, lastServerErrorAt: 7_000 },
+      mk(1, 100, 3),
+      mk(2, 300, 1)
+    ])
+    expect(entries[0]).toEqual(mk(1, 200, 5))
+  })
+
+  it('keeps the start and moves the last stamp while the run is continuous', () => {
+    const entries = [{ ...mk(1, 100, 3), firstServerErrorAt: 0, lastServerErrorAt: D - H }]
+    expect(recordServerError(entries, 1, [100], D - 1).entries[0]).toMatchObject({
+      firstServerErrorAt: 0,
+      lastServerErrorAt: D - 1
+    })
+  })
+
+  it('expires 24 h into a continuous run and leaves the entries alone', () => {
+    const entries = [{ ...mk(1, 100, 3), firstServerErrorAt: 0, lastServerErrorAt: D - H }]
+    expect(recordServerError(entries, 1, [100], D)).toEqual({ entries, expired: true })
+  })
+
+  it('restarts the clock after a gap longer than 1 h instead of expiring', () => {
+    const entries = [{ ...mk(1, 100, 3), firstServerErrorAt: 0, lastServerErrorAt: 0 }]
+    const { entries: out, expired } = recordServerError(entries, 1, [100], D + H)
+    expect(expired).toBe(false)
+    expect(out[0]).toMatchObject({ firstServerErrorAt: D + H, lastServerErrorAt: D + H })
+  })
+
+  it('ignores an entry that is not consumed, and returns the same list when none is', () => {
+    const entries = [mk(1, 100, 3)]
+    expect(recordServerError(entries, 1, [999], 1)).toEqual({ entries, expired: false })
+    expect(recordServerError(entries, 1, [999], 1).entries).toBe(entries)
+  })
+
+  it('stamps inside the owner’s parked bucket and creates no bucket for a missing owner', () => {
+    const parked = parkEntries({}, { id: '7', nickname: 'alice' }, [mk(1, 100, 3)], 1000)
+    const { parked: next, expired } = recordServerErrorInParked(parked, '7', 1, [100], 4_000)
+    expect(expired).toBe(false)
+    expect(next['7']).toEqual({
+      ...parked['7'],
+      entries: [{ ...mk(1, 100, 3), firstServerErrorAt: 4_000, lastServerErrorAt: 4_000 }]
+    })
+    expect(recordServerErrorInParked(parked, '8', 1, [100], 4_000)).toEqual({
+      parked,
+      expired: false
+    })
+    expect(recordServerErrorInParked(parked, '8', 1, [100], 4_000).parked).toBe(parked)
   })
 })

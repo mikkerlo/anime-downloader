@@ -40,7 +40,7 @@ vi.mock('../../src/main/shikimori', async () => {
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
-import { ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
+import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
 
 const CH = {
   syncStatus: 'shikimori:sync-status',
@@ -394,6 +394,51 @@ describe('Shikimori offline queue — kept per owner across accounts (#588)', ()
       app.svc.stopSyncTimer()
     }
   )
+
+  it('a 5xx-stamped edit keeps its clock through logout, another account and restore (#599)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const T0 = Date.UTC(2026, 9, 1)
+      vi.setSystemTime(T0)
+      const app = bootApp({
+        shikimoriUser: ALICE,
+        shikimoriCredentials: credsFor(ALICE),
+        shikimoriUpdateQueue: ALICE_QUEUE.slice(0, 1)
+      })
+      getUserRate.mockRejectedValue(new ShikiApiError('Shikimori API error: 503', 503))
+      // No rates-refreshed drain, so each sign-in runs exactly one.
+      getUserAnimeRates.mockReturnValue(new Promise(() => {}))
+
+      await app.svc.syncShikimoriQueue()
+      const stamped = { ...ALICE_QUEUE[0], firstServerErrorAt: T0, lastServerErrorAt: T0 }
+      expect(app.store.get('shikimoriUpdateQueue')).toEqual([stamped])
+
+      await app.invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'keep' })
+      await app.signIn(BOB)
+      await vi.waitFor(() => expect(app.svc.getSyncStatus().state).toBe('idle'))
+      expect(
+        (app.store.get('shikimoriParkedQueues') as Record<string, { entries: unknown[] }>)['1']
+          .entries
+      ).toEqual([stamped])
+
+      vi.setSystemTime(T0 + 10 * 60_000)
+      await app.invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'keep' })
+      await app.signIn(ALICE)
+      await vi.waitFor(() => {
+        expect(getUserRate).toHaveBeenCalledTimes(2)
+        expect(app.svc.getSyncStatus().state).toBe('idle')
+      })
+
+      expect(app.store.get('shikimoriUpdateQueue')).toEqual([
+        { ...stamped, lastServerErrorAt: T0 + 10 * 60_000 }
+      ])
+      app.svc.stopSyncTimer()
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
 
   it('the switch window: a drain tick during B’s pending getUser sends nothing with B’s token', async () => {
     const app = bootApp({

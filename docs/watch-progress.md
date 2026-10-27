@@ -36,3 +36,59 @@ Watch state carries per-field clocks so another PC's copy can be merged with it 
 - `rates["<shikimoriUserId>:<malId>"][field] = { value, at, origin }` for `episodes`, `status`, `score`, `rewatches`; see [Shikimori](./shikimori.md#offline-update-queue). Keyed by owner because logout resets the rate cache, while `syncMeta` survives logout and account switch.
 
 **Tombstone GC.** `updateSyncMeta`, the only writer, drops tombstones older than 365 days on the next write; nothing is rewritten at boot. With a merge base a deletion propagates without a tombstone, so tombstones only matter when both sides changed or there is no base yet. The one failure mode is benign: a PC that first merges with no base more than a year after an unstar can bring the star back.
+
+## The SyncDoc and the merge field table (#572)
+
+`src/main/lib/sync-state/` (pure: no `fs`, no store writes outside `applySyncDoc`) turns local watch state into a `SyncDoc` and back. Types are in `src/shared/types/sync.d.ts`.
+
+**`SyncDoc` v1** is `{ stateVersion: 1, stateMinor: 0, installId, titles, priorityOrder, tombstones }`. Any further key is a newer writer's field and is kept verbatim.
+- `titles[animeId]` holds `watch[episodeInt] = { position, watched, watchedAt }`, `starred`, `priority`, `rate = { malId, episodes, status, score, rewatches }`, `dismissed` (the dismissed continue-watching `episodeInt`s) and `skip`. `episodeInt` is an opaque string key, so `"12.5"` stays a watch entry and never maps to `rate.episodes`.
+- The clocked fields are `{ value, at, origin }`: `position` (whose value is `{ position, duration, translationId? }`), `watched`, `starred`, `priority`, each rate field and `priorityOrder`. `watchedAt`, `dismissed` and `skip` carry no clock, because rules 3, 11 and 12 never read one.
+- `priorityOrder` lists in-scope ids only. `tombstones[animeId]` holds the `{ deleted: true, at, origin }` of an unstar or unprioritise.
+- `skip` is projected without local paths: each `perEpisode[episodeInt]` carries its file identity `file: { translationId, fileSize }` from the injected `resolveEpisodeFile`, plus `episodeLabel`, `durationSec`, `hashesPerSec`, `op` and `ed`. An entry whose file can't be identified is left out.
+- Version rule (S5 #573): `stateMinor` goes up for an added optional field whose absence has a defined meaning and whose rule is silent; any other change bumps `stateVersion`.
+
+**`projectSyncDoc(store, scope, deps)`** reads only the titles in `scope` and never writes. No out-of-scope id appears in the result, in any field.
+- Legacy rows project their `'legacy'` clocks (`clock.ts`). A missing clock in a non-legacy row reads as `at: 0`.
+- A legacy star, priority or order with no `syncMeta` clock reads as `{ at: 0, origin: 'legacy' }`.
+- A rate is projected only for the signed-in owner. Its value is the rate cache, overlaid by the owner's latest queued edit and then by S9's pending overlay (`deps.pendingRates`). See the rate-clock rule below for its clocks.
+
+**`applySyncDoc(store, doc, scope, deps)`** writes a merged doc back, touching only in-scope titles. It returns `{ applied, unapplied, clamped }`.
+- It clamps first: any `at` more than 120 s in the future becomes now, and each clamp is reported.
+- Watch rows take the doc's values and clocks. A row whose values and projected clocks already match is left alone; legacy rows and missing clocks compare as they project. Applying a store's own projection therefore writes nothing, and a pre-#572 profile's `updatedAt` order (continue-watching, the resume pick) survives the first merge. A row that does change takes `updatedAt` from the later of the doc's `position` and `watched` clocks (so a watched-only change, like a remote `set-watched`, moves it too), never moving it back, so episodes brought in by a sync keep their own recency.
+- Legacy `{ at: 0, origin: 'legacy' }` star and priority clocks are not stamped into `syncMeta` when it has none.
+- **`starred = true`** needs an `AnimeSearchResult` to create the `library` row. It looks in local `library`, then `downloadedAnime`, then `deps.sharedSearchResult` (the Shared Library's `meta/<animeId>.json` `searchResult`). With none, the field is reported `unapplied`, and S9 does not advance its base, so it is retried.
+- `priority` needs the `library` row, and an unstar also unprioritises.
+- **`priorityOrder`** is written back into the slots that in-scope ids occupy in the local list. Out-of-scope ids keep their positions, new in-scope members go at the end, and leftover slots are dropped.
+- `dismissed` replaces the title's keys.
+- A drive `skip` entry is taken only when its algorithm is this PC's and `deps.localEpisodeFile` resolves to the same `{ translationId, fileSize }`. Its `filePath` is then filled from that local file.
+- Rate changes go to `deps.applyRate` (S9's pending store, never only the cache). Without it they are reported `unapplied`.
+- Unknown fields at the doc and title level are kept in `syncMeta.unknown`, so the next projection writes them back.
+
+**The merge field table** (`field-table.ts`) is frozen by #572. S9 (#584) applies it as written, and S5 (#573) serializes the fields it covers. "Changed" means a value difference from the base. Clocks only break the ties marked "later `at`", and detect a re-watch. With no base, every rule reduces to S9's first-merge table.
+
+| # | Field | Silent rule | Conflict (held for S10 #585) |
+|---|---|---|---|
+| 1 | `watch[ep].position` | A change on one side is applied. Both changed: the later `position.at` wins (a tie goes to the local side). Only `'playback'` saves move the clock. | never |
+| 2 | `watch[ep].watched` | A change on one side is applied, including an unwatch. | One side unwatched (true → false) while the other re-watched: it is still `true`, but its `watched.at` is newer than the base's. |
+| 3 | `watch[ep].watchedAt` | The earliest non-null of the sides where `watched` is true; null once the merge unwatches. | never |
+| 4 | `rate.episodes` | A change on one side is applied. Both changed to the same value: applied. Both rose: the max. | One lowered while the other rose. Both lowered, to different values. |
+| 5 | `rate.status` | A change on one side is applied. Both changed to the same value: applied. | Both changed, to different values. |
+| 6 | `rate.score` | Same as 5. | Both changed, to different values. |
+| 7 | `rate.rewatches` | A change on one side is applied. Both lowered to the same value: applied. | Both changed to different values. Both rose, even to the same value (one rewatch or two?). |
+| 8 | `starred` | A change on one side is applied. Both changed: the later `at` wins, tombstones included. | never |
+| 9 | `priority` | Like `starred`. If the merged `starred` is false, `priority` becomes false. | never |
+| 10 | `priorityOrder` | In-scope ids only. Both changed: the order of the side with the later `at`; merged members it lacks are appended in the other side's relative order. Applying rewrites only the in-scope slots. | never |
+| 11 | `dismissed` | `(base ∪ addedA ∪ addedB) − removedA − removedB`. A local prune is a removal, so a pruned key doesn't come back. | never |
+| 12 | `skip` | A cache. Keep the local entry when its algorithm matches; otherwise take the other side's when its algorithm and file identity match; otherwise none, and the episode is re-analysed locally. | never |
+
+Global rules:
+- Only in-scope titles take part.
+- `watched` and `rate.episodes` merge independently, apart from owner decision 5 in S9.
+- A fractional `episodeInt` never maps to `rate.episodes`.
+- An imported `at` more than 120 s in the future is clamped to now. File mtimes are never a clock.
+- Auto-download subscriptions are not merged.
+
+**Rate clocks and discarded edits.** Rules 4–7 never decide on `at`, so a rate clock can't win a merge; it only feeds S10's suggestion and the log. A `syncMeta.rates` clock counts only while it records the value the projection sees (the cache, the owner's queue, S9's overlay). A queued edit that is later discarded (S0b's Discard on logout or from a parked bucket), or rejected by Shikimori, leaves its clock behind with a value Shikimori never received. Once the rate cache holds the server's value again, the clock no longer matches it and is ignored, and the field takes the Shikimori clock (`serverUpdatedAt`).
+
+**Tombstones on the drive.** `pruneDocTombstones` drops tombstones older than 365 days, or for a title that has left the library's scope. S9 calls it before its drive write.

@@ -310,6 +310,99 @@ describe('ShikimoriSyncService — syncShikimoriQueue happy path', () => {
     expect(svc.getSyncStatus().lastSyncError).toBe('unauthorized')
   })
 
+  // A 429 that outlasts `shikiFetch`'s retry cap (#596) is a global condition,
+  // not a bad edit: the drain stops and the edit waits for the next tick (#598).
+  describe('429 past the retry cap', () => {
+    const RATE_LIMITED = 'Shikimori rate limit — will retry'
+    const rateLimited = () => new ShikiApiError('Shikimori API error: 429', 429)
+    const queued = (malId: number, queuedAt: number) => ({
+      malId,
+      queuedAt,
+      before: { episodes: 0, status: 'watching', score: 0 },
+      after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+    })
+    const serverRate = { id: 901, target_id: 1, episodes: 0, status: 'watching', score: 0 }
+    const appliedRate = { ...serverRate, episodes: 1, rewatches: 0 }
+
+    it('keeps the edit on a 429 from getUserRate and applies it on the next drain', async () => {
+      const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+      getUserRate.mockRejectedValueOnce(rateLimited())
+
+      await svc.syncShikimoriQueue()
+
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(1)
+      expect(svc.getSyncStatus().lastSyncError).toBe(RATE_LIMITED)
+      expect(updateUserRate).not.toHaveBeenCalled()
+
+      getUserRate.mockResolvedValueOnce(serverRate)
+      updateUserRate.mockResolvedValueOnce(appliedRate)
+
+      await svc.syncShikimoriQueue()
+
+      expect(updateUserRate).toHaveBeenCalledWith('access-token', 901, 1, 'watching', 0, 0)
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+      expect(svc.getSyncStatus().lastSyncError).toBeNull()
+    })
+
+    it('keeps the edit on a 429 from updateUserRate and applies it on the next drain', async () => {
+      const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+      // The write never landed, so the next drain reads the same before-state.
+      getUserRate.mockResolvedValue(serverRate)
+      updateUserRate.mockRejectedValueOnce(rateLimited())
+
+      await svc.syncShikimoriQueue()
+
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(1)
+      expect(svc.getSyncStatus().lastSyncError).toBe(RATE_LIMITED)
+
+      updateUserRate.mockResolvedValueOnce(appliedRate)
+
+      await svc.syncShikimoriQueue()
+
+      expect(updateUserRate).toHaveBeenCalledTimes(2)
+      expect(updateUserRate).toHaveBeenLastCalledWith('access-token', 901, 1, 'watching', 0, 0)
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+    })
+
+    it('keeps the edit on a 429 from createUserRate and applies it on the next drain', async () => {
+      const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+      getUserRate.mockResolvedValue(null)
+      createUserRate.mockRejectedValueOnce(rateLimited())
+
+      await svc.syncShikimoriQueue()
+
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(1)
+      expect(svc.getSyncStatus().lastSyncError).toBe(RATE_LIMITED)
+
+      createUserRate.mockResolvedValueOnce(appliedRate)
+
+      await svc.syncShikimoriQueue()
+
+      expect(createUserRate).toHaveBeenCalledTimes(2)
+      expect(createUserRate).toHaveBeenLastCalledWith('access-token', 1, 1, 1, 'watching', 0, 0)
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+    })
+
+    it('stops the drain at the first 429 instead of moving on to the next item', async () => {
+      vi.useFakeTimers()
+      try {
+        const { svc, store } = makeService({
+          shikimoriUpdateQueue: [queued(1, 1), queued(2, 2)]
+        })
+        getUserRate.mockRejectedValue(rateLimited())
+
+        const drain = svc.syncShikimoriQueue()
+        await vi.advanceTimersByTimeAsync(5_000)
+        await drain
+
+        expect(getUserRate).toHaveBeenCalledTimes(1)
+        expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   it('drops the item on a non-network, non-auth error and continues', async () => {
     const { svc, store } = makeService({
       shikimoriUpdateQueue: [
@@ -534,6 +627,27 @@ describe('ShikimoriSyncService — prefetchShikimoriDetails genre coverage (#183
     await svc.prefetchShikimoriDetails()
     expect(getAnimeDetails).not.toHaveBeenCalled()
     expect(onDetailsPrefetched).not.toHaveBeenCalled()
+  })
+
+  it('aborts the loop on a 429 instead of requesting the next MAL ID (#598)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { svc } = makeService({
+        shikimoriUserRates: [rate(10, 'watching'), rate(20, 'watching')],
+        shikimoriAnimeDetails: {}
+      })
+      getAnimeDetails
+        .mockRejectedValueOnce(new ShikiApiError('Shikimori API error: 429', 429))
+        .mockResolvedValue({ id: 20, name: 'x', genres: [] })
+
+      const run = svc.prefetchShikimoriDetails()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await run
+
+      expect(getAnimeDetails).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

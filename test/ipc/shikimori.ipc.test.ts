@@ -5,7 +5,7 @@
 // `ShikiApiError: Shikimori API error: 400` *and* discarded the edit the user
 // had just made — the queue-and-optimistically-update branch only accepted
 // network errors.
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { ipcMain } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
@@ -37,6 +37,7 @@ vi.mock('../../src/main/shikimori', async () => {
 import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
+import type { ShikiUser } from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 
 type SyncStub = {
@@ -61,6 +62,7 @@ function registerRouter(initial: Record<string, unknown> = {}): {
   store: InMemoryStorage
   broadcast: Mock
   sync: SyncStub
+  funnels: ReturnType<typeof register>
 } {
   const store = new InMemoryStorage({
     shikimoriUser: { id: 7, nickname: 'me' },
@@ -93,7 +95,7 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     prefetchShikimoriDetails: vi.fn(async () => undefined),
     getSyncStatus
   }
-  register({
+  const funnels = register({
     store,
     shikimoriSyncService: sync,
     lookupByMalIds: vi.fn(async () => new Map()),
@@ -109,7 +111,8 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     invoke: async (channel, ...args) => handlers.get(channel)!({}, ...args),
     store,
     broadcast,
-    sync
+    sync,
+    funnels
   }
 }
 
@@ -895,5 +898,217 @@ describe('shikimori IPC — stale-account results after a switch (#588)', () => 
         after: { episodes: 4, status: 'watching', score: 7, rewatches: 0 }
       })
     ])
+  })
+})
+
+// #572: both rate writers go through `sendRate` / `queueRate`, which stamp a
+// `{ value, at, origin }` clock in `syncMeta.rates["<owner>:<malId>"]` for each
+// field whose value changed. `syncMeta` is not a Shikimori cache, so logout
+// leaves it alone.
+describe('shikimori IPC — rate clocks', () => {
+  const NOW = Date.UTC(2026, 9, 27, 12)
+  const SERVER_AT = '2026-01-01T00:00:00.000Z'
+  const clock = (value: number | string): SyncRateFieldClock => ({
+    value,
+    at: NOW,
+    origin: 'install-a'
+  })
+
+  function remote(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 942,
+      target_id: 42,
+      target_type: 'Anime',
+      episodes: 3,
+      status: 'watching',
+      score: 7,
+      rewatches: 0,
+      ...over
+    }
+  }
+
+  function cachedWithServerAt(): unknown {
+    const entry = cachedRate(42) as { rate: Record<string, unknown> }
+    return {
+      ...entry,
+      rate: { ...entry.rate, rewatches: 0, updated_at: SERVER_AT, serverUpdatedAt: SERVER_AT }
+    }
+  }
+
+  function rateClocks(store: InMemoryStorage): SyncMeta['rates'] | undefined {
+    return (store.get('syncMeta') as SyncMeta | undefined)?.rates
+  }
+
+  function cachedRateOf(store: InMemoryStorage): Record<string, unknown> {
+    return (store.get('shikimoriUserRates') as { rate: Record<string, unknown> }[])[0].rate
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('mark-episode-watched online stamps episodes through sendRate', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    getUserRate.mockResolvedValue(remote())
+    updateUserRate.mockResolvedValue(remote({ episodes: 4 }))
+
+    await markWatched(invoke, 4)
+
+    expect(rateClocks(store)).toEqual({ '7:42': { episodes: clock(4) } })
+  })
+
+  it('mark-episode-watched offline stamps episodes through queueRate', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await markWatched(invoke, 4)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(rateClocks(store)).toEqual({ '7:42': { episodes: clock(4) } })
+  })
+
+  it('the no-cache-entry case stamps episodes and status against the empty planned before', async () => {
+    const { invoke, store } = registerRouter({ installId: 'install-a' })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await markWatched(invoke, 1)
+
+    expect(rateClocks(store)).toEqual({
+      '7:42': { episodes: clock(1), status: clock('watching') }
+    })
+  })
+
+  it('the rewatch flip stamps status and rewatches too, never the unchanged score', async () => {
+    const { invoke, store } = registerRouter({ installId: 'install-a' })
+    getUserRate.mockResolvedValue(remote({ episodes: 12, status: 'completed', rewatches: 1 }))
+    updateUserRate.mockResolvedValue(remote())
+
+    await markWatched(invoke, 1)
+
+    expect(rateClocks(store)).toEqual({
+      '7:42': { episodes: clock(1), status: clock('rewatching'), rewatches: clock(2) }
+    })
+  })
+
+  it('update-rate stamps only the field the panel changed, online and queued', async () => {
+    const online = registerRouter({ installId: 'install-a', shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockResolvedValue(remote())
+    updateUserRate.mockResolvedValue(remote({ score: 9 }))
+    await online.invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 42, 3, 'watching', 9, 0)
+    expect(rateClocks(online.store)).toEqual({ '7:42': { score: clock(9) } })
+
+    vi.clearAllMocks()
+    const queued = registerRouter({ installId: 'install-a', shikimoriUserRates: [cachedRate(42)] })
+    ensureFreshToken.mockRejectedValue(new TypeError('fetch failed'))
+    await queued.invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 42, 3, 'on_hold', 7, 0)
+    expect(queueOf(queued.store)).toHaveLength(1)
+    expect(rateClocks(queued.store)).toEqual({ '7:42': { status: clock('on_hold') } })
+  })
+
+  it('a queued clock keys by the user the request captured, even if the account switched meanwhile', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    // The switch lands during the awaited `getUserRate`, which then fails offline.
+    getUserRate.mockImplementation(async () => {
+      store.set('shikimoriUser', { id: 8, nickname: 'other' })
+      throw new TypeError('fetch failed')
+    })
+
+    await markWatched(invoke, 4)
+
+    // #588 parks the entry for user 7, and its clock is keyed to 7 as well.
+    expect(queueOf(store)).toHaveLength(0)
+    expect(parkedOf(store)['7'].entries).toHaveLength(1)
+    expect(rateClocks(store)).toEqual({ '7:42': { episodes: clock(4) } })
+  })
+
+  it('stamp: false writes the rate but stamps nothing, in both funnels', async () => {
+    const { store, funnels } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    updateUserRate.mockResolvedValue(remote({ episodes: 4 }))
+    const before = { episodes: 3, status: 'watching' as const, score: 7, rewatches: 0 }
+
+    await funnels.sendRate(
+      'access-token',
+      7,
+      42,
+      remote() as never,
+      { ...before, episodes: 4 },
+      false
+    )
+    funnels.queueRate(
+      { id: 7, nickname: 'me' } as ShikiUser,
+      42,
+      { rateId: 942, before },
+      { ...before, episodes: 5 },
+      new TypeError(),
+      false
+    )
+
+    expect(updateUserRate).toHaveBeenCalledTimes(1)
+    expect(queueOf(store)).toHaveLength(1)
+    expect(store.get('syncMeta')).toBeUndefined()
+  })
+
+  it('sendRate keeps serverUpdatedAt while it moves updated_at to the local clock', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedWithServerAt()]
+    })
+    getUserRate.mockResolvedValue(remote())
+    updateUserRate.mockResolvedValue(remote({ episodes: 4 }))
+
+    await markWatched(invoke, 4)
+
+    expect(cachedRateOf(store)).toMatchObject({
+      episodes: 4,
+      updated_at: new Date(NOW).toISOString(),
+      serverUpdatedAt: SERVER_AT
+    })
+  })
+
+  it("queueRate's optimistic patch moves updated_at but not serverUpdatedAt", async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedWithServerAt()]
+    })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await markWatched(invoke, 4)
+
+    expect(cachedRateOf(store)).toMatchObject({
+      episodes: 4,
+      updated_at: new Date(NOW).toISOString(),
+      serverUpdatedAt: SERVER_AT
+    })
+  })
+
+  it('rate clocks survive logout', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+    await markWatched(invoke, 4)
+
+    await invoke(CHANNELS.SHIKIMORI_LOGOUT)
+
+    expect(store.get('shikimoriUserRates')).toEqual([])
+    expect(rateClocks(store)).toEqual({ '7:42': { episodes: clock(4) } })
   })
 })

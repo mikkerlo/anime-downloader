@@ -67,6 +67,8 @@ export function useEpisodeDownloads(deps: {
   hasActiveDownloads: ComputedRef<boolean>
   episodeProgressPercent: (episodeInt: string) => number
   isEpisodeWatched: (episodeInt: string) => boolean
+  isEpisodeWatchedLocally: (episodeInt: string) => boolean
+  toggleEpisodeWatched: (episodeInt: string) => Promise<void>
   getFileForTranslation: (
     episodeInt: string,
     translationId: number | undefined
@@ -115,6 +117,27 @@ export function useEpisodeDownloads(deps: {
   function isEpisodeWatched(episodeInt: string): boolean {
     if (deps.shikiRate.value?.status === 'completed') return true
     return !!deps.watchProgress.value[episodeInt]?.watched
+  }
+
+  // The local `watched` flag alone. `isEpisodeWatched` also answers true for a
+  // completed Shikimori rate, which the mark-(un)watched toggle never changes.
+  function isEpisodeWatchedLocally(episodeInt: string): boolean {
+    return !!deps.watchProgress.value[episodeInt]?.watched
+  }
+
+  async function toggleEpisodeWatched(episodeInt: string): Promise<void> {
+    try {
+      await window.api.watchProgressSetWatched(
+        deps.getAnimeId(),
+        episodeInt,
+        !isEpisodeWatchedLocally(episodeInt)
+      )
+    } catch (err) {
+      console.error('Failed to set the watched flag:', err)
+      return
+    }
+    window.dispatchEvent(new CustomEvent('watch-progress-updated'))
+    await loadWatchProgress()
   }
 
   const continueTarget = computed<EpisodeSummary | null>(() => {
@@ -577,6 +600,8 @@ export function useEpisodeDownloads(deps: {
     hasActiveDownloads,
     episodeProgressPercent,
     isEpisodeWatched,
+    isEpisodeWatchedLocally,
+    toggleEpisodeWatched,
     getFileForTranslation,
     hasAnyFile,
     selectedTrHasFile,

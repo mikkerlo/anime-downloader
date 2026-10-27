@@ -21,6 +21,7 @@ import {
   type QueuedShikimoriUpdate
 } from '../lib/shikimori-queue'
 import { buildRateCacheEntries } from '../lib/shikimori-rate-cache'
+import { stampRateClocks } from '../store/sync-meta'
 import { CALENDAR_CACHE_TTL_MS, type CalendarEntry } from '../services/shikimori-sync'
 import type { AppDeps } from './index'
 
@@ -86,7 +87,7 @@ export function register({
   maybeBroadcastCleanupPrompt,
   runAutoDownloadTick,
   broadcast
-}: AppDeps): void {
+}: AppDeps) {
   // Null when the account changed while the list was in flight: it is the
   // previous account's list and must not land in the new one's cache (#588).
   async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[] | null> {
@@ -566,7 +567,8 @@ export function register({
     userId: number,
     malId: number,
     existing: shikimori.ShikiUserRate | null,
-    after: RateValues
+    after: RateValues,
+    stamp: boolean
   ): Promise<shikimori.ShikiUserRate> {
     const { episodes, status, score, rewatches } = after
     const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
@@ -584,6 +586,8 @@ export function register({
           score,
           rewatches
         )
+    if (stamp)
+      stampRateClocks(store, userId, malId, existing ? rateValues(existing) : NO_RATE_BEFORE, after)
 
     // The write landed on the previous account; the cache is the new one's.
     if (currentUserId() !== userId) return updatedRate
@@ -592,6 +596,7 @@ export function register({
       cached[idx] = {
         ...cached[idx],
         rate: {
+          ...cached[idx].rate,
           id: updatedRate.id,
           score: updatedRate.score,
           status: updatedRate.status,
@@ -632,7 +637,8 @@ export function register({
     malId: number,
     basis: { rateId: number | null; before: RateValues },
     after: RateValues,
-    err: unknown
+    err: unknown,
+    stamp: boolean
   ): shikimori.ShikiUserRate {
     const { episodes, status, score, rewatches } = after
     const synthetic = {
@@ -645,6 +651,8 @@ export function register({
       target_type: 'Anime'
     } satisfies shikimori.ShikiUserRate
     const entry = { malId, rateId: basis.rateId, before: basis.before, after, queuedAt: Date.now() }
+    // Keyed by the owner the edit was made for, parked or live.
+    if (stamp) stampRateClocks(store, owner.id, malId, basis.before, after)
 
     if (currentUserId() !== owner.id) {
       store.set(
@@ -857,11 +865,11 @@ export function register({
       try {
         const accessToken = await shikimori.ensureFreshToken(store)
         const existing = await shikimori.getUserRate(accessToken, user.id, malId)
-        return await sendRate(accessToken, user.id, malId, existing, after)
+        return await sendRate(accessToken, user.id, malId, existing, after, true)
       } catch (err) {
         const entry = ownersCachedRate(user, malId, cachedAtStart)
         if (!isQueueableRateError(err) || !entry) throw err
-        return queueRate(user, malId, cachedBasis(entry), after, err)
+        return queueRate(user, malId, cachedBasis(entry), after, err, true)
       }
     }
   )
@@ -889,17 +897,17 @@ export function register({
         const entry = ownersCachedRate(user, malId, cachedAtStart)
         const basis = entry ? cachedBasis(entry) : { rateId: null, before: NO_RATE_BEFORE }
         const next = nextWatchedRate(basis.before, epNum)
-        return next ? queueRate(user, malId, basis, next, err) : null
+        return next ? queueRate(user, malId, basis, next, err, true) : null
       }
 
       const before = existing ? rateValues(existing) : NO_RATE_BEFORE
       const next = nextWatchedRate(before, epNum)
       if (!next) return null
       try {
-        return await sendRate(accessToken, user.id, malId, existing, next)
+        return await sendRate(accessToken, user.id, malId, existing, next, true)
       } catch (err) {
         if (!isQueueableRateError(err)) throw err
-        return queueRate(user, malId, { rateId: existing?.id ?? null, before }, next, err)
+        return queueRate(user, malId, { rateId: existing?.id ?? null, before }, next, err, true)
       }
     }
   )
@@ -1176,4 +1184,8 @@ export function register({
       })
       .filter((e) => e.isCurrent || !(e.shikiAnime.kind && EXCLUDED_KINDS.has(e.shikiAnime.kind)))
   })
+
+  // The rate funnels, for a caller that writes with `stamp: false` and supplies
+  // its own clocks (the Shared Library merge, #584).
+  return { sendRate, queueRate }
 }

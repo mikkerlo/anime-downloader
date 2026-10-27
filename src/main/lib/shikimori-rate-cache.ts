@@ -21,6 +21,9 @@ export interface CachedRateEntry {
     rewatches: number
     updated_at: string
     target_id: number
+    // The server's `updated_at` as of the last wholesale refresh. Local writes
+    // move `updated_at` to the local clock and never touch this (#572).
+    serverUpdatedAt?: string
   }
   shikiAnime: ShikiAnimeRateEntry['anime']
   smotretAnime: AnimeSearchResult | null
@@ -40,7 +43,8 @@ export function buildRateCacheEntries(
       updated_at: rate.updated_at,
       // anime_rates rows have no top-level target_id; fall back to the nested
       // anime id so `rateByMalId` can match.
-      target_id: rate.target_id ?? rate.anime.id
+      target_id: rate.target_id ?? rate.anime.id,
+      serverUpdatedAt: rate.updated_at
     },
     shikiAnime: rate.anime,
     smotretAnime: malMap[rate.anime.id] ?? null

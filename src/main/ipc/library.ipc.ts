@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
+import { localClock, stampMembership, stampPriorityOrder, updateSyncMeta } from '../store/sync-meta'
 
 export function register({ store, animeCacheService }: AppDeps): void {
   const readLib = (): Record<string, AnimeSearchResult> =>
@@ -28,6 +29,7 @@ export function register({ store, animeCacheService }: AppDeps): void {
   ipcMain.handle(CHANNELS.LIBRARY_TOGGLE, (_event, anime: AnimeSearchResult) => {
     const lib = readLib()
     const key = String(anime.id)
+    const clock = localClock(store)
     if (lib[key]) {
       delete lib[key]
       store.set('library', lib)
@@ -35,17 +37,26 @@ export function register({ store, animeCacheService }: AppDeps): void {
       // un-starred entry must leave the priority list too — otherwise the id
       // dangles with nothing left to render from.
       const priority = readPriority()
-      if (priority.includes(key)) {
+      const demoted = priority.includes(key)
+      if (demoted) {
         store.set(
           'priorityAnimeIds',
           priority.filter((id) => id !== key)
         )
       }
+      updateSyncMeta(store, (meta) => {
+        stampMembership(meta, key, 'starred', false, clock)
+        if (demoted) {
+          stampMembership(meta, key, 'priority', false, clock)
+          stampPriorityOrder(meta, clock)
+        }
+      })
       if (!readDownloaded()[String(anime.id)]) animeCacheService.deleteEntry(anime.id)
       return false
     } else {
       lib[key] = anime
       store.set('library', lib)
+      updateSyncMeta(store, (meta) => stampMembership(meta, key, 'starred', true, clock))
       return true
     }
   })
@@ -97,13 +108,25 @@ export function register({ store, animeCacheService }: AppDeps): void {
     (_event, anime: AnimeSearchResult, priority: boolean) => {
       const key = String(anime.id)
       const current = readPriority()
+      const clock = localClock(store)
       if (priority) {
         const lib = readLib()
-        if (!lib[key]) {
+        const starring = !lib[key]
+        if (starring) {
           lib[key] = anime
           store.set('library', lib)
         }
-        if (current.includes(key)) return current.filter(resolvable())
+        const promoting = !current.includes(key)
+        if (starring || promoting) {
+          updateSyncMeta(store, (meta) => {
+            if (starring) stampMembership(meta, key, 'starred', true, clock)
+            if (promoting) {
+              stampMembership(meta, key, 'priority', true, clock)
+              stampPriorityOrder(meta, clock)
+            }
+          })
+        }
+        if (!promoting) return current.filter(resolvable())
         const next = [...current, key]
         store.set('priorityAnimeIds', next)
         return next.filter(resolvable())
@@ -111,6 +134,10 @@ export function register({ store, animeCacheService }: AppDeps): void {
       if (!current.includes(key)) return current.filter(resolvable())
       const next = current.filter((id) => id !== key)
       store.set('priorityAnimeIds', next)
+      updateSyncMeta(store, (meta) => {
+        stampMembership(meta, key, 'priority', false, clock)
+        stampPriorityOrder(meta, clock)
+      })
       return next.filter(resolvable())
     }
   )

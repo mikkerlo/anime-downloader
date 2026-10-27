@@ -8,6 +8,7 @@ interface WatchProgressEntry {
   watched?: boolean
   watchedAt?: number
   translationId?: number
+  sync?: WatchProgressSync
 }
 
 // `player:find-local-file` result. `isPartial` marks a growing `.part` file

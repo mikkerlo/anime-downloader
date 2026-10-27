@@ -101,6 +101,7 @@ function makeRig(
      let autoAdvancePauseArmed = false;
      let unmounted = false;
      let cumulativePlayTime = 0, lastTimeUpdateAt = 0, lastSaveAt = 0, watchedReported = false;
+     let completedThisOpen = false, completionPending = false;
      let mkvSpawnFromRoom = false, openedIntoRoom = false, episodeOpenedAt = 0;
      ${js}
      return { cancelAutoAdvance, onVideoEnded, maybeArmAutoAdvanceOnPause, onAutoAdvanceSeeked,

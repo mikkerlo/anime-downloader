@@ -265,7 +265,8 @@ export function useEpisodeList(deps: {
         prev?.position ?? 0,
         prev?.duration ?? 0,
         prev?.watched,
-        translationId
+        translationId,
+        'choice'
       )
       .catch((err) => console.warn('[anime-detail] failed to persist translation choice:', err))
   }

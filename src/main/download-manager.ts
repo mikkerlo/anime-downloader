@@ -1723,6 +1723,7 @@ export class DownloadManager {
     }
 
     let fileStream: fs.WriteStream | undefined
+    let slotReleased = false
     try {
       console.log(`[download] Starting: ${item.filename} -> ${item.url.substring(0, 120)}...`)
       const response = await fetchWithTimeout(item.url, {
@@ -1886,7 +1887,7 @@ export class DownloadManager {
 
       this.checkEpisodeComplete(item.translationId)
     } catch (err: unknown) {
-      this.abortControllers.delete(item.id)
+      if (this.abortControllers.get(item.id) === controller) this.abortControllers.delete(item.id)
 
       if (err instanceof Error && err.name === 'AbortError') {
         return
@@ -1896,10 +1897,18 @@ export class DownloadManager {
       // stat read the `.part` size, so the previous fd's last write must have
       // landed first (#597).
       if (fileStream) await this.waitForPartClose(fileStream)
-      // Paused or cancelled while the stream was closing: the controller is
-      // already gone, so `pause()`/`cancel()` could only set the status.
-      const statusAfterClose = item.status as DownloadItem['status']
-      if (statusAfterClose === 'paused' || statusAfterClose === 'cancelled') return
+      // A pause, cancel, resume or restart reached the item while the stream
+      // was closing: a new attempt may own it now, so this one only gives
+      // back its own slot and schedules nothing.
+      if (
+        this.abortControllers.get(item.id) !== undefined ||
+        (item.status as DownloadItem['status']) !== 'downloading'
+      ) {
+        slotReleased = true
+        this.activeCount--
+        this.processQueue()
+        return
+      }
 
       // A deterministic rejection (#444) skips the retry ladder: the same URL
       // would answer with the same wrong body three more times, and the user
@@ -1930,8 +1939,8 @@ export class DownloadManager {
       item.speed = 0
       this.schedulePersist()
     } finally {
-      if (item.status !== 'queued') {
-        this.abortControllers.delete(item.id)
+      if (!slotReleased && item.status !== 'queued') {
+        if (this.abortControllers.get(item.id) === controller) this.abortControllers.delete(item.id)
         this.activeCount--
         this.processQueue()
       }

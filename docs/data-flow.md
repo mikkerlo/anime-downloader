@@ -209,7 +209,8 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
         merge when the player releases the file, and again at boot for crash
         recovery. Renaming under the player would EPERM on Windows and 404
         the player's anime-video:// URL everywhere.
-   f. On failure: retry up to 3x with exponential backoff — EXCEPT a
+   f. On failure: retry up to 3x with exponential backoff (up to 20
+      attempts while attempts keep growing the .part, below) — EXCEPT a
       deterministic rejection from (c), which fails on the first response
       - The catch first awaits the write stream's 'close' (#597): on Node 21
         pipeline() rejects while the destroyed stream still has a write in
@@ -217,6 +218,12 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
         stat taken before that write lands would undercount the progress
         below and build the next Range from a short file, which then
         appends bytes the file already holds
+      - Ownership after that await (#597 review): if another attempt now
+        holds the item's abort controller, or the status is no longer
+        'downloading' (a pause, cancel, resume or restart landed while the
+        stream closed), the failed attempt only gives back its own slot and
+        schedules nothing. Both deletes of the controller only remove the
+        attempt's own, so a resumed attempt stays pausable
       - Progress-aware rung (#597): an attempt that grew the on-disk .part
         by >= 256 KiB (PROGRESS_RETRY_MIN_BYTES) past its own starting size
         (0 after a 200) retries at the SAME rung after a fixed 250 ms

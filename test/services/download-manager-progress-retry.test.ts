@@ -50,6 +50,7 @@ function makeItem(): DownloadItem {
 type Internals = {
   queue: DownloadItem[]
   activeCount: number
+  abortControllers: Map<string, AbortController>
   startDownload: (item: DownloadItem, retryCount?: number, attemptCount?: number) => Promise<void>
   waitForPartClose: (stream: fs.WriteStream) => Promise<void>
 }
@@ -109,7 +110,7 @@ function slowDisk(): { holding: boolean; held: (() => void)[]; release: () => vo
   return disk
 }
 
-type Cut = number | 'full'
+type Cut = number | 'full' | 'stall'
 
 interface Server {
   fetch: Mock
@@ -120,7 +121,9 @@ interface Server {
 /**
  * A server over `src`. Request N gets `plan[N]` bytes from where its `Range`
  * starts and then `TypeError('terminated')`, or the rest of the file for
- * `'full'`. The error is raised only once every delivered byte is on disk —
+ * `'full'`, or one chunk and then nothing, ever, for `'stall'` (an attempt that
+ * stays in flight until it is aborted). The error is raised only once every
+ * delivered byte is on disk —
  * unless `disk` is given, in which case the last chunk's write is held in flight
  * when it is raised, which is the window #597's close-before-stat closes.
  */
@@ -136,7 +139,8 @@ function server(
     const start = range ? Number(/^bytes=(\d+)-$/.exec(range)![1]) : 0
     const cut = plan[starts.length] ?? 'full'
     starts.push(start)
-    const end = cut === 'full' ? src.length : Math.min(src.length, start + cut)
+    const end =
+      cut === 'full' ? src.length : Math.min(src.length, start + (cut === 'stall' ? CHUNK : cut))
     const data = src.subarray(start, end)
     const disk = opts.disk
     let off = 0
@@ -156,6 +160,7 @@ function server(
           c.close()
           return
         }
+        if (cut === 'stall') return new Promise<void>(() => {})
         if (disk && data.length > 0) await spinUntil(() => disk.held.length > 0)
         else await spinUntil(() => partSize(partPath) === end)
         c.error(new TypeError('terminated'))
@@ -213,6 +218,21 @@ describe('DownloadManager — progress-aware retry rung (#597)', () => {
   /** Waits for the catch to re-queue (or fail) the attempt that is in flight. */
   async function settled(): Promise<void> {
     await until(() => item.status !== 'downloading')
+  }
+
+  /** Holds every `waitForPartClose` open until `open()`, then runs the real one. */
+  function holdPartClose(): { closeSpy: Mock; open: () => void } {
+    const original = internals.waitForPartClose
+    let open!: () => void
+    const gate = new Promise<void>((r) => (open = r))
+    const closeSpy = vi.spyOn(internals, 'waitForPartClose').mockImplementation(async function (
+      this: unknown,
+      stream: fs.WriteStream
+    ) {
+      await gate
+      return original.call(this, stream)
+    })
+    return { closeSpy: closeSpy as unknown as Mock, open }
   }
 
   /** The next request fires exactly `ms` after the re-queue, not a tick before. */
@@ -364,16 +384,7 @@ describe('DownloadManager — progress-aware retry rung (#597)', () => {
     const per = 384 * KIB
     const src = source(per + 100 * KIB)
     const s = serve(server(src, [per, 'full'], partPath))
-    const original = internals.waitForPartClose
-    let open!: () => void
-    const gate = new Promise<void>((r) => (open = r))
-    const closeSpy = vi.spyOn(internals, 'waitForPartClose').mockImplementation(async function (
-      this: unknown,
-      stream: fs.WriteStream
-    ) {
-      await gate
-      return original.call(this, stream)
-    })
+    const { closeSpy, open } = holdPartClose()
 
     void internals.startDownload(item)
     await until(() => closeSpy.mock.calls.length === 1)
@@ -394,16 +405,7 @@ describe('DownloadManager — progress-aware retry rung (#597)', () => {
     const per = 384 * KIB
     const src = source(per + 100 * KIB)
     const s = serve(server(src, [per, 'full'], partPath))
-    const original = internals.waitForPartClose
-    let open!: () => void
-    const gate = new Promise<void>((r) => (open = r))
-    const closeSpy = vi.spyOn(internals, 'waitForPartClose').mockImplementation(async function (
-      this: unknown,
-      stream: fs.WriteStream
-    ) {
-      await gate
-      return original.call(this, stream)
-    })
+    const { closeSpy, open } = holdPartClose()
 
     void internals.startDownload(item)
     await until(() => closeSpy.mock.calls.length === 1)
@@ -416,5 +418,62 @@ describe('DownloadManager — progress-aware retry rung (#597)', () => {
     expect(item.status).toBe('paused')
     expect(s.fetch).toHaveBeenCalledTimes(1)
     expect(partSize(partPath)).toBe(per)
+  })
+
+  // #597 review: a resume while the failed attempt's stream is still closing
+  // starts a new attempt for the same item. The old catch must neither
+  // schedule a second retry nor delete the new attempt's controller.
+  it('a pause and resume while the .part is closing leaves the new attempt the only owner', async () => {
+    const per = 384 * KIB
+    const src = source(per + 100 * KIB)
+    const s = serve(server(src, [per, 'stall'], partPath))
+    const { closeSpy, open } = holdPartClose()
+
+    void internals.startDownload(item)
+    await until(() => closeSpy.mock.calls.length === 1)
+    dm.pause(item.id)
+    dm.resume(item.id)
+    expect(item.status).toBe('downloading')
+    await until(() => s.fetch.mock.calls.length === 2)
+    expect(s.starts[1]).toBe(per)
+    expect(internals.activeCount).toBe(2)
+
+    open()
+    await until(() => internals.activeCount === 1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(s.fetch).toHaveBeenCalledTimes(2)
+    expect(item.status).toBe('downloading')
+    expect(internals.abortControllers.has(item.id)).toBe(true)
+
+    // The new attempt is still the one a pause reaches.
+    dm.pause(item.id)
+    const resumedSignal = (s.fetch.mock.calls[1][1] as RequestInit).signal!
+    expect(resumedSignal.aborted).toBe(true)
+    await until(() => internals.activeCount === 0)
+    expect(item.status).toBe('paused')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(s.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  // The same ownership in `finally`: a pause and resume in one tick start the
+  // new attempt before the aborted one's catch runs, and that catch's cleanup
+  // must not delete the controller the new attempt installed.
+  it('an aborted attempt does not delete the controller of the attempt that replaced it', async () => {
+    const src = source(512 * KIB)
+    const s = serve(server(src, ['stall', 'stall'], partPath))
+
+    void internals.startDownload(item)
+    await until(() => partSize(partPath) === CHUNK)
+    dm.pause(item.id)
+    dm.resume(item.id)
+    await until(() => s.fetch.mock.calls.length === 2)
+    await until(() => internals.activeCount === 1)
+    expect(item.status).toBe('downloading')
+    expect(internals.abortControllers.has(item.id)).toBe(true)
+
+    dm.pause(item.id)
+    expect((s.fetch.mock.calls[1][1] as RequestInit).signal!.aborted).toBe(true)
+    await until(() => internals.activeCount === 0)
+    expect(item.status).toBe('paused')
   })
 })

@@ -26,6 +26,7 @@ import { parseEpisodeFromFilename } from './lib/filename'
 import { createEpisodeCompletionHandlers } from './lib/episode-completion'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import type { ParkedQueues } from './lib/shikimori-queue'
+import { applyApiBaseOverrides } from './lib/api-bases'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
@@ -174,6 +175,8 @@ const STORE_DEFAULTS = {
   shikimoriRecommendations: [] as RecommendationEntry[],
   priorityAnimeIds: [] as string[]
 }
+
+applyApiBaseOverrides(process.env, app.isPackaged)
 
 const store = createStorageService(STORE_DEFAULTS, {
   // Keys whose last write must survive a crash inside the persist-coalescing

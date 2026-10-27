@@ -22,7 +22,7 @@ Uses `electron-updater` with GitHub releases as the update source. The CI upload
 
 The portable exe has no installer for the updater to swap in, so `app.ipc.ts` detects it (`process.platform === 'win32' && PORTABLE_EXECUTABLE_DIR` — set by electron-builder's portable launcher) and routes the same three IPC channels differently:
 
-- `UPDATE_CHECK` → `checkLatestRelease` (`src/main/lib/manual-update.ts`): native `fetch` of the GitHub `releases/latest` API, numeric version compare against `app.getVersion()`, broadcasts `{ status: 'available', version, manual: true }` or `{ status: 'up-to-date' }`.
+- `UPDATE_CHECK` → `checkLatestRelease` (`src/main/lib/manual-update.ts`): `fetchWithTimeout` (`src/main/lib/net.ts`) of the GitHub `releases/latest` API, numeric version compare against `app.getVersion()`, broadcasts `{ status: 'available', version, manual: true }` or `{ status: 'up-to-date' }`.
 - `UPDATE_DOWNLOAD` / `UPDATE_INSTALL` → `shell.openExternal(releasePageUrl)` — the renderer's action button reads `manual` and relabels to **"Open download page"** (GeneralTab + sidebar banner); `downloading`/`ready` states never occur in this mode.
 
 The `manual?: boolean` flag lives on the shared `UpdateStatus` type (`src/shared/types/app.d.ts`) and the store-side `UiUpdateStatus` (`src/renderer/src/stores/settings.ts`).

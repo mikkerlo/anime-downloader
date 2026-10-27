@@ -194,7 +194,10 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
    - Queued subtitles start before queued videos (#63): the .ass must be on
      disk before watch-while-downloading playback begins
 7. startDownload():
-   a. HTTP fetch with Range header (resume support)
+   a. HTTP fetch with Range header (resume support), through `fetchWithTimeout`
+      with a 60 s body idle timeout (#567): a transfer that stops sending
+      rejects with `TimeoutError`, which takes the retry ladder like any other
+      transport failure, and the `.part` stays for the next `Range` request
    b. Handle 416 (Range Not Satisfiable): delete .part, retry from zero
    c. Refuse a body that is clearly not video (#444), before anything is
       opened for writing — see "What 'completed' attests" below

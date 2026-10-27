@@ -7,6 +7,7 @@ import * as os from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
+import { fetchWithTimeout } from './lib/net'
 
 const FFMPEG_VERSION = '6.1'
 const RELEASE_BASE = `https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFMPEG_VERSION}`
@@ -64,7 +65,7 @@ async function downloadToFile(
   dest: string,
   onProgress?: (received: number, total: number) => void
 ): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow' })
+  const res = await fetchWithTimeout(url, { redirect: 'follow' })
   if (!res.ok || !res.body)
     throw new Error(`ffmpeg download failed: ${res.status} ${res.statusText} (${url})`)
   const totalHeader = res.headers.get('content-length')

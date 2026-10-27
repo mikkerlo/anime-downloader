@@ -7,6 +7,7 @@ import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import Ffmpeg from 'fluent-ffmpeg'
 import type { SmotretApi } from './smotret-api'
+import { fetchWithTimeout } from './lib/net'
 
 interface RunFfmpegOptions {
   ffmpegPath: string
@@ -189,6 +190,11 @@ export interface EpisodeCompleteInfo {
 const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
+// A transfer with no headers, or no bytes, for this long rejects with
+// `TimeoutError` and takes the retry ladder; the `.part` stays for the `Range`
+// resume (#567). The connect deadline covers redirects to the CDN as well.
+export const DOWNLOAD_IDLE_MS = 60_000
+export const DOWNLOAD_CONNECT_MS = 60_000
 
 /**
  * How far `item.bytesReceived` is allowed to run **ahead** of the `.part` on
@@ -1059,7 +1065,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1691-1696`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1697-1702`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1088,7 +1094,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1687`)
+   * (`src/main/download-manager.ts:1693`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1701,10 +1707,12 @@ export class DownloadManager {
 
     try {
       console.log(`[download] Starting: ${item.filename} -> ${item.url.substring(0, 120)}...`)
-      const response = await fetch(item.url, {
+      const response = await fetchWithTimeout(item.url, {
         headers,
         signal: controller.signal,
-        redirect: 'follow'
+        redirect: 'follow',
+        connectMs: DOWNLOAD_CONNECT_MS,
+        idleMs: DOWNLOAD_IDLE_MS
       })
 
       console.log(

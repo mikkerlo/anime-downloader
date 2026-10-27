@@ -6,6 +6,8 @@
 // driving the updater. Pure + fetch-injected so the version logic is unit
 // testable; `app.ipc.ts` owns the wiring.
 
+import { fetchWithTimeout } from './net'
+
 export const RELEASES_LATEST_API =
   'https://api.github.com/repos/mikkerlo/anime-downloader/releases/latest'
 export const RELEASES_LATEST_PAGE = 'https://github.com/mikkerlo/anime-downloader/releases/latest'
@@ -49,7 +51,7 @@ export interface ManualUpdateCheck {
 /** Compares the latest GitHub release tag against `currentVersion`. Throws on HTTP/network failure. */
 export async function checkLatestRelease(
   currentVersion: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: (url: string, init?: RequestInit) => Promise<Response> = fetchWithTimeout
 ): Promise<ManualUpdateCheck> {
   const res = await fetchImpl(RELEASES_LATEST_API, {
     headers: { Accept: 'application/vnd.github+json' }

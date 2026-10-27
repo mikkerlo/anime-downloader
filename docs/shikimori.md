@@ -16,7 +16,7 @@ Syncs anime watch status and episode progress with [Shikimori](https://shikimori
 
 ## Module: `src/main/shikimori.ts`
 
-Standalone API client with hardcoded client credentials. All methods throw `ShikiApiError` on failure. Rate limit handling: retries on 429 with `retry-after` header.
+Standalone API client with hardcoded client credentials. All methods throw `ShikiApiError` on failure. Requests go through `fetchWithTimeout` (`src/main/lib/net.ts`), so a hung connection rejects with `TimeoutError` instead of hanging. Rate limit handling: a 429 is retried after its `retry-after` header (clamped to 60 s) at most 3 times; the fourth 429 throws `ShikiApiError` with status 429 (#567). The origin is `shikimoriOrigin()` from `src/main/lib/api-bases.ts`, which an unpackaged build can point at a stub server through `ANIME_DL_SHIKIMORI_ORIGIN`.
 
 `ShikiApiError` carries the response `body` alongside the status — the throw site in `shikiFetch` reads the body, runs it through `summarizeErrorBody()` and folds the result into the message (`Shikimori API error: 400 (invalid_grant: …)`). Without it a dead refresh token and a genuine validation failure are both just "400", which is the misdiagnosis #244 was reported as. The summarizer pulls `error` + `error_description` out of an OAuth error before capping at 200 chars (so a blind head-truncation can't drop the half that explains the failure) and `scrubErrorBody()` redacts `access_token` / `refresh_token` / `code` / `client_secret` values in JSON- and form-encoded bodies. That is hygiene, not a live-secret guard: token material rides the **200** response, which never reaches the throw site.
 
@@ -80,7 +80,7 @@ Before hitting the API, queued entries are consolidated per `malId` (first `befo
 - **Server state drifted** — apply progress rule: only override if `after.episodes > current.episodes` AND the current status is not more advanced than `after.status` (ordering: `planned < watching/rewatching < on_hold/dropped < completed`). Otherwise reconcile local cache to the server's value and drop the queue item — the user's offline intent has been superseded by a more recent server-side decision.
 - **Server returned no rate (deleted)** — recreate with `after` via `createUserRate`.
 
-An in-memory mutex (`syncInProgress`) prevents overlapping drains. Items are processed sequentially with a 250 ms delay to stay under Shikimori's 5 req/s cap (the `shikiFetch` wrapper also handles 429 with `retry-after`). Network errors during drain abort the run and leave the queue intact for the next timer tick; 401/403 also abort without dropping items (user needs to re-auth); other HTTP errors drop the offending item and continue. `shikimori:rate-updated` is broadcast on both "applied" and "reconciled to server" paths so the UI stays consistent regardless of which branch fired.
+An in-memory mutex (`syncInProgress`) prevents overlapping drains. Items are processed sequentially with a 250 ms delay to stay under Shikimori's 5 req/s cap (the `shikiFetch` wrapper also handles 429 with `retry-after`, up to 3 retries). Network errors during drain abort the run and leave the queue intact for the next timer tick; 401/403 also abort without dropping items (user needs to re-auth); other HTTP errors drop the offending item and continue. `shikimori:rate-updated` is broadcast on both "applied" and "reconciled to server" paths so the UI stays consistent regardless of which branch fired.
 
 ## Friends Page (#179)
 

@@ -645,6 +645,124 @@ describe('shikimori client — fixture replay', () => {
     })
   })
 
+  describe('429 back-off cap (#567)', () => {
+    function rateLimitEverything(retryAfter: string): ReturnType<typeof vi.fn> {
+      const stub = vi.fn(
+        async () =>
+          ({
+            ok: false,
+            status: 429,
+            statusText: 'Too Many Requests',
+            headers: new Headers({ 'retry-after': retryAfter }),
+            json: async () => ({}),
+            text: async () => ''
+          }) as unknown as Response
+      )
+      global.fetch = stub
+      return stub
+    }
+
+    function settle(p: Promise<unknown>): () => unknown {
+      let outcome: unknown = 'pending'
+      p.then(
+        () => (outcome = 'resolved'),
+        (e: unknown) => (outcome = e)
+      )
+      return () => outcome
+    }
+
+    it('gives up after 3 retries with ShikiApiError(429) instead of retrying forever', async () => {
+      vi.useFakeTimers()
+      try {
+        const stub = rateLimitEverything('1')
+        const outcome = settle(shikimori.getUser('tok'))
+        await vi.advanceTimersByTimeAsync(10 * 60_000)
+        expect(stub).toHaveBeenCalledTimes(4)
+        expect(outcome()).toBeInstanceOf(shikimori.ShikiApiError)
+        expect(outcome()).toMatchObject({ status: 429 })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('clamps Retry-After to 60 s', async () => {
+      vi.useFakeTimers()
+      try {
+        const stub = rateLimitEverything('3600')
+        const outcome = settle(shikimori.getUser('tok'))
+        await vi.advanceTimersByTimeAsync(60_000 - 1)
+        expect(stub).toHaveBeenCalledTimes(1)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(stub).toHaveBeenCalledTimes(2)
+        await vi.advanceTimersByTimeAsync(2 * 60_000)
+        expect(stub).toHaveBeenCalledTimes(4)
+        expect(outcome()).toMatchObject({ name: 'ShikiApiError', status: 429 })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('falls back to 1 s for an HTTP-date or invalid Retry-After', async () => {
+      for (const header of ['Wed, 21 Oct 2015 07:28:00 GMT', '-5', 'soon']) {
+        vi.useFakeTimers()
+        try {
+          const stub = rateLimitEverything(header)
+          const outcome = settle(shikimori.getUser('tok'))
+          await vi.advanceTimersByTimeAsync(999)
+          expect(stub, header).toHaveBeenCalledTimes(1)
+          await vi.advanceTimersByTimeAsync(1)
+          expect(stub, header).toHaveBeenCalledTimes(2)
+          await vi.advanceTimersByTimeAsync(2_000)
+          expect(stub, header).toHaveBeenCalledTimes(4)
+          expect(outcome()).toMatchObject({ name: 'ShikiApiError', status: 429 })
+        } finally {
+          vi.useRealTimers()
+        }
+      }
+    })
+
+    it('releases the 429 body before retrying', async () => {
+      vi.useFakeTimers()
+      try {
+        const cancelled: number[] = []
+        global.fetch = vi.fn(async () => {
+          const n = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.length
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              cancel: () => {
+                cancelled.push(n)
+              }
+            }),
+            { status: 429, headers: { 'retry-after': '1' } }
+          )
+        }) as unknown as typeof fetch
+        settle(shikimori.getUser('tok'))
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(global.fetch).toHaveBeenCalledTimes(4)
+        expect(cancelled).toEqual([1, 2, 3])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('still returns the answer when a retry succeeds', async () => {
+      vi.useFakeTimers()
+      try {
+        const limited = rateLimitEverything('1')
+        const ok = jsonResponse(fixture('whoami.json'))
+        global.fetch = vi.fn(async () =>
+          limited.mock.calls.length < 2 ? limited() : ok
+        ) as unknown as typeof fetch
+        const outcome = settle(shikimori.getUser('tok'))
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(outcome()).toBe('resolved')
+        expect(global.fetch).toHaveBeenCalledTimes(3)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   describe('error-body scrubbing', () => {
     it('redacts secret-bearing values in JSON and form-encoded bodies', () => {
       expect(shikimori.scrubErrorBody('{"access_token":"abc123","error":"x"}')).toBe(

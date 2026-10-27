@@ -10,7 +10,8 @@ const NETWORK_ERROR_CODES = new Set([
   'EHOSTUNREACH',
   'EPIPE',
   'UND_ERR_SOCKET',
-  'UND_ERR_CONNECT_TIMEOUT'
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ANIME_DL_OFFLINE'
 ])
 
 export function errorCode(err: unknown): string | undefined {

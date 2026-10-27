@@ -8,6 +8,7 @@ import { spawn } from 'child_process'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
+import { fetchWithTimeout } from './lib/net'
 
 const FPCALC_VERSION = '1.5.1'
 const RELEASE_BASE = `https://github.com/acoustid/chromaprint/releases/download/v${FPCALC_VERSION}`
@@ -73,7 +74,7 @@ async function downloadToFile(
   dest: string,
   onProgress?: (received: number, total: number) => void
 ): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow' })
+  const res = await fetchWithTimeout(url, { redirect: 'follow' })
   if (!res.ok || !res.body)
     throw new Error(`fpcalc download failed: ${res.status} ${res.statusText}`)
   const totalHeader = res.headers.get('content-length')

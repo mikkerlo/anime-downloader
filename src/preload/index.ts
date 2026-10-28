@@ -551,6 +551,21 @@ const api = {
       animeId
     ) as Promise<AttachedTitleDetail | null>,
   onSharedLibrariesChanged: subscribe<void>(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED),
+  // Drive detection, Forget, Re-locate (#581)
+  sharedLibraryForget: (libraryId: string, opts?: { confirmDropPending?: boolean }) =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_FORGET,
+      libraryId,
+      opts
+    ) as Promise<SharedLibraryForgetResult>,
+  sharedLibraryRelocate: (libraryId: string) =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_RELOCATE,
+      libraryId
+    ) as Promise<SharedLibraryRelocateResult>,
+  sharedLibraryDismissPrompt: (libraryIds: string[]) =>
+    ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_DISMISS_PROMPT, libraryIds) as Promise<void>,
+  onSharedLibraryFound: subscribe<SharedLibraryFound>(EVENT_CHANNELS.SHARED_LIBRARY_FOUND),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>

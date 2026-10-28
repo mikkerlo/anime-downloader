@@ -54,6 +54,8 @@ function library(titles: AttachedLibraryTitle[]): AttachedLibraryInfo {
     role: 'owner',
     access: 'read-write',
     available: true,
+    lastSeenAt: 1_000,
+    lastSyncAt: null,
     pathOverflow: 0,
     mkvCount: titles.reduce((n, t) => n + t.mkvCount, 0),
     titles
@@ -126,7 +128,7 @@ describe('LibraryView — the Shared Libraries tab on a fresh PC', () => {
       'Frieren'
     ])
     expect(w.text()).not.toContain('No saved anime yet')
-    expect(w.find('[data-testid="mode-badge"]').text()).toBe('With metadata')
+    expect(w.find('[data-testid="role-badge"]').text()).toBe('Owner')
     expect(w.text()).toContain('Sync arrives in a later update.')
   })
 

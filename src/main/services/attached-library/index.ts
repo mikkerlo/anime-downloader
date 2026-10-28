@@ -20,8 +20,10 @@ import {
 } from '../../lib/shared-library/paths'
 import type { StorageService } from '../../store/types'
 import { ATTACHED_POSTER_MAX_BYTES } from '../../streaming/anime-poster-protocol'
+import { createListenerSet } from '../../lib/listener-set'
 import { checkWritable as defaultCheckWritable, type WritableVerdict } from './writable'
 import { spawnPathFor as spawnPathForRoots, type SpawnPathImpl } from './spawn-path'
+import type { KnownLibrary } from './poller'
 
 export { checkWritable } from './writable'
 
@@ -38,6 +40,19 @@ export interface AttachedLibraryServiceDeps {
   spawnPath?: SpawnPathImpl
   now?: () => number
   log?: Pick<Console, 'log' | 'warn' | 'error'>
+  /** Forget's step 1: resolves once no S9 (#584) sync run on this library is in flight. */
+  syncIdle?: (libraryId: string) => Promise<void>
+}
+
+/**
+ * The forget-hook contract (#581). S8 (#582) and S9 (#584) register one each.
+ * `pendingCount` reads no drive and makes no network call; its two numbers
+ * never overlap. `onForgotten` deletes the per-library data its slice owns,
+ * is idempotent, and never touches the drive.
+ */
+export interface ForgetHook {
+  pendingCount?(libraryId: string): SharedLibraryPendingCount | Promise<SharedLibraryPendingCount>
+  onForgotten(libraryId: string): Promise<void>
 }
 
 export interface AttachedLibraryService {
@@ -76,6 +91,31 @@ export interface AttachedLibraryService {
   /** The attached roots, as picked and as `realpath`ed. */
   roots(): string[]
   spawnPathFor(abs: string): string
+
+  // --- Availability (#581): the poller's side, see `poller.ts`.
+  known(): KnownLibrary[]
+  /** Re-reads `root` as this library's (`reopen`); on a match it becomes its root, available. */
+  reopenAt(libraryId: string, root: string): Promise<boolean>
+  /** Unavailable, `lastSeenAt` kept; a no-op unless `root` is still its root. */
+  markUnavailable(libraryId: string, root: string): void
+  markSeen(libraryId: string): void
+  /** The library at `root` as the open flow lists it, and attachable by id. */
+  identify(root: string): Promise<SharedLibraryCandidate | null>
+  isDismissed(libraryId: string): boolean
+  /** "Don't ask for this drive": remembered in `sharedLibraryPromptDismissed`. */
+  dismissPrompt(libraryIds: string[]): void
+  /** Persists the time each available library was last seen (quit). */
+  saveLastSeen(): void
+
+  // --- Forget and Re-locate (#581)
+  registerForgetHook(hook: ForgetHook): () => void
+  /** Never touches the drive. Resolves after every hook's `onForgotten` settled. */
+  forget(
+    libraryId: string,
+    opts?: { confirmDropPending?: boolean }
+  ): Promise<SharedLibraryForgetResult>
+  /** Accepts `dir` (or a folder one level below) only when it holds this `libraryId`. */
+  relocate(libraryId: string, dir: string): Promise<SharedLibraryRelocateResult>
 }
 
 /** What one open of a root holds in memory. */
@@ -90,6 +130,7 @@ interface Opened {
 }
 
 const STORE_KEY = 'attachedLibraries'
+const DISMISSED_KEY = 'sharedLibraryPromptDismissed'
 
 /** The one poster cap, shared with `anime-poster://`'s capped read. */
 export const POSTER_MAX_BYTES = ATTACHED_POSTER_MAX_BYTES
@@ -160,6 +201,14 @@ export function createAttachedLibraryService(
   const discovered = new Map<string, string>()
   // How many times each library was attached, so a startup read that began earlier never replaces an attach's.
   const attaches = new Map<string, number>()
+  // Opened, then found gone by the poller (#581); the in-memory copy is kept for S8 (#582).
+  const unavailable = new Set<string>()
+  // When the poller last saw each available library; persisted when it goes, and on quit.
+  const seenAt = new Map<string, number>()
+  const forgetHooks = createListenerSet<[(hook: ForgetHook) => void]>('forget-hook')
+
+  const isAvailable = (libraryId: string): boolean =>
+    !!opened.get(libraryId)?.manifest && !unavailable.has(libraryId)
 
   const records = (): Record<string, AttachedLibraryRecord> =>
     (deps.store.get(STORE_KEY) as Record<string, AttachedLibraryRecord> | undefined) ?? {}
@@ -288,7 +337,9 @@ export function createAttachedLibraryService(
       access: rec.access,
       ...(rec.accessReason ? { accessReason: rec.accessReason } : {}),
       ...(o?.message ? { message: o.message } : {}),
-      available: !!o?.manifest,
+      available: isAvailable(libraryId),
+      lastSeenAt: (isAvailable(libraryId) ? seenAt.get(libraryId) : undefined) ?? rec.lastSeenAt,
+      lastSyncAt: rec.lastSyncAt ?? null,
       pathOverflow: o?.pathOverflow ?? 0,
       mkvCount: o?.manifest?.items.filter((i) => containerOf(i.path) === 'mkv').length ?? 0,
       titles: o ? titlesOf(o) : []
@@ -338,6 +389,8 @@ export function createAttachedLibraryService(
     if (r.accessReason) rec.accessReason = r.accessReason
     else delete rec.accessReason
     rec.lastSeenAt = now()
+    unavailable.delete(libraryId)
+    seenAt.set(libraryId, rec.lastSeenAt)
   }
 
   // The startup reopen; a `refresh` waits for it, so its older read never lands last.
@@ -415,26 +468,30 @@ export function createAttachedLibraryService(
     return entry.done
   }
 
+  async function identify(root: string): Promise<SharedLibraryCandidate | null> {
+    const read = await readLibrary(root)
+    if (read.status === 'none') return null
+    const manifest = read.manifest
+    const readOnly =
+      read.status === 'read-only' ? { reason: read.reason, message: read.message } : undefined
+    if (manifest) discovered.set(manifest.libraryId, root)
+    return {
+      root,
+      libraryId: manifest?.libraryId ?? null,
+      name: manifest?.name ?? path.basename(root),
+      ownerNickname: manifest?.owner?.nickname ?? null,
+      mode: manifest?.mode ?? null,
+      titleCount: manifest?.titles.length ?? 0,
+      identity: manifest ? identityOf(manifest, userId()) : 'videos',
+      ...(readOnly ? { readOnly } : {})
+    }
+  }
+
   async function discover(dir: string): Promise<SharedLibraryCandidate[]> {
-    const id = userId()
     const out: SharedLibraryCandidate[] = []
     for (const root of await discoverLibraries(dir)) {
-      const read = await readLibrary(root)
-      if (read.status === 'none') continue
-      const manifest = read.manifest
-      const readOnly =
-        read.status === 'read-only' ? { reason: read.reason, message: read.message } : undefined
-      if (manifest) discovered.set(manifest.libraryId, root)
-      out.push({
-        root,
-        libraryId: manifest?.libraryId ?? null,
-        name: manifest?.name ?? path.basename(root),
-        ownerNickname: manifest?.owner?.nickname ?? null,
-        mode: manifest?.mode ?? null,
-        titleCount: manifest?.titles.length ?? 0,
-        identity: manifest ? identityOf(manifest, id) : 'videos',
-        ...(readOnly ? { readOnly } : {})
-      })
+      const c = await identify(root)
+      if (c) out.push(c)
     }
     return out
   }
@@ -588,7 +645,7 @@ export function createAttachedLibraryService(
     const out: ReturnType<AttachedLibraryService['availableSnapshots']> = []
     for (const [libraryId, o] of opened) {
       const rec = recs[libraryId]
-      if (!rec || !o.manifest) continue
+      if (!rec || !o.manifest || unavailable.has(libraryId)) continue
       out.push({
         libraryId,
         name: rec.name,
@@ -629,6 +686,184 @@ export function createAttachedLibraryService(
     return [...out]
   }
 
+  function known(): KnownLibrary[] {
+    return Object.entries(records()).map(([libraryId, rec]) => ({
+      libraryId,
+      root: rec.root,
+      available: isAvailable(libraryId)
+    }))
+  }
+
+  // Each library's poller re-read or Re-locate in flight, so Forget can wait for it.
+  const reopening = new Map<string, Promise<boolean>>()
+
+  async function reopenAtOnce(libraryId: string, root: string): Promise<boolean> {
+    await ready.catch(() => {})
+    await refreshing.get(libraryId)?.done
+    const rec = records()[libraryId]
+    if (!rec) return false
+    const before = attaches.get(libraryId)
+    const r = await reopen(libraryId, { ...rec, root })
+    if (!r) return false
+    // Fetched after the read: a Forget, a move or an attach meanwhile wins.
+    const recs = records()
+    const current = recs[libraryId]
+    if (!current || current.root !== rec.root || attaches.get(libraryId) !== before) {
+      return isAvailable(libraryId) && current?.root === root
+    }
+    current.root = root
+    commit(libraryId, current, r)
+    save(recs)
+    deps.onChanged?.()
+    return true
+  }
+
+  function reopenAt(libraryId: string, root: string): Promise<boolean> {
+    const run = (async () => {
+      await reopening.get(libraryId)?.catch(() => false)
+      try {
+        return await reopenAtOnce(libraryId, root)
+      } catch (err) {
+        log.warn(`[shared-library] could not re-read ${root}`, err)
+        return false
+      }
+    })()
+    reopening.set(libraryId, run)
+    void run.finally(() => {
+      if (reopening.get(libraryId) === run) reopening.delete(libraryId)
+    })
+    return run
+  }
+
+  function markUnavailable(libraryId: string, root: string): void {
+    const recs = records()
+    const rec = recs[libraryId]
+    if (!rec || rec.root !== root || !isAvailable(libraryId)) return
+    unavailable.add(libraryId)
+    rec.lastSeenAt = seenAt.get(libraryId) ?? rec.lastSeenAt
+    save(recs)
+    deps.onChanged?.()
+  }
+
+  function markSeen(libraryId: string): void {
+    if (isAvailable(libraryId)) seenAt.set(libraryId, now())
+  }
+
+  function dismissed(): string[] {
+    const v = deps.store.get(DISMISSED_KEY)
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  }
+
+  function dismissPrompt(libraryIds: string[]): void {
+    const next = new Set(dismissed())
+    for (const id of libraryIds) if (typeof id === 'string' && id) next.add(id)
+    deps.store.set(DISMISSED_KEY, [...next])
+  }
+
+  function saveLastSeen(): void {
+    const recs = records()
+    let changed = false
+    for (const [libraryId, rec] of Object.entries(recs)) {
+      const t = seenAt.get(libraryId)
+      if (isAvailable(libraryId) && t !== undefined && t !== rec.lastSeenAt) {
+        rec.lastSeenAt = t
+        changed = true
+      }
+    }
+    if (changed) save(recs)
+  }
+
+  function registerForgetHook(hook: ForgetHook): () => void {
+    return forgetHooks.add((visit) => visit(hook))
+  }
+
+  function currentHooks(): ForgetHook[] {
+    const out: ForgetHook[] = []
+    forgetHooks.emit((hook) => out.push(hook))
+    return out
+  }
+
+  async function forget(
+    libraryId: string,
+    opts: { confirmDropPending?: boolean } = {}
+  ): Promise<SharedLibraryForgetResult> {
+    // 1. No sync run, re-read or refresh of this library is in flight.
+    await deps.syncIdle?.(libraryId).catch(() => {})
+    await reopening.get(libraryId)?.catch(() => false)
+    await refreshing.get(libraryId)?.done
+    const hooks = currentHooks()
+    // 2. What the hooks would discard, summed separately.
+    const pendingCount = { libraryChanges: 0, resolutions: 0 }
+    for (const hook of hooks) {
+      if (!hook.pendingCount) continue
+      try {
+        const n = await hook.pendingCount(libraryId)
+        pendingCount.libraryChanges += Math.max(0, Number(n?.libraryChanges) || 0)
+        pendingCount.resolutions += Math.max(0, Number(n?.resolutions) || 0)
+      } catch (err) {
+        log.warn(`[shared-library] a forget hook could not count pending changes`, err)
+      }
+    }
+    // 3. Ask first.
+    if (
+      (pendingCount.libraryChanges > 0 || pendingCount.resolutions > 0) &&
+      !opts.confirmDropPending
+    ) {
+      return { needsConfirm: true, pendingCount }
+    }
+    // 4. The entry (and its claim) and "Don't ask for this drive".
+    const recs = records()
+    if (recs[libraryId]) {
+      delete recs[libraryId]
+      save(recs)
+    }
+    const kept = dismissed()
+    if (kept.includes(libraryId)) {
+      deps.store.set(
+        DISMISSED_KEY,
+        kept.filter((id) => id !== libraryId)
+      )
+    }
+    opened.delete(libraryId)
+    discovered.delete(libraryId)
+    unavailable.delete(libraryId)
+    seenAt.delete(libraryId)
+    deps.onChanged?.()
+    // 5. Every hook's own per-library data; one that rejects doesn't stop the rest.
+    const results = await Promise.allSettled(hooks.map(async (hook) => hook.onForgotten(libraryId)))
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        log.error(`[shared-library] a forget hook failed for ${libraryId}`, r.reason)
+      }
+    }
+    return { needsConfirm: false }
+  }
+
+  async function relocate(libraryId: string, dir: string): Promise<SharedLibraryRelocateResult> {
+    const rec = records()[libraryId]
+    if (!rec) return { ok: false, error: 'This library is no longer open on this PC.' }
+    let other = false
+    for (const root of await discoverLibraries(dir)) {
+      const read = await readLibrary(root)
+      const id = read.status === 'none' ? null : read.manifest?.libraryId
+      if (id !== libraryId) {
+        other ||= !!id
+        continue
+      }
+      if (await reopenAt(libraryId, root)) {
+        const library = get(libraryId)
+        if (library) return { ok: true, library }
+      }
+      return { ok: false, error: `${rec.name} could not be read in this folder.` }
+    }
+    return {
+      ok: false,
+      error: other
+        ? `This folder holds a different Shared Library, not ${rec.name}.`
+        : 'This folder has no Shared Library, and neither do the folders directly inside it.'
+    }
+  }
+
   return {
     init,
     refresh,
@@ -642,6 +877,17 @@ export function createAttachedLibraryService(
     availableSnapshots,
     posterFor,
     roots,
-    spawnPathFor: (abs) => spawnPathForRoots(abs, roots(), deps.spawnPath)
+    spawnPathFor: (abs) => spawnPathForRoots(abs, roots(), deps.spawnPath),
+    known,
+    reopenAt,
+    markUnavailable,
+    markSeen,
+    identify,
+    isDismissed: (libraryId) => dismissed().includes(libraryId),
+    dismissPrompt,
+    saveLastSeen,
+    registerForgetHook,
+    forget,
+    relocate
   }
 }

@@ -395,6 +395,16 @@ interface Api {
   sharedLibraryList: () => Promise<AttachedLibraryInfo[]>
   sharedLibraryGetTitle: (libraryId: string, animeId: number) => Promise<AttachedTitleDetail | null>
   onSharedLibrariesChanged: (callback: () => void) => Unsubscribe
+  /** Never touches the drive; `needsConfirm` first when pending changes would be discarded (#581). */
+  sharedLibraryForget: (
+    libraryId: string,
+    opts?: { confirmDropPending?: boolean }
+  ) => Promise<SharedLibraryForgetResult>
+  /** Folder picker; accepted only when it holds this `libraryId`. */
+  sharedLibraryRelocate: (libraryId: string) => Promise<SharedLibraryRelocateResult>
+  /** "Don't ask for this drive", by `libraryId`. */
+  sharedLibraryDismissPrompt: (libraryIds: string[]) => Promise<void>
+  onSharedLibraryFound: (callback: (found: SharedLibraryFound) => void) => Unsubscribe
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>

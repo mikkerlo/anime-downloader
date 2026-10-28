@@ -8,6 +8,7 @@ import SettingsRow from './SettingsRow.vue';
 import SettingsSwitch from './SettingsSwitch.vue';
 import ExportDialog from '../shared-library/ExportDialog.vue';
 import OpenLibraryDialog from '../shared-library/OpenLibraryDialog.vue';
+import SharedLibrariesTable from '../shared-library/SharedLibrariesTable.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useSharedLibrariesStore } from '../../stores/shared-libraries';
 
@@ -765,6 +766,7 @@ watch(autoCleanupDays, (val) => {
           Export to a Shared Library…
         </button>
       </SettingsRow>
+      <SharedLibrariesTable />
     </SettingsGroup>
     <OpenLibraryDialog v-if="openShared" @close="openShared = false" @show="showShared" />
     <ExportDialog v-if="exportOpen" :anime-ids="null" @close="exportOpen = false" />

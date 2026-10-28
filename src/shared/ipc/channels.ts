@@ -114,9 +114,12 @@ export const CHANNELS = {
 
   // Shared Library
   SHARED_LIBRARY_ATTACH: 'shared-library:attach',
+  SHARED_LIBRARY_DISMISS_PROMPT: 'shared-library:dismiss-prompt',
+  SHARED_LIBRARY_FORGET: 'shared-library:forget',
   SHARED_LIBRARY_GET_TITLE: 'shared-library:get-title',
   SHARED_LIBRARY_LIST: 'shared-library:list',
   SHARED_LIBRARY_PICK_AND_DISCOVER: 'shared-library:pick-and-discover',
+  SHARED_LIBRARY_RELOCATE: 'shared-library:relocate',
 
   // Shell
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
@@ -269,6 +272,7 @@ export const EVENT_CHANNELS = {
 
   // Shared Library
   SHARED_LIBRARIES_CHANGED: 'shared-libraries:changed',
+  SHARED_LIBRARY_FOUND: 'shared-library:found',
 
   // Shikimori
   SHIKIMORI_ANIME_DETAILS_UPDATED: 'shikimori:anime-details-updated',

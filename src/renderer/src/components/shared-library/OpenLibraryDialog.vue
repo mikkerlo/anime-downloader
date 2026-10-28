@@ -6,7 +6,9 @@ import { pathOverflowText, useSharedLibrariesStore } from '../../stores/shared-l
 
 // "Open Shared Library…" (#578): pick a folder, choose among the libraries
 // found in it and one level below, pass the identity check, attach. Nothing
-// here writes to the drive.
+// here writes to the drive. With `found` (the found-on-a-drive toast's Open,
+// #581) the poller has already discovered them, so there is no picker.
+const props = defineProps<{ found?: SharedLibraryFound | null }>();
 const emit = defineEmits<{ close: []; show: [libraryId: string] }>();
 const shared = useSharedLibrariesStore();
 
@@ -24,7 +26,7 @@ const MODE_LABEL: Record<SharedLibraryMode, string> = {
 
 onMounted(async () => {
   try {
-    const found = await window.api.sharedLibraryPickAndDiscover();
+    const found = props.found ?? (await window.api.sharedLibraryPickAndDiscover());
     if (!found.dir) {
       emit('close');
       return;

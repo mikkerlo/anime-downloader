@@ -52,6 +52,8 @@ import { createPlayerLockService } from './services/player-lock'
 import { createPlayerPresenceService } from './services/player-presence'
 import { createSharedLibraryExportService } from './services/shared-library-export'
 import { createAttachedLibraryService } from './services/attached-library'
+import { createAvailabilityPoller } from './services/attached-library/poller'
+import { createMountCandidates } from './lib/shared-library/mount-candidates'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -176,7 +178,8 @@ const STORE_DEFAULTS = {
   installId: '',
   syncMeta: { titles: {}, rates: {} } as SyncMeta,
   workOffline: false,
-  attachedLibraries: {} as Record<string, AttachedLibraryRecord>
+  attachedLibraries: {} as Record<string, AttachedLibraryRecord>,
+  sharedLibraryPromptDismissed: [] as string[]
 }
 
 applyApiBaseOverrides(process.env, app.isPackaged)
@@ -216,6 +219,16 @@ const attachedLibraryService = createAttachedLibraryService({
   store,
   checkFfmpeg: () => checkFfmpeg(),
   onChanged: () => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED)
+})
+// Drive detection (#581). `ANIME_DL_MOUNT_PARENTS` (unpackaged runs only, as
+// the API base overrides) points the candidates at test folders.
+const mountParents = !app.isPackaged
+  ? process.env.ANIME_DL_MOUNT_PARENTS?.split(path.delimiter).filter(Boolean)
+  : undefined
+const availabilityPoller = createAvailabilityPoller({
+  target: attachedLibraryService,
+  candidates: createMountCandidates(mountParents?.length ? { parents: mountParents } : {}),
+  onFound: (found) => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARY_FOUND, found)
 })
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
@@ -727,7 +740,7 @@ async function bootstrap(): Promise<void> {
   store.ensureInstallId()
   // Re-reads the attached Shared Libraries (#578) in the background; reading
   // never writes to a drive.
-  void attachedLibraryService
+  const sharedLibrariesRead = attachedLibraryService
     .init()
     .then(() => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED))
     .catch((err) => console.error('[shared-library] init failed:', err))
@@ -821,6 +834,15 @@ async function bootstrap(): Promise<void> {
 
   createWindow()
   const mainWin = BrowserWindow.getAllWindows()[0]
+  // The availability poller (#581) starts once the startup read is in (its
+  // first tick takes that read as current) and the window has loaded, so the
+  // renderer is subscribed before a startup found-on-a-drive event goes out.
+  // Window focus asks for a tick.
+  const windowLoaded = new Promise<void>((resolve) =>
+    mainWin.webContents.once('did-finish-load', () => resolve())
+  )
+  void Promise.all([sharedLibrariesRead, windowLoaded]).then(() => availabilityPoller.start())
+  app.on('browser-window-focus', () => availabilityPoller.poke())
   const binaryInstalls = createBinaryInstalls({
     ensureFfmpeg: () => ensureFfmpeg(mainWin, isOffline),
     ensureFpcalc: () => ensureFpcalc(mainWin, isOffline)
@@ -943,6 +965,8 @@ new App()
     onBeforeQuit: () => {
       downloadManager?.destroy()
       syncplay.disconnect()
+      availabilityPoller.stop()
+      attachedLibraryService.saveLastSeen()
       // Last: persist store writes still sitting on the coalescing timer —
       // without this, writes from the final ≤500ms (including any made by the
       // teardown above) are dropped on quit.

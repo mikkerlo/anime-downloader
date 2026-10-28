@@ -20,12 +20,23 @@ import CalendarView from './components/views/CalendarView.vue';
 import RecommendationsView from './components/views/RecommendationsView.vue';
 import HomeView from './components/views/HomeView.vue';
 import PlayerView from './components/views/PlayerView.vue';
+import OpenLibraryDialog from './components/shared-library/OpenLibraryDialog.vue';
+import { foundText, useSharedLibrariesStore } from './stores/shared-libraries';
 import { formatBytes } from './utils';
 
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const settingsStore = useSettingsStore();
 const shikimoriStore = useShikimoriStore();
+// Shared Libraries found on a newly mounted drive (#581): one toast per drive.
+const sharedLibraries = useSharedLibrariesStore();
+const { found: foundLibraries, openingFound } = storeToRefs(sharedLibraries);
+
+function showFoundLibrary(): void {
+  openingFound.value = null;
+  sharedLibraries.focusTab = true;
+  libraryStore.navigate('library');
+}
 const { currentView, activeAnimeId, activeFocusEpisodeInt } = storeToRefs(libraryStore);
 const { playerState, animePrefs } = storeToRefs(playerStore);
 const { shortcuts, ffmpegDownloading, ffmpegProgress, ffmpegError } = storeToRefs(settingsStore);
@@ -210,6 +221,40 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+    <div
+      v-if="foundLibraries.length > 0 && !cleanupToast"
+      class="cleanup-toast"
+      data-testid="library-found-toast"
+    >
+      <div class="cleanup-toast-body">
+        <div class="cleanup-toast-title">{{ foundText(foundLibraries[0]) }}</div>
+      </div>
+      <div class="cleanup-toast-actions">
+        <button
+          class="cleanup-toast-btn primary"
+          data-testid="found-open"
+          @click="sharedLibraries.openFound(foundLibraries[0])"
+        >
+          Open
+        </button>
+        <button class="cleanup-toast-btn" @click="sharedLibraries.dropFound(foundLibraries[0])">
+          Not now
+        </button>
+        <button
+          class="cleanup-toast-btn subtle"
+          data-testid="found-dont-ask"
+          @click="sharedLibraries.dontAskFound(foundLibraries[0])"
+        >
+          Don't ask for this drive
+        </button>
+      </div>
+    </div>
+    <OpenLibraryDialog
+      v-if="openingFound"
+      :found="openingFound"
+      @close="openingFound = null"
+      @show="showFoundLibrary"
+    />
     <div v-if="ffmpegDownloading || ffmpegError" class="ffmpeg-overlay">
       <div v-if="ffmpegError" class="ffmpeg-modal">
         <p class="ffmpeg-title">ffmpeg install failed</p>

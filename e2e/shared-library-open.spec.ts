@@ -105,3 +105,91 @@ test('open a Shared Library, see its titles, and play an .mp4 and an .mkv from t
     }
   }
 })
+
+/**
+ * Drive detection and Forget (#581). `ANIME_DL_MOUNT_PARENTS` points the mount
+ * candidates at a temp folder, so moving the library in and out of it plays an
+ * unplug and a re-plug (a test can't mount a real drive). A window-focus event
+ * asks the poller for a tick instead of waiting for the 10 s interval.
+ */
+test('a library found on a drive, unplugged, re-plugged at a new path, then forgotten', async () => {
+  const profile = makeProfile({ prefix: 'anime-dl-shared-detect-' })
+  const mounts = path.join(profile.root, 'mounts')
+  const stick = path.join(mounts, 'STICK', 'Fixture library')
+  fs.mkdirSync(path.dirname(stick), { recursive: true })
+  fs.cpSync(FIXTURE, stick, { recursive: true })
+  const before = tree(stick)
+  const away = path.join(profile.root, 'unplugged')
+  const relettered = path.join(mounts, 'KINGSTON', 'Fixture library')
+
+  let launched: LaunchedApp | undefined
+  try {
+    launched = await launchApp(profile, { env: { ANIME_DL_MOUNT_PARENTS: mounts } })
+    const { app } = launched
+    await assertUserData(app, profile)
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    const focus = (): Promise<void> =>
+      app.evaluate(({ app: electronApp }) => {
+        electronApp.emit('browser-window-focus')
+      })
+
+    // An unknown library on a newly mounted drive: one toast, Open runs the identity flow.
+    const toast = page.getByTestId('library-found-toast')
+    await expect(toast).toContainText("Shared Library 'Fixture library' (owner) found on STICK", {
+      timeout: 20_000
+    })
+    await toast.getByTestId('found-open').click()
+    await expect(page.getByTestId('identity-warning')).toContainText('belongs to owner')
+    await page.getByTestId('use-videos').click()
+    await page.getByTestId('show-library').click()
+    await expect(page.locator('.pill-tab', { hasText: 'Shared Libraries' })).toHaveClass(/active/)
+
+    const section = page.getByTestId('shared-library-section')
+    const dot = section.getByTestId('availability-dot')
+    await expect(dot).toHaveAttribute('data-available', 'true')
+    await expect(section.getByTestId('last-sync')).toHaveText('Last sync: never')
+
+    // Unplug: the dot goes unavailable, with Last seen.
+    fs.renameSync(stick, away)
+    await focus()
+    await expect(dot).toHaveAttribute('data-available', 'false', { timeout: 15_000 })
+    await expect(section.getByTestId('last-seen')).toContainText('Last seen')
+
+    // Back at the same path.
+    fs.renameSync(away, stick)
+    await focus()
+    await expect(dot).toHaveAttribute('data-available', 'true', { timeout: 15_000 })
+
+    // Unplug, then re-plug under another mount: found by libraryId at the new path.
+    fs.renameSync(stick, away)
+    await focus()
+    await expect(dot).toHaveAttribute('data-available', 'false', { timeout: 15_000 })
+    fs.mkdirSync(path.dirname(relettered), { recursive: true })
+    fs.renameSync(away, relettered)
+    await focus()
+    await expect(dot).toHaveAttribute('data-available', 'true', { timeout: 15_000 })
+    await expect(page.getByTestId('drive-title')).toHaveCount(2)
+    await expect(toast).toHaveCount(0)
+
+    // Forget: the section disappears; the drive is untouched.
+    await section.getByTestId('library-menu').click()
+    await page.getByTestId('menu-forget').click()
+    await expect(page.getByTestId('forget-text')).toHaveText(
+      "Forget Fixture library? The drive isn't changed."
+    )
+    await page.getByTestId('forget-confirm').click()
+    await expect(page.getByTestId('shared-library-section')).toHaveCount(0)
+    await expect(page.getByTestId('shared-libraries-tab')).toContainText(
+      'No Shared Library is open.'
+    )
+    expect(tree(relettered)).toEqual(before)
+  } finally {
+    try {
+      if (launched) assertNoDownloads(launched)
+    } finally {
+      await launched?.app.close()
+      profile.cleanup()
+    }
+  }
+})

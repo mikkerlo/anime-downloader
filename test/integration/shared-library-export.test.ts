@@ -4,7 +4,7 @@
 // verify failure, each against the real service, S5's reader and writer, and
 // the real episode scanner.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { itemKey } from '../../src/main/lib/shared-library/format'
@@ -238,6 +238,28 @@ describe('Shared Library export (#574) — integration', () => {
     expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, c1].sort())
   })
 
+  it('kill mid-file, then the title folder becomes a plain file: the resume fails that item, not the drive (#614 review)', async () => {
+    const { a1, b1, c1 } = seedPc(env)
+    const kill = hangOn(/Beta Show - 01 \[Studio\]\.mp4\.anime-dl-tmp$/)
+    const doomed = env.restart({ xfs: kill.xfs })
+    const r = await doomed.start({ selection: sel(a1, b1, c1), target: env.drive, name: 'Trip' })
+    expect(r.ok).toBe(true)
+    await kill.hung
+    const root = path.join(env.drive, 'Trip')
+    fs.rmSync(path.join(root, 'Beta Show'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'Beta Show'), 'not a folder')
+
+    const svc = env.restart()
+    await svc.init()
+    const [job] = svc.list()
+    await svc.resume(job.jobId)
+    await svc.settled(job.jobId)
+    const done = svc.list()[0]
+    expect(done.status).toBe('completed')
+    expect(done.failed.map((f) => f.key)).toEqual([b1])
+    expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, c1].sort())
+  })
+
   it('re-plug at a different path: resumes by libraryId there, and the impostor at the old path is unchanged', async () => {
     const { a1, a2, b1, c1 } = seedPc(env)
     const mountA = path.join(env.dir, 'mountA')
@@ -362,6 +384,41 @@ describe('Shared Library export (#574) — integration', () => {
     expect(svc.list()[0].status).toBe('completed')
     expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, a2, b1, c1].sort())
     expect(Object.keys(scan(root)).some((f) => f.endsWith(TMP_SUFFIX))).toBe(false)
+  })
+
+  it('a plain file at .anime-dl/meta: a snapshot warning, not a lost drive; the videos are copied (#614 review)', async () => {
+    const { a1, b1 } = seedPc(env)
+    const root = path.join(env.drive, 'Trip')
+    await seedLibrary(root, { libraryId: OTHER_LIB, name: 'Trip' })
+    fs.writeFileSync(path.join(root, LIBRARY_DIR, 'meta'), 'not a folder')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const job = await startOk(env, [a1, b1], 'Trip')
+      await env.svc.settled(job.jobId)
+      const done = env.svc.list()[0]
+      expect(done.status).toBe('completed')
+      expect(done.failed).toEqual([])
+      expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, b1].sort())
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('snapshot of 101 failed'))).toBe(
+        true
+      )
+      expect(fs.readFileSync(path.join(root, LIBRARY_DIR, 'meta'), 'utf8')).toBe('not a folder')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a plain file where a title folder should be: that item fails, the job completes (#614 review)', async () => {
+    const { a1, b1 } = seedPc(env)
+    const root = path.join(env.drive, 'Trip')
+    await seedLibrary(root, { libraryId: OTHER_LIB, name: 'Trip' })
+    fs.writeFileSync(path.join(root, 'Alpha Show'), 'not a folder')
+    const job = await startOk(env, [a1, b1], 'Trip')
+    await env.svc.settled(job.jobId)
+    const done = env.svc.list()[0]
+    expect(done.status).toBe('completed')
+    expect(done.failed.map((f) => f.key)).toEqual([a1])
+    expect(manifestOf(root).items.map(itemKey)).toEqual([b1])
   })
 
   it('a drive pulled while a title’s meta is written: the resume writes its meta and poster (#614 review)', async () => {

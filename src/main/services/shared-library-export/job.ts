@@ -28,6 +28,7 @@ import {
   TMP_SUFFIX,
   VerifyError,
   copyVerified,
+  errnoOf,
   unlinkQuiet,
   writeSmallFile,
   type ExportFs
@@ -360,8 +361,11 @@ export class ExportJob {
     try {
       await writeTitleSnapshot(this.deps.xfs, this.rec.root, meta, posterFile)
     } catch (err) {
-      // A pulled drive isn't a snapshot failure: rethrow, so the title stays unmarked and the resume retries it.
-      if (isDriveError(err)) throw err
+      // A pulled drive isn't a snapshot failure: the title stays unmarked and
+      // the resume retries it. Decided as `copyItem`'s failures are, by whether
+      // the root still holds this library, not by errno: a plain file at
+      // `.anime-dl/meta` gives ENOTDIR with the drive plugged in.
+      if (!(await this.identityOk())) throw new DriveGoneError((err as Error).message)
       console.warn(`[export] snapshot of ${animeId} failed:`, err)
     }
     this.rec.snapshotted.push(animeId)
@@ -407,7 +411,14 @@ export class ExportJob {
     const cur = this.rec.current
     if (!cur) return
     const dest = await resolveWriteTarget(this.rec.root, cur.rel).catch(() => 'escapes' as const)
-    if (dest !== 'escapes') await unlinkQuiet(this.deps.xfs, `${dest}${TMP_SUFFIX}`)
+    if (dest !== 'escapes') {
+      try {
+        await unlinkQuiet(this.deps.xfs, `${dest}${TMP_SUFFIX}`)
+      } catch (err) {
+        // A plain file where the folder was: no tmp can be under it.
+        if (errnoOf(err) !== 'ENOTDIR') throw err
+      }
+    }
     this.rec.current = null
   }
 
@@ -480,7 +491,9 @@ export class ExportJob {
     } catch (err) {
       this.inFlight = 0
       this.copyAbort = null
-      if (err instanceof DriveGoneError || isDriveError(err)) {
+      // An errno alone isn't a lost drive (ENOTDIR from a plain file in the
+      // library, ENOENT from a vanished source): the root must have lost it too.
+      if (err instanceof DriveGoneError || (isDriveError(err) && !(await this.identityOk()))) {
         if (this.stop) {
           await this.setStatus(this.stop === 'pause' ? 'paused' : 'cancelled')
           return

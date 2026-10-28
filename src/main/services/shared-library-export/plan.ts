@@ -251,18 +251,37 @@ export async function classifyTarget(
     m.owner !== null &&
     (shikimoriUserId === null || m.owner.shikimoriId !== shikimoriUserId)
   if (foreign) {
+    // The siblings `<name>`, `<name> (2)`, … in order. The first Videos-only
+    // library among them is the one an earlier export made (anyone may add to
+    // a library with no owner), so a re-export adds to it and `present`
+    // applies. A free name ends the search with a new library; anything else
+    // (another foreign, an own With metadata or a read-only library, or a
+    // plain folder) is skipped.
+    const ownerNickname = m.owner?.nickname || 'another user'
     const parent = atDir ? path.dirname(dir) : dir
-    let sibling = path.join(parent, libraryFolderName(libName))
-    for (let n = 2; await pathExists(sibling); n++) {
-      sibling = path.join(parent, libraryFolderName(`${libName} (${n})`))
-    }
-    return {
-      kind: 'foreign',
-      root: sibling,
-      libraryName: libName,
-      ownerNickname: m.owner?.nickname || 'another user',
-      blocked: null,
-      manifest: null
+    for (let n = 1; ; n++) {
+      const sibling = path.join(parent, libraryFolderName(n === 1 ? libName : `${libName} (${n})`))
+      if (!(await pathExists(sibling))) {
+        return {
+          kind: 'foreign',
+          root: sibling,
+          libraryName: libName,
+          ownerNickname,
+          blocked: null,
+          manifest: null
+        }
+      }
+      const s = await readLibrary(sibling)
+      if (s.status === 'ok' && s.manifest.mode === 'videos' && s.manifest.owner === null) {
+        return {
+          kind: 'add',
+          root: sibling,
+          libraryName: s.manifest.name ?? path.basename(sibling),
+          ownerNickname,
+          blocked: null,
+          manifest: s.manifest
+        }
+      }
     }
   }
   const existingName = m?.name ?? path.basename(root)

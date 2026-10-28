@@ -364,6 +364,93 @@ describe('Shared Library export (#574) — integration', () => {
     expect(Object.keys(scan(root)).some((f) => f.endsWith(TMP_SUFFIX))).toBe(false)
   })
 
+  it('a drive pulled while a title’s meta is written: the resume writes its meta and poster (#614 review)', async () => {
+    const { a1, b1 } = seedPc(env)
+    fs.mkdirSync(path.join(env.userData, 'poster-cache'))
+    const poster = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 7, 7, 7])
+    fs.writeFileSync(path.join(env.userData, 'poster-cache', '101.jpg'), poster)
+    const root = path.join(env.drive, 'Trip')
+    const away = path.join(env.dir, 'unplugged')
+    let pulled = false
+    const timers: (() => void)[] = []
+    const svc = env.restart({
+      setTimer: (fn) => {
+        timers.push(fn)
+        return timers.length
+      },
+      clearTimer: () => {},
+      xfs: {
+        open: async (p, flags) => {
+          if (!pulled && p.endsWith(path.join('meta', `101.json${TMP_SUFFIX}`))) {
+            pulled = true
+            fs.renameSync(root, away)
+          }
+          return nodeFs.open(p, flags)
+        }
+      }
+    })
+    const r = await svc.start({ selection: sel(a1, b1), target: env.drive, name: 'Trip' })
+    if (!r.ok) throw new Error(r.reason)
+    await svc.settled(r.job.jobId)
+    expect(pulled).toBe(true)
+    expect(svc.list()[0].status).toBe('waiting-drive')
+
+    fs.renameSync(away, root)
+    timers.shift()!()
+    await svc.settled(r.job.jobId)
+    expect(svc.list()[0].status).toBe('completed')
+    expect(fs.existsSync(path.join(root, LIBRARY_DIR, 'meta', '101.json'))).toBe(true)
+    expect(fs.readFileSync(path.join(root, LIBRARY_DIR, 'posters', '101.jpg'))).toEqual(poster)
+    expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, b1].sort())
+  })
+
+  it('pause mid-file: the paused job’s bytesDone leaves out the aborted file’s partial bytes (#614 review)', async () => {
+    const a1 = env.addEpisode({
+      animeId: 101,
+      title: 'Alpha Show',
+      episodeInt: '1',
+      translationId: 11
+    })
+    const a2 = env.addEpisode({
+      animeId: 101,
+      title: 'Alpha Show',
+      episodeInt: '2',
+      translationId: 12,
+      bytes: 3 * 1024 * 1024
+    })
+    let jobId = ''
+    let svc: ReturnType<ExportEnv['restart']> | null = null
+    let paused: Promise<unknown> | null = null
+    svc = env.restart({
+      xfs: {
+        open: async (p, flags) => {
+          const h = await nodeFs.open(p, flags)
+          if (!/Alpha Show - 02 .*\.anime-dl-tmp$/.test(p)) return h
+          return {
+            ...h,
+            write: async (buf) => {
+              await h.write(buf)
+              // The first 1 MB chunk is down; the user presses Pause.
+              paused ??= svc!.pause(jobId)
+            }
+          }
+        }
+      }
+    })
+    const r = await svc.start({ selection: sel(a1.key, a2.key), target: env.drive, name: 'Trip' })
+    if (!r.ok) throw new Error(r.reason)
+    jobId = r.job.jobId
+    await svc.settled(jobId)
+    await paused
+    const a1Size = fs.statSync(a1.video).size
+    const job = svc.list()[0]
+    expect(job.status).toBe('paused')
+    expect(job.filesDone).toBe(1)
+    expect(job.bytesDone).toBe(a1Size)
+    const lastPaused = env.updates.filter((u) => u.status === 'paused').at(-1)
+    expect(lastPaused?.bytesDone).toBe(a1Size)
+  })
+
   it('cancel: the library stays valid with the finished items', async () => {
     const { a1, a2, b1, c1 } = seedPc(env)
     let cancelSvc: (() => void) | null = null
@@ -507,6 +594,36 @@ describe('Shared Library export (#574) — integration', () => {
     if (sibling.status !== 'ok') return
     expect(sibling.manifest.libraryId).not.toBe(OTHER_LIB)
     expect(sibling.manifest.items.map(itemKey).sort()).toEqual([a1, b1].sort())
+  })
+
+  it('a re-export next to a foreign library adds to the sibling the first export made (#614 review)', async () => {
+    const { a1, b1 } = seedPc(env)
+    const foreign = path.join(env.drive, 'Trip')
+    await seedLibrary(foreign, {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: { shikimoriId: 777, nickname: 'friend' }
+    })
+    const before = scan(foreign)
+    const first = await startOk(env, [a1], 'Trip')
+    await env.svc.settled(first.jobId)
+    const sibling = path.join(env.drive, 'Trip (2)')
+    const firstId = manifestOf(sibling).libraryId
+
+    const plan = await env.svc.plan({ animeIds: [101, 202], target: env.drive, name: 'Trip' })
+    expect(plan.target?.root).toBe(sibling)
+    expect(plan.target?.kind).toBe('add')
+    expect(plan.target?.ownerNickname).toBe('friend')
+    expect(plan.target?.present).toEqual([a1])
+
+    const second = await startOk(env, [a1, b1], 'Trip')
+    expect(second.filesTotal).toBe(2)
+    await env.svc.settled(second.jobId)
+    expect(fs.existsSync(path.join(env.drive, 'Trip (3)'))).toBe(false)
+    const m = manifestOf(sibling)
+    expect(m.libraryId).toBe(firstId)
+    expect(m.items.map(itemKey).sort()).toEqual([a1, b1].sort())
+    expect(scan(foreign)).toEqual(before)
   })
 
   it('a symlinked title folder leading out of the root: the file is skipped and nothing lands outside', async () => {

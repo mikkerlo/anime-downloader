@@ -360,6 +360,8 @@ export class ExportJob {
     try {
       await writeTitleSnapshot(this.deps.xfs, this.rec.root, meta, posterFile)
     } catch (err) {
+      // A pulled drive isn't a snapshot failure: rethrow, so the title stays unmarked and the resume retries it.
+      if (isDriveError(err)) throw err
       console.warn(`[export] snapshot of ${animeId} failed:`, err)
     }
     this.rec.snapshotted.push(animeId)
@@ -449,7 +451,11 @@ export class ExportJob {
         try {
           await this.copyItem(item, source)
         } catch (err) {
-          if ((err as Error).name === 'AbortError') break
+          if ((err as Error).name === 'AbortError') {
+            this.inFlight = 0
+            this.copyAbort = null
+            break
+          }
           if (err instanceof EscapeError) {
             console.warn(`[export] skipped ${item.key}: ${err.message}`)
             this.rec.failed[item.key] = err.message

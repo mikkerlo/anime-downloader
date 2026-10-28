@@ -128,6 +128,16 @@ describe('ExportDialog (#574)', () => {
     expect(startButton(w).disabled).toBe(false)
   })
 
+  it('next to a foreign library, says the export adds to the earlier sibling', async () => {
+    const w = await open(
+      target({ kind: 'add', ownerNickname: 'friend', libraryName: 'Trip', root: '/drive/Trip (2)' })
+    )
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe(
+      "This drive has friend's library. Your export adds to 'Trip' (Videos only) next to it."
+    )
+    expect(startButton(w).disabled).toBe(false)
+  })
+
   it('does not count items already on the drive', async () => {
     const w = await open(target({ kind: 'add', present: ['1:2:11'], free: 1500 }))
     expect(w.find('[data-testid="export-target-line"]').text()).toBe(

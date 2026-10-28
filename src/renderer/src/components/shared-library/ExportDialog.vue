@@ -47,7 +47,10 @@ const targetLine = computed(() => {
     case 'new':
       return `New library '${t.libraryName}'`;
     case 'add':
-      return `Adds to '${t.libraryName}' (Videos only)`;
+      // Next to a foreign library: the sibling an earlier export made.
+      return t.ownerNickname !== undefined
+        ? `This drive has ${t.ownerNickname}'s library. Your export adds to '${t.libraryName}' (Videos only) next to it.`
+        : `Adds to '${t.libraryName}' (Videos only)`;
     case 'own-metadata':
       return 'This library carries watch state. Adding to it needs With metadata.';
     case 'foreign':

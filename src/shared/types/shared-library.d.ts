@@ -196,7 +196,8 @@ interface ExportTreeTitle {
 /**
  * How the export would treat the chosen folder:
  * - `new`: no library there, one is created at `root`;
- * - `add`: a Videos-only library, added to;
+ * - `add`: a Videos-only library, added to (with `ownerNickname` set when it is
+ *   the sibling an earlier export made next to a foreign library);
  * - `own-metadata`: a With metadata library owned by this PC's account, blocked
  *   until S6e (#586);
  * - `foreign`: a With metadata library owned by someone else (or claimed), never
@@ -214,7 +215,7 @@ interface ExportTarget {
   kind: ExportTargetKind
   /** The library's name: the existing one's, or the one to create. */
   libraryName: string
-  /** `foreign`: whose library is there. */
+  /** `foreign`, or `add` next to a foreign library: whose library is at the picked folder. */
   ownerNickname?: string
   /** Why the export is blocked (`own-metadata`, `read-only`); null when it isn't. */
   blocked: string | null

@@ -351,9 +351,11 @@ export function createSharedLibraryExportService(
       missing,
       snapshotted: [],
       note:
-        t.kind === 'foreign'
-          ? `This drive has ${t.ownerNickname}'s library; this export went into a new library next to it.`
-          : null,
+        t.ownerNickname === undefined
+          ? null
+          : t.kind === 'foreign'
+            ? `This drive has ${t.ownerNickname}'s library; this export went into a new library next to it.`
+            : `This drive has ${t.ownerNickname}'s library; this export added to '${t.libraryName}' next to it.`,
       error: null
     }
     await persist(rec)

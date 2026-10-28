@@ -181,7 +181,7 @@ The user picks titles, translations and episodes, a folder and a library name, a
 | No library | `new`: create `<folder>/<name>/` with `mode: 'videos'` and `owner: null` |
 | A Videos-only library (`owner: null`), made by any PC | `add`: anyone may add to it, a PC with no account included |
 | A With metadata library owned by this PC's account | `own-metadata`: blocked ("This library carries watch state…"). S6e (#586) routes it to With metadata |
-| A With metadata library with any other owner, or a claim | `foreign`: never written; the export creates a sibling library, `<name>`, `<name> (2)`, … next to it |
+| A With metadata library with any other owner, or a claim | `foreign`: never written. The siblings `<name>`, `<name> (2)`, … are checked in order: the first Videos-only library among them (the one an earlier export made; anyone may add to it) is added to, as `add` with the owner's nickname, so a re-export copies only what's new; the first free name gets a new library; any other library or plain folder is skipped |
 | A library this version can't write (a newer major, over a cap, interrupted) | `read-only`: blocked with the reader's message |
 
 The size estimate counts only items the library doesn't already have with the same key and the same size (`present`). Free space is `statfs(folder)` against those bytes plus a 1% margin (`fitsFreeSpace`, `src/shared/shared-library-export.ts`, shared by the dialog's live bar and main's start check). The start also refuses an empty copy, a library that would pass the 200k item cap, and a second job while one runs.

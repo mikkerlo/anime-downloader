@@ -180,6 +180,46 @@ describe('the target table', () => {
     }
   })
 
+  it('next to a foreign library: the first Videos-only sibling in name order is added to; others are skipped', async () => {
+    env = makeExportEnv()
+    const friend = { shikimoriId: 777, nickname: 'friend' }
+    await seedLibrary(path.join(env.drive, 'Trip'), {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: friend
+    })
+    // (2) another foreign library, (3) a plain folder, (4) this user's own
+    // With metadata library, (5) a Videos-only library: (5) is the one.
+    await seedLibrary(path.join(env.drive, 'Trip (2)'), {
+      libraryId: '2a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
+      name: 'Trip',
+      owner: { shikimoriId: 888, nickname: 'other' }
+    })
+    fs.mkdirSync(path.join(env.drive, 'Trip (3)'))
+    await seedLibrary(path.join(env.drive, 'Trip (4)'), {
+      libraryId: '4a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
+      name: 'Trip',
+      owner: { shikimoriId: ME, nickname: 'me' }
+    })
+    await seedLibrary(path.join(env.drive, 'Trip (5)'), {
+      libraryId: '5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
+      name: 'Trip'
+    })
+    const t = await classifyTarget(env.drive, 'Trip', ME, exists)
+    expect(t).toMatchObject({
+      kind: 'add',
+      root: path.join(env.drive, 'Trip (5)'),
+      ownerNickname: 'friend',
+      blocked: null
+    })
+    expect(t.manifest?.libraryId).toBe('5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d')
+
+    // With no Videos-only sibling, the first free name.
+    fs.rmSync(path.join(env.drive, 'Trip (5)'), { recursive: true })
+    const fresh = await classifyTarget(env.drive, 'Trip', ME, exists)
+    expect(fresh).toMatchObject({ kind: 'foreign', root: path.join(env.drive, 'Trip (5)') })
+  })
+
   it('a library this version can’t write: blocked with the reader’s message', async () => {
     env = makeExportEnv()
     const root = path.join(env.drive, 'Trip')

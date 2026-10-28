@@ -309,6 +309,40 @@ describe('SearchView — a chip clicked while a new local search is in flight (#
     await flushPromises()
     await expectNewQuery(wrapper)
   })
+
+  it("a later chip click wins over an earlier one's late response", async () => {
+    const byGenre: Record<string, ReturnType<typeof deferred<LocalSearchResponse>>> = {
+      Drama: deferred(),
+      Action: deferred()
+    }
+    const searchLocal = vi.fn((_q: string, filters?: LocalSearchFilters) =>
+      filters?.genre
+        ? byGenre[filters.genre].promise
+        : Promise.resolve({ results: OLD, corpusSize: 3 })
+    )
+    stubApi({ searchLocal }, 'offline-manual')
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'old')
+    const click = async (genre: string): Promise<void> => {
+      await wrapper
+        .find('[data-testid="genre-chips"]')
+        .findAll('.pill-tab')
+        .find((t) => t.text() === genre)!
+        .trigger('click')
+    }
+    await click('Drama')
+    await click('Action')
+
+    // Distinct fake hits per chip, so the card ids say whose response painted.
+    byGenre.Action.resolve({ results: [OLD[1]], corpusSize: 3 })
+    await flushPromises()
+    byGenre.Drama.resolve({ results: [OLD[0]], corpusSize: 3 })
+    await flushPromises()
+
+    expect(cardIds(wrapper, '.local-grid')).toEqual([2])
+    expect(activeGenre(wrapper)).toEqual(['Action'])
+  })
 })
 
 describe('SearchView — the Starred badge follows the star (#612 review)', () => {

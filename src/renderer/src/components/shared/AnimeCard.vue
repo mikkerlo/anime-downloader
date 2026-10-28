@@ -5,18 +5,23 @@ import { useLibraryStore } from '../../stores/library';
 
 // `prioritized` is optional so a grid that has not bound it still mounts and
 // renders an inert (un-filled) priority flag rather than throwing.
+// `selectable` shows a checkbox for the Library's multi-select (#574); the
+// grid decides what a click on the card means while it is on.
 const props = withDefaults(
   defineProps<{
     anime: AnimeSearchResult;
     starred: boolean;
     prioritized?: boolean;
+    selectable?: boolean;
+    selected?: boolean;
   }>(),
-  { prioritized: false }
+  { prioritized: false, selectable: false, selected: false }
 );
 
 const emit = defineEmits<{
   toggleStar: [anime: AnimeSearchResult];
   togglePriority: [anime: AnimeSearchResult];
+  toggleSelect: [anime: AnimeSearchResult];
 }>();
 
 const libraryStore = useLibraryStore();
@@ -41,8 +46,18 @@ function onPosterError(): void {
 </script>
 
 <template>
-  <div class="acard">
+  <div class="acard" :class="{ selected: selectable && selected }">
     <div class="poster-wrap">
+      <input
+        v-if="selectable"
+        type="checkbox"
+        class="select-box"
+        data-testid="card-select"
+        :checked="selected"
+        :aria-label="`Select ${anime.title}`"
+        @click.stop
+        @change="emit('toggleSelect', anime)"
+      />
       <img
         :src="posterSrc"
         :alt="anime.title"
@@ -98,3 +113,21 @@ function onPosterError(): void {
     </div>
   </div>
 </template>
+
+<style scoped>
+.select-box {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.acard.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+</style>

@@ -67,6 +67,16 @@ export const CHANNELS = {
   DOWNLOAD_RESUME_ALL: 'download:resume-all',
   DOWNLOAD_SCAN_MERGE: 'download:scan-merge',
 
+  // Shared Library export (#574)
+  EXPORT_CANCEL: 'export:cancel',
+  EXPORT_LIST_JOBS: 'export:list-jobs',
+  EXPORT_LOCATE_TARGET: 'export:locate-target',
+  EXPORT_PAUSE: 'export:pause',
+  EXPORT_PICK_TARGET: 'export:pick-target',
+  EXPORT_PLAN: 'export:plan',
+  EXPORT_RESUME: 'export:resume',
+  EXPORT_START: 'export:start',
+
   // ffmpeg
   FFMPEG_CHECK: 'ffmpeg:check',
   FFMPEG_DELETE: 'ffmpeg:delete',
@@ -225,6 +235,9 @@ export const EVENT_CHANNELS = {
 
   // Downloads
   DOWNLOAD_PROGRESS: 'download:progress',
+
+  // Shared Library export (#574)
+  EXPORT_JOB_UPDATED: 'export:job-updated',
 
   // ffmpeg
   FFMPEG_DOWNLOAD_PROGRESS: 'ffmpeg:download-progress',

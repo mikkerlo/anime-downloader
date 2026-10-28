@@ -50,6 +50,7 @@ import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
 import { createPlayerPresenceService } from './services/player-presence'
+import { createSharedLibraryExportService } from './services/shared-library-export'
 import { createAttachedLibraryService } from './services/attached-library'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
@@ -398,6 +399,24 @@ const shikimoriSyncService = createShikimoriSyncService({
 shikimori.setOnSessionExpired(() => shikimoriSyncService.broadcastSyncStatus())
 let downloadManager: DownloadManager
 
+// Export to a Shared Library (#574). Reads the merge status lazily, so the
+// manager can be constructed later in `bootstrap()`.
+const sharedLibraryExport = createSharedLibraryExportService({
+  userDataDir: app.getPath('userData'),
+  store,
+  scanEpisodeFiles: fileScanner.scanEpisodeFilesAsync,
+  sanitizeFilename,
+  mergeStatus: (translationId) => downloadManager.getMergeStatus(translationId),
+  presence: playerPresenceService,
+  actor: () => ({
+    installId: store.ensureInstallId(),
+    appVersion: app.getVersion(),
+    shikimoriUserId: (store.get('shikimoriUser') as { id: number } | null)?.id ?? null,
+    claim: null
+  }),
+  broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job)
+})
+
 const skipAnalysisService = createSkipAnalysisService({
   store,
   scanEpisodeFiles,
@@ -628,7 +647,8 @@ function registerIpcHandlers(): void {
     playerPresenceService,
     offlineService,
     recentWatch,
-    attachedLibraryService
+    attachedLibraryService,
+    sharedLibraryExport
   })
 }
 
@@ -778,16 +798,19 @@ async function bootstrap(): Promise<void> {
     }
   })
 
-  // One callback slot, not a list: a second `onVideoDownloaded(...)` anywhere
-  // would silently unregister this one, taking both the metadata write and the
-  // mp4-faststart probe with it. That is the one constraint here that is about
-  // the wiring rather than about the tail, so it keeps a counted source-text
-  // guard of its own — `registers onVideoDownloaded exactly once`, in
-  // `test/services/download-manager-episode-metadata.test.ts`, which is where
-  // that consumer pair is exercised end to end. The tail's own
-  // write-above-the-filter ordering is a different claim and is asserted
+  // A listener list (#574): later subscribers (S6c, S6d) append after this one
+  // and can't unregister it. Registered here exactly once, before anything
+  // else subscribes, so the metadata write and the mp4-faststart probe run
+  // first; `download-manager-episode-metadata.test.ts` guards the single
+  // registration and `download-manager-hooks.test.ts` that two listeners both
+  // fire. The tail's own write-above-the-filter ordering is asserted
   // behaviourally, in `test/lib/episode-completion.test.ts`.
   downloadManager.onVideoDownloaded(episodeCompletion.handleVideoDownloaded)
+
+  // An export a quit or crash interrupted shows as paused (#574).
+  void sharedLibraryExport
+    .init()
+    .catch((err) => console.error('[export] Loading saved export jobs failed:', err))
 
   // Register IPC BEFORE creating the window: the renderer mounts as soon as
   // the window loads, and it used to race a multi-second awaited ensureFfmpeg

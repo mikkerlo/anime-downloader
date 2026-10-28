@@ -511,6 +511,26 @@ const api = {
   offlineRetry: () => ipcRenderer.invoke(CHANNELS.OFFLINE_RETRY) as Promise<OfflineState>,
   onOfflineStateChanged: subscribe<OfflineState>(EVENT_CHANNELS.OFFLINE_STATE_CHANGED),
 
+  // Shared Library export (#574)
+  exportPlan: (req: ExportPlanRequest) =>
+    ipcRenderer.invoke(CHANNELS.EXPORT_PLAN, req) as Promise<ExportPlan>,
+  exportStart: (req: ExportStartRequest) =>
+    ipcRenderer.invoke(CHANNELS.EXPORT_START, req) as Promise<ExportStartResult>,
+  exportPause: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.EXPORT_PAUSE, jobId) as Promise<ExportJobView | null>,
+  exportResume: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.EXPORT_RESUME, jobId) as Promise<ExportJobView | null>,
+  exportCancel: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.EXPORT_CANCEL, jobId) as Promise<ExportJobView | null>,
+  exportListJobs: () => ipcRenderer.invoke(CHANNELS.EXPORT_LIST_JOBS) as Promise<ExportJobView[]>,
+  exportPickTarget: () => ipcRenderer.invoke(CHANNELS.EXPORT_PICK_TARGET) as Promise<string | null>,
+  exportLocateTarget: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.EXPORT_LOCATE_TARGET, jobId) as Promise<{
+      ok: boolean
+      reason: string | null
+    }>,
+  onExportJobUpdated: subscribe<ExportJobView>(EVENT_CHANNELS.EXPORT_JOB_UPDATED),
+
   // Shared Library (#578)
   sharedLibraryPickAndDiscover: () =>
     ipcRenderer.invoke(

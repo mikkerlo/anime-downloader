@@ -3,10 +3,14 @@ import { ref, onMounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDownloadsStore } from '../../stores/downloads';
 import { useOfflineStore } from '../../stores/offline';
+import { useExportStore } from '../../stores/export';
+import ExportJobCard from '../shared-library/ExportJobCard.vue';
 import { formatBytes, formatSpeed, formatEta } from '../../utils';
 
 const downloadsStore = useDownloadsStore();
 const { groups } = storeToRefs(downloadsStore);
+// Shared Library export jobs (#574) sit above the download queue.
+const { jobs: exportJobs } = storeToRefs(useExportStore());
 // Offline main leaves queued items queued (#567); say why they don't start (#568).
 const { isOffline } = storeToRefs(useOfflineStore());
 const WAITING = 'waiting for connection';
@@ -171,7 +175,8 @@ async function mergeFinished(): Promise<void> {
       </div>
     </header>
     <div class="body">
-      <div v-if="groups.length === 0" class="empty-state">
+      <ExportJobCard v-for="job in exportJobs" :key="job.jobId" :job="job" />
+      <div v-if="groups.length === 0 && exportJobs.length === 0" class="empty-state">
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
             <path
@@ -183,7 +188,7 @@ async function mergeFinished(): Promise<void> {
         </div>
         <p>No downloads yet. Open an anime and click "Download All".</p>
       </div>
-      <template v-else>
+      <template v-else-if="groups.length > 0">
         <div class="dl-summary">
           <div class="dl-stat">
             <span class="n active">{{ summary.active }}</span>

@@ -330,8 +330,8 @@ mergeCompleted(ffmpegPath, videoCodec):
     4. Subtitle track title set to translator name (authorsSummary)
     5. Progress calculated from timemark/duration (works for all codecs including GPU)
     6. Delete source .mp4 and .ass after successful merge
-    7. Fire mergeCompleteCallback -> onMergeComplete, AFTER the delete and not
-       awaited. Ordering is load-bearing (#414): the handler's cold move
+    7. Fire the onMergeComplete listeners (each through its own dispatchHook,
+       #574), AFTER the delete and not awaited. Ordering is load-bearing (#414): the handler's cold move
        snapshots the hot directory, so firing above the delete let the move
        relocate a source the merge was about to unlink and then fail on one it
        had already unlinked. The payload carries the merged .mkv's
@@ -375,14 +375,28 @@ fixMetadata(ffmpegPath, ffprobePath):
 
 ## DownloadManager Hook Boundary
 
-`DownloadManager` dispatches to four consumer callbacks — `onVideoDownloaded`,
-`onEpisodeComplete`, `onMergeComplete`, `onQueueComplete`. All four are
-registered once in `src/main/index.ts` and all four are implemented by
-`src/main/lib/episode-completion.ts`. One slot each, not a list: a second
-registration silently replaces the first.
+`DownloadManager` dispatches to four consumer hooks — `onVideoDownloaded`,
+`onEpisodeComplete`, `onMergeComplete`, `onQueueComplete`. Boot
+(`src/main/index.ts`) registers episode completion on all four, implemented by
+`src/main/lib/episode-completion.ts`, before anything else subscribes.
 
-**One error policy for all four (#428).** Every dispatch goes through the
-manager's private `dispatchHook`, which:
+**Two lists, two slots (#574).** `onVideoDownloaded` and `onMergeComplete` are
+listener lists (`src/main/lib/listener-set.ts`): each registration appends,
+listeners fire in registration order, and each call returns an unsubscribe that
+removes only its own registration. Shared Library export work (S6c #576, S6d
+#577) subscribes to them next to episode completion, and can no longer
+unregister it — on the old single slot a second registration silently replaced
+the first. `onEpisodeComplete` and `onQueueComplete` stay single slots: nothing
+else subscribes to them. `playerPresenceService.onRelease` (`docs/ffmpeg.md`) is
+a list for the same reason.
+
+**One error policy for all four (#428), per listener.** Every listener is
+dispatched through its own call of the manager's private `dispatchHook`, so one
+failing listener can't stop another, and a rejecting `onVideoDownloaded`
+listener still marks the video row. When several listeners reject for one item,
+`item.error` keeps only the **last** message: a subscriber that needs its own
+failure reported records it itself (the export listeners keep their errors on
+the export job and never mark a download row). `dispatchHook`:
 
 - calls the consumer inside a `try`, and — if the consumer handed back a
   thenable — attaches a `.catch` to it, so a synchronous throw and a rejected

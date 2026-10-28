@@ -373,6 +373,17 @@ interface Api {
   offlineRetry: () => Promise<OfflineState>
   onOfflineStateChanged: (callback: (state: OfflineState) => void) => Unsubscribe
 
+  // Shared Library export (#574)
+  exportPlan: (req: ExportPlanRequest) => Promise<ExportPlan>
+  exportStart: (req: ExportStartRequest) => Promise<ExportStartResult>
+  exportPause: (jobId: string) => Promise<ExportJobView | null>
+  exportResume: (jobId: string) => Promise<ExportJobView | null>
+  exportCancel: (jobId: string) => Promise<ExportJobView | null>
+  exportListJobs: () => Promise<ExportJobView[]>
+  exportPickTarget: () => Promise<string | null>
+  exportLocateTarget: (jobId: string) => Promise<{ ok: boolean; reason: string | null }>
+  onExportJobUpdated: (callback: (job: ExportJobView) => void) => Unsubscribe
+
   // Shared Library (#578)
   /** Folder picker, then the libraries in it and one level below. */
   sharedLibraryPickAndDiscover: () => Promise<SharedLibraryDiscovery>

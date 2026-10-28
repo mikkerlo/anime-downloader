@@ -38,6 +38,7 @@ import * as syncplayRouter from './syncplay.ipc'
 import * as debugRouter from './debug.ipc'
 import * as offlineRouter from './offline.ipc'
 import * as sharedLibraryRouter from './shared-library.ipc'
+import type { SharedLibraryExportService } from '../services/shared-library-export'
 import type { FileCheckResult } from '../lib/episode-file-scan'
 
 export interface FfmpegInfo {
@@ -125,6 +126,8 @@ export interface AppDeps {
    * never storage roots. `player.ipc.ts` asks it after the local resolution.
    */
   attachedLibraryService: AttachedLibraryService
+  /** Export to a Shared Library: plan, jobs, re-plug (#574). */
+  sharedLibraryExport: SharedLibraryExportService
 }
 
 /**

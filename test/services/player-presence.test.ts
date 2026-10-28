@@ -123,6 +123,47 @@ describe('player presence (#516)', () => {
     expect(releases).toBe(15)
   })
 
+  describe('several onRelease listeners (#574)', () => {
+    // On the single slot a second registration replaced the first: an export
+    // subscribing its per-file hold would have unregistered `resumeHeldMerges`.
+
+    it('fires both listeners once on the 1 → 0 edge', () => {
+      let second = 0
+      presence.onRelease(() => second++)
+      const a = fakeSender(1)
+      presence.open(asSender(a))
+      presence.open(asSender(a))
+      presence.close(1)
+      expect([releases, second]).toEqual([0, 0])
+      presence.close(1)
+      expect([releases, second]).toEqual([1, 1])
+    })
+
+    it('after one unsubscribes, only the other fires', () => {
+      let second = 0
+      const off = presence.onRelease(() => second++)
+      off()
+      presence.open(asSender(fakeSender(1)))
+      presence.close(1)
+      expect([releases, second]).toEqual([1, 0])
+    })
+
+    it('a listener that throws does not stop the next one', () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const fresh = createPlayerPresenceService()
+      let after = 0
+      fresh.onRelease(() => {
+        throw new Error('listener failed')
+      })
+      fresh.onRelease(() => after++)
+      fresh.open(asSender(fakeSender(1)))
+      expect(() => fresh.close(1)).not.toThrow()
+      expect(after).toBe(1)
+      expect(err).toHaveBeenCalled()
+      err.mockRestore()
+    })
+  })
+
   describe('the player:view-opened / player:view-closed handlers', () => {
     type Handler = (event: unknown, ...args: unknown[]) => unknown
     let handlers: Map<string, Handler>

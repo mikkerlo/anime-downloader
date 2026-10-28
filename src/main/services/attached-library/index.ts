@@ -19,6 +19,7 @@ import {
   resolveItem as resolveLibraryPath
 } from '../../lib/shared-library/paths'
 import type { StorageService } from '../../store/types'
+import { ATTACHED_POSTER_MAX_BYTES } from '../../streaming/anime-poster-protocol'
 import { checkWritable as defaultCheckWritable, type WritableVerdict } from './writable'
 import { spawnPathFor as spawnPathForRoots, type SpawnPathImpl } from './spawn-path'
 
@@ -84,8 +85,8 @@ interface Opened {
 
 const STORE_KEY = 'attachedLibraries'
 
-/** A drive's poster is untrusted input too; the card never needs more. */
-export const POSTER_MAX_BYTES = 2 * 1024 * 1024
+/** The one poster cap, shared with `anime-poster://`'s capped read. */
+export const POSTER_MAX_BYTES = ATTACHED_POSTER_MAX_BYTES
 
 const containerOf = (p: string): 'mkv' | 'mp4' => (p.toLowerCase().endsWith('.mkv') ? 'mkv' : 'mp4')
 

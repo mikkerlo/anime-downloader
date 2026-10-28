@@ -6,9 +6,36 @@ export interface AnimePosterHandlerDeps {
   posterDir: string
   /** An attached Shared Library's `posters/<animeId>.jpg` (#578), checked under its root. */
   attachedPoster?: (animeId: number) => Promise<string | null>
+  /** The most an attached poster may hold; the drive can swap the file after the check. */
+  attachedPosterMaxBytes?: number
+}
+
+/**
+ * Reads `file` through one handle, at most `max` bytes. Throws when there is
+ * more, so a file swapped after `attachedPoster`'s size check is never read in
+ * full.
+ */
+async function readCapped(file: string, max: number): Promise<Buffer> {
+  const fh = await fs.promises.open(file, 'r')
+  try {
+    const buf = Buffer.alloc(max + 1)
+    let total = 0
+    while (total < buf.length) {
+      const { bytesRead } = await fh.read(buf, total, buf.length - total, null)
+      if (bytesRead === 0) break
+      total += bytesRead
+    }
+    if (total > max) throw new Error(`poster over ${max} bytes`)
+    return buf.subarray(0, total)
+  } finally {
+    await fh.close()
+  }
 }
 
 const SCHEME_PREFIX = 'anime-poster://'
+
+/** A drive's poster is untrusted input; the card never needs more (#578). */
+export const ATTACHED_POSTER_MAX_BYTES = 2 * 1024 * 1024
 
 /** The id in `anime-poster://<id>` when it is a positive integer, else null. */
 export function parsePosterId(url: string): number | null {
@@ -38,7 +65,7 @@ export function createAnimePosterHandler(
       const attached = await deps.attachedPoster?.(id).catch(() => null)
       try {
         if (!attached) throw new Error('no attached poster')
-        data = await fs.promises.readFile(attached)
+        data = await readCapped(attached, deps.attachedPosterMaxBytes ?? ATTACHED_POSTER_MAX_BYTES)
       } catch {
         return new Response('Poster not cached', { status: 404 })
       }

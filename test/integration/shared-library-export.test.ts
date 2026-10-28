@@ -691,6 +691,91 @@ describe('Shared Library export (#574) — integration', () => {
     expect(sibling.manifest.items.map(itemKey).sort()).toEqual([a1, b1].sort())
   })
 
+  describe('the note from before the drive went away comes back (#614 review)', () => {
+    const SIBLING_NOTE =
+      "This drive has friend's library; this export went into a new library next to it."
+
+    /** Exports next to a foreign library; the drive goes (mount point left) mid-file. */
+    async function pulledNextToForeign(e: ExportEnv): Promise<{
+      svc: ReturnType<ExportEnv['restart']>
+      jobId: string
+      root: string
+      away: string
+      timers: (() => void)[]
+      keys: string[]
+    }> {
+      const { a1, a2, b1 } = seedPc(e)
+      await seedLibrary(path.join(e.drive, 'Trip'), {
+        libraryId: OTHER_LIB,
+        name: 'Trip',
+        owner: { shikimoriId: 777, nickname: 'friend' }
+      })
+      const root = path.join(e.drive, 'Trip (2)')
+      const away = path.join(e.dir, 'unplugged')
+      let pulled = false
+      const timers: (() => void)[] = []
+      const svc = e.restart({
+        setTimer: (fn) => {
+          timers.push(fn)
+          return timers.length
+        },
+        clearTimer: () => {},
+        xfs: {
+          open: async (p, flags) => {
+            const h = await nodeFs.open(p, flags)
+            if (!/Alpha Show - 02 .*\.anime-dl-tmp$/.test(p)) return h
+            return {
+              ...h,
+              write: async (buf) => {
+                if (!pulled) {
+                  pulled = true
+                  fs.renameSync(root, away)
+                  fs.mkdirSync(root)
+                }
+                await h.write(buf)
+              }
+            }
+          }
+        }
+      })
+      const r = await svc.start({ selection: sel(a1, a2, b1), target: e.drive, name: 'Trip' })
+      if (!r.ok) throw new Error(r.reason)
+      expect(r.job.note).toBe(SIBLING_NOTE)
+      await svc.settled(r.job.jobId)
+      expect(svc.list()[0].status).toBe('waiting-drive')
+      expect(svc.list()[0].note).toMatch(/^The drive went away: /)
+      return { svc, jobId: r.job.jobId, root, away, timers, keys: [a1, a2, b1] }
+    }
+
+    it('re-plugged and completed: the foreign-sibling note is back, with no drive-gone line', async () => {
+      const { svc, jobId, root, away, timers, keys } = await pulledNextToForeign(env)
+      fs.rmdirSync(root)
+      fs.renameSync(away, root)
+      timers.shift()!()
+      await svc.settled(jobId)
+      const done = svc.list()[0]
+      expect(done.status).toBe('completed')
+      expect(done.note).toBe(SIBLING_NOTE)
+      expect(manifestOf(root).items.map(itemKey).sort()).toEqual([...keys].sort())
+    })
+
+    it('the app restarts while waiting: the saved note survives and comes back on resume', async () => {
+      const { jobId, root, away, keys } = await pulledNextToForeign(env)
+      const svc = env.restart()
+      await svc.init()
+      expect(svc.list()[0].status).toBe('paused')
+      expect(svc.list()[0].note).toMatch(/^The drive went away: /)
+      fs.rmdirSync(root)
+      fs.renameSync(away, root)
+      await svc.resume(jobId)
+      await svc.settled(jobId)
+      const done = svc.list()[0]
+      expect(done.status).toBe('completed')
+      expect(done.note).toBe(SIBLING_NOTE)
+      expect(manifestOf(root).items.map(itemKey).sort()).toEqual([...keys].sort())
+    })
+  })
+
   it('a re-export next to a foreign library adds to the sibling the first export made (#614 review)', async () => {
     const { a1, b1 } = seedPc(env)
     const foreign = path.join(env.drive, 'Trip')

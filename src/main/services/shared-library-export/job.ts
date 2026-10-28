@@ -76,6 +76,8 @@ export interface JobRecord {
   /** Titles whose `meta` and poster this job already wrote. */
   snapshotted: number[]
   note: string | null
+  /** The note a drive-gone note replaced (the foreign-sibling one), restored when the drive is back. */
+  noteBeforeDriveGone?: string | null
   error: string | null
 }
 
@@ -100,6 +102,14 @@ class DriveGoneError extends Error {}
 
 /** The note a lost drive leaves on the job; cleared once a run finds the library again. */
 const DRIVE_GONE_NOTE = 'The drive went away: '
+
+const WHERE_NOTE = / ?(?:Found|Resumed) at .*$/s
+
+/** `line` after `before`, dropping an earlier "Found at" / "Resumed at" so re-plugs don't stack. */
+function withNote(before: string | null, line: string): string {
+  const base = before?.replace(WHERE_NOTE, '') ?? ''
+  return base ? `${base} ${line}` : line
+}
 
 const isTerminal = (s: ExportJobStatus): boolean =>
   s === 'completed' || s === 'cancelled' || s === 'failed'
@@ -188,8 +198,18 @@ export class ExportJob {
   async relocate(root: string): Promise<void> {
     this.disarmRetry()
     this.rec.root = root
-    this.rec.note = `Found at ${root}`
+    const before = this.rec.note?.startsWith(DRIVE_GONE_NOTE)
+      ? this.takeNoteBeforeDriveGone()
+      : this.rec.note
+    this.rec.note = withNote(before, `Found at ${root}`)
     await this.deps.persist(this.rec)
+  }
+
+  /** The note a drive-gone note replaced, now taken off the record. */
+  private takeNoteBeforeDriveGone(): string | null {
+    const note = this.rec.noteBeforeDriveGone ?? null
+    delete this.rec.noteBeforeDriveGone
+    return note
   }
 
   private async setStatus(status: ExportJobStatus): Promise<void> {
@@ -436,16 +456,18 @@ export class ExportJob {
         return
       }
       this.disarmRetry()
-      // The drive is back: a note saying it went away is no longer true. Other
-      // notes (Found at, the foreign-sibling one) stay.
-      if (this.rec.note?.startsWith(DRIVE_GONE_NOTE)) this.rec.note = null
+      // The drive is back: a note saying it went away is no longer true, and
+      // the note it replaced (the foreign-sibling one) comes back.
+      if (this.rec.note?.startsWith(DRIVE_GONE_NOTE)) this.rec.note = this.takeNoteBeforeDriveGone()
       if (found.moved) {
         this.rec.root = found.root
-        this.rec.note =
+        this.rec.note = withNote(
+          this.rec.note,
           `Resumed at ${found.root}` +
-          (found.duplicates.length > 0
-            ? `; the same library is also at ${found.duplicates.join(', ')}`
-            : '')
+            (found.duplicates.length > 0
+              ? `; the same library is also at ${found.duplicates.join(', ')}`
+              : '')
+        )
       }
       await this.loadBase()
       await this.dropLeftoverTmp()
@@ -504,6 +526,10 @@ export class ExportJob {
           await this.setStatus(this.stop === 'pause' ? 'paused' : 'cancelled')
           return
         }
+        // Keep the note this replaces (persisted with the job), unless it is
+        // already a drive-gone note from an earlier pull.
+        if (!this.rec.note?.startsWith(DRIVE_GONE_NOTE))
+          this.rec.noteBeforeDriveGone = this.rec.note
         this.rec.note = `${DRIVE_GONE_NOTE}${(err as Error).message}`
         await this.setStatus('waiting-drive')
         this.armRetry()

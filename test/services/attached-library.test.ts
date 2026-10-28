@@ -13,6 +13,8 @@ import { checkWritable } from '../../src/main/services/attached-library/writable
 import { spawnPathFor } from '../../src/main/services/attached-library/spawn-path'
 import { absoluteOverflow } from '../../src/main/lib/shared-library/paths'
 import { CAPS } from '../../src/main/lib/shared-library/format'
+import { readLibrary } from '../../src/main/lib/shared-library/read'
+import { writeManifest } from '../../src/main/lib/shared-library/write'
 import { createAnimePosterHandler } from '../../src/main/streaming/anime-poster-protocol'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import {
@@ -23,6 +25,7 @@ import {
   state,
   tempRoot,
   tree,
+  LIB,
   OWNER_ID
 } from '../helpers/shared-library'
 import {
@@ -552,6 +555,220 @@ describe('titles, snapshots and checkItem', () => {
       name: 'Fixture library'
     })
     expect(await second.svc.resolveItem(202, '1', 9101)).not.toBeNull()
+  })
+})
+
+describe('refresh after a write (#616)', () => {
+  const WRITER: SharedLibraryActor = {
+    installId: 'pc-export',
+    appVersion: '5.0.29',
+    shikimoriUserId: null,
+    claim: null
+  }
+  const MESHI = 'Dungeon Meshi/Dungeon Meshi - 01 [AniLibria].mkv'
+
+  /** The real store's semantics: `get` and `set` clone (`src/main/store/index.ts`). */
+  function makeCloned(
+    initial: Record<string, unknown> = {},
+    over: Partial<AttachedLibraryServiceDeps> = {}
+  ): Made {
+    const inner = new InMemoryStorage({
+      shikimoriUser: null,
+      shikimoriCredentials: null,
+      downloadedAnime: {},
+      attachedLibraries: {},
+      ...initial
+    })
+    const store = {
+      get: (key: string) => structuredClone(inner.get(key)),
+      set: (key: string, value: unknown) => inner.set(key, structuredClone(value))
+    } as AttachedLibraryServiceDeps['store']
+    return { ...make(initial, { store, ...over }), store: inner }
+  }
+
+  /** What an export's checkpoint does: a Dungeon Meshi episode copied in and the manifest written. */
+  async function exportEpisode(root: string, episodeInt: string): Promise<void> {
+    const r = await readLibrary(root)
+    if (r.status !== 'ok') throw new Error(`unexpected ${r.status}`)
+    const m = r.manifest
+    const rel = `Dungeon Meshi/Dungeon Meshi - 0${episodeInt} [AniLibria].mkv`
+    fs.copyFileSync(path.join(root, MESHI), path.join(root, rel))
+    const base = m.items.find((i) => i.path === MESHI)!
+    await writeManifest(
+      root,
+      {
+        libraryId: m.libraryId,
+        name: m.name,
+        owner: m.owner,
+        mode: m.mode,
+        titles: m.titles,
+        items: [...m.items, { ...base, episodeInt, path: rel }],
+        naming: m.naming
+      },
+      WRITER,
+      m.generation
+    )
+  }
+
+  it('a write into the attached root: the new item lists and resolves, onChanged fires, the record is saved', async () => {
+    let t = 1_000
+    const m = makeCloned({}, { now: () => ++t })
+    const root = videosOnly()
+    await attachAt(m, root)
+    m.onChanged.mockClear()
+    await exportEpisode(root, '2')
+    expect(await m.svc.resolveItem(202, '2', 9101)).toBeNull()
+
+    await m.svc.refresh(FIXTURE_LIBRARY_ID, root)
+    expect(m.onChanged).toHaveBeenCalledTimes(1)
+    const meshi = m.svc.get(FIXTURE_LIBRARY_ID)!.titles.find((x) => x.animeId === 202)!
+    expect(meshi.itemCount).toBe(2)
+    expect((await m.svc.resolveItem(202, '2', 9101))?.path).toBe(
+      fs.realpathSync(path.join(root, 'Dungeon Meshi', 'Dungeon Meshi - 02 [AniLibria].mkv'))
+    )
+    const rec = (m.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>)[
+      FIXTURE_LIBRARY_ID
+    ]
+    expect(rec).toMatchObject({ root, access: 'read-write', lastSeenAt: t })
+  })
+
+  it('an unknown id does nothing', async () => {
+    const m = makeCloned()
+    const root = videosOnly()
+    await attachAt(m, root)
+    m.onChanged.mockClear()
+    const before = structuredClone(m.store.get('attachedLibraries'))
+    await exportEpisode(root, '2')
+    await m.svc.refresh(LIB, root)
+    expect(m.onChanged).not.toHaveBeenCalled()
+    expect(m.store.get('attachedLibraries')).toEqual(before)
+    expect(m.svc.get(LIB)).toBeNull()
+    expect(await m.svc.resolveItem(202, '2', 9101)).toBeNull()
+  })
+
+  it('a newer state major written meanwhile flips access to read-only (version)', async () => {
+    const root = tree({ 'manifest.json': manifest(1, 1), 'state.json': state(1, 1) })
+    const m = makeCloned({ shikimoriUser: OWNER })
+    await m.svc.discover(root)
+    const res = await m.svc.attach(LIB)
+    if (!res.ok) throw new Error(res.error)
+    expect(res.library.access).toBe('read-write')
+    m.onChanged.mockClear()
+    fs.writeFileSync(
+      path.join(root, '.anime-dl', 'state.json'),
+      JSON.stringify(state(2, 1, { stateVersion: 2 }))
+    )
+    await m.svc.refresh(LIB, root)
+    expect(m.onChanged).toHaveBeenCalledTimes(1)
+    expect(m.svc.get(LIB)).toMatchObject({ access: 'read-only', accessReason: 'version' })
+    expect(
+      (m.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>)[LIB]
+    ).toMatchObject({ access: 'read-only', accessReason: 'version' })
+  })
+
+  it('a root that is not the attached copy (the same library on another drive) is a no-op; a symlink to it is not', async () => {
+    let t = 1_000
+    const m = makeCloned({}, { now: () => ++t })
+    const root = videosOnly()
+    await attachAt(m, root)
+    const other = path.join(tempRoot(), 'Other drive')
+    fs.cpSync(root, other, { recursive: true })
+    await exportEpisode(other, '2')
+    m.onChanged.mockClear()
+    const before = structuredClone(m.store.get('attachedLibraries'))
+
+    await m.svc.refresh(FIXTURE_LIBRARY_ID, other)
+    expect(m.onChanged).not.toHaveBeenCalled()
+    expect(m.store.get('attachedLibraries')).toEqual(before)
+    expect(await m.svc.resolveItem(202, '2', 9101)).toBeNull()
+
+    await exportEpisode(root, '2')
+    const link = path.join(tempRoot(), 'link')
+    fs.symlinkSync(root, link, 'dir')
+    await m.svc.refresh(FIXTURE_LIBRARY_ID, link)
+    expect(m.onChanged).toHaveBeenCalledTimes(1)
+    expect((await m.svc.resolveItem(202, '2', 9101))?.libraryId).toBe(FIXTURE_LIBRARY_ID)
+  })
+
+  it('overlapping refreshes run one at a time, and the one that came in during a read re-runs', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let reads = 0
+    let entered!: () => void
+    const blocked = new Promise<void>((r) => (entered = r))
+    const m = makeCloned(
+      {},
+      {
+        checkWritable: async () => {
+          // 1: attach; 2: the first refresh, held mid-read.
+          if (++reads === 2) {
+            entered()
+            await gate
+          }
+          return { kind: 'writable' }
+        }
+      }
+    )
+    const root = videosOnly()
+    await attachAt(m, root)
+    m.onChanged.mockClear()
+
+    await exportEpisode(root, '2')
+    const first = m.svc.refresh(FIXTURE_LIBRARY_ID, root)
+    await blocked
+    await exportEpisode(root, '3')
+    const second = m.svc.refresh(FIXTURE_LIBRARY_ID, root)
+    // Unserialized, the second read would finish here, and the held first one would then overwrite it.
+    await Promise.race([second, new Promise((r) => setTimeout(r, 200))])
+    release()
+    await Promise.all([first, second])
+
+    const meshi = m.svc.get(FIXTURE_LIBRARY_ID)!.titles.find((x) => x.animeId === 202)!
+    expect(meshi.itemCount).toBe(3)
+    expect(await m.svc.resolveItem(202, '3', 9101)).not.toBeNull()
+    expect(reads).toBe(3)
+    expect(m.onChanged).toHaveBeenCalledTimes(2)
+  })
+
+  it('an attach that lands during the read is kept', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let entered!: () => void
+    const blocked = new Promise<void>((r) => (entered = r))
+    const rootA = videosOnly()
+    let reads = 0
+    const m = makeCloned(
+      {},
+      {
+        checkWritable: async (root) => {
+          if (root === rootA && reads++ === 1) {
+            entered()
+            await gate
+          }
+          return { kind: 'writable' }
+        }
+      }
+    )
+    await attachAt(m, rootA)
+    await exportEpisode(rootA, '2')
+    const refreshing = m.svc.refresh(FIXTURE_LIBRARY_ID, rootA)
+    await blocked
+
+    const rootB = tree({ 'manifest.json': manifest(1, null, { mode: 'videos' }) })
+    await attachAt(m, rootB)
+    release()
+    await refreshing
+
+    const saved = m.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>
+    expect(Object.keys(saved).sort()).toEqual([FIXTURE_LIBRARY_ID, LIB].sort())
+    expect(saved[LIB].root).toBe(rootB)
+    expect(
+      m.svc
+        .list()
+        .map((l) => l.libraryId)
+        .sort()
+    ).toEqual([FIXTURE_LIBRARY_ID, LIB].sort())
+    expect(await m.svc.resolveItem(202, '2', 9101)).not.toBeNull()
   })
 })
 

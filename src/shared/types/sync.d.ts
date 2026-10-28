@@ -124,7 +124,7 @@ interface SyncTitleState {
 
 interface SyncDoc {
   stateVersion: 1
-  stateMinor: 0
+  stateMinor: number
   installId: string
   // In-scope titles only, keyed by smotret `animeId`.
   titles: Record<string, SyncTitleState>

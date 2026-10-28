@@ -1,0 +1,88 @@
+{
+  "stateVersion": 1,
+  "stateMinor": 0,
+  "libraryId": "3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90",
+  "generation": 4,
+  "manifestGeneration": 7,
+  "doc": {
+    "stateVersion": 1,
+    "stateMinor": 0,
+    "installId": "pc-owner",
+    "titles": {
+      "101": {
+        "watch": {
+          "1": {
+            "position": {
+              "value": {
+                "position": 40,
+                "duration": 1440,
+                "translationId": 9001
+              },
+              "at": 1004,
+              "origin": "pc-owner"
+            },
+            "watched": {
+              "value": false,
+              "at": 1000,
+              "origin": "pc-owner"
+            },
+            "watchedAt": null
+          },
+          "2": {
+            "position": "broken",
+            "watched": {
+              "value": false,
+              "at": 1000,
+              "origin": "pc-owner"
+            },
+            "watchedAt": null
+          },
+          "3": {
+            "position": {
+              "value": {
+                "position": 40,
+                "duration": 1440,
+                "translationId": 9001
+              },
+              "at": 1004,
+              "origin": "pc-owner"
+            },
+            "watched": {
+              "value": false,
+              "at": 1000,
+              "origin": "pc-owner"
+            },
+            "watchedAt": null
+          }
+        },
+        "starred": {
+          "value": true,
+          "at": 900,
+          "origin": "pc-owner"
+        },
+        "dismissed": [
+          "1",
+          7,
+          "3"
+        ]
+      }
+    },
+    "priorityOrder": {
+      "value": [
+        "101"
+      ],
+      "at": 800,
+      "origin": "pc-owner"
+    },
+    "tombstones": {
+      "202": {
+        "starred": {
+          "deleted": true,
+          "at": 500,
+          "origin": "pc-owner"
+        }
+      },
+      "303": "gone"
+    }
+  }
+}

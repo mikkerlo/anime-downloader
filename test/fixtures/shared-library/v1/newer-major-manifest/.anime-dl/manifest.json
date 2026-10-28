@@ -1,0 +1,31 @@
+{
+  "layoutVersion": 2,
+  "layoutMinor": 0,
+  "libraryId": "3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90",
+  "name": "Test library",
+  "owner": {
+    "shikimoriId": 4242,
+    "nickname": "owner"
+  },
+  "mode": "metadata",
+  "generation": 8,
+  "stateGeneration": 4,
+  "lastWriter": {
+    "installId": "pc-owner",
+    "appVersion": "5.0.24",
+    "at": 1761600000000
+  },
+  "titles": [
+    {
+      "animeId": 101,
+      "name": "Frieren"
+    }
+  ],
+  "items": {
+    "byKey": {}
+  },
+  "naming": {
+    "rule": "v1",
+    "renamed": []
+  }
+}

@@ -14,3 +14,6 @@ src/renderer/public/
 .claude/
 .gemini/
 .github/
+
+# Shared Library golden files (#573): byte-compared against the writer's output.
+test/fixtures/shared-library/v1/

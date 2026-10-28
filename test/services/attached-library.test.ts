@@ -6,12 +6,14 @@ import * as fs from 'fs'
 import * as path from 'path'
 import {
   createAttachedLibraryService,
+  POSTER_MAX_BYTES,
   type AttachedLibraryServiceDeps
 } from '../../src/main/services/attached-library'
 import { checkWritable } from '../../src/main/services/attached-library/writable'
 import { spawnPathFor } from '../../src/main/services/attached-library/spawn-path'
 import { absoluteOverflow } from '../../src/main/lib/shared-library/paths'
 import { CAPS } from '../../src/main/lib/shared-library/format'
+import { createAnimePosterHandler } from '../../src/main/streaming/anime-poster-protocol'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import {
   cleanup,
@@ -461,6 +463,60 @@ describe('titles, snapshots and checkItem', () => {
       [101, true],
       [202, false]
     ])
+  })
+
+  describe('the poster cap', () => {
+    const poster = (root: string): string => path.join(root, '.anime-dl', 'posters', '101.jpg')
+
+    it('holds at serve time: a poster replaced past the cap after attaching is not served', async () => {
+      const root = copyFixtureLibrary()
+      const m = make({ shikimoriUser: OWNER })
+      await attachAt(m, root)
+      expect(await m.svc.posterFor(101)).toMatch(/101\.jpg$/)
+      fs.truncateSync(poster(root), POSTER_MAX_BYTES + 1)
+      expect(await m.svc.posterFor(101)).toBeNull()
+      // Through `anime-poster://`, with an empty local cache: not served.
+      const handler = createAnimePosterHandler({
+        posterDir: tempRoot(),
+        attachedPoster: (id) => m.svc.posterFor(id)
+      })
+      expect((await handler(new Request('anime-poster://101'))).status).toBe(404)
+    })
+
+    it('holds at open: a poster already past the cap is never listed', async () => {
+      const root = copyFixtureLibrary()
+      fs.truncateSync(poster(root), POSTER_MAX_BYTES + 1)
+      const m = make({ shikimoriUser: OWNER })
+      const { res } = await attachAt(m, root)
+      expect(res.library.titles.find((t) => t.animeId === 101)?.hasPoster).toBe(false)
+      expect(await m.svc.posterFor(101)).toBeNull()
+    })
+
+    it('a poster exactly at the cap is served', async () => {
+      const root = copyFixtureLibrary()
+      fs.truncateSync(poster(root), POSTER_MAX_BYTES)
+      const m = make({ shikimoriUser: OWNER })
+      await attachAt(m, root)
+      expect(await m.svc.posterFor(101)).toMatch(/101\.jpg$/)
+    })
+  })
+
+  it('checkItem: a file gone between realpath and stat is missing, not a rejection', async () => {
+    const m = make({ shikimoriUser: OWNER })
+    await attachAt(m, copyFixtureLibrary())
+    const stat = fs.promises.stat
+    vi.spyOn(fs.promises, 'stat').mockImplementation((async (...args: unknown[]) => {
+      if (String(args[0]).endsWith('.mkv')) {
+        throw Object.assign(new Error('gone'), { code: 'ENOENT' })
+      }
+      return (stat as (...a: unknown[]) => Promise<unknown>).apply(fs.promises, args)
+    }) as never)
+    await expect(
+      m.svc.checkItem(FIXTURE_LIBRARY_ID, {
+        path: 'Dungeon Meshi/Dungeon Meshi - 01 [AniLibria].mkv',
+        size: 19727
+      })
+    ).resolves.toBe('missing')
   })
 
   it('checkItem: ok, missing, wrong size, outside the root', async () => {

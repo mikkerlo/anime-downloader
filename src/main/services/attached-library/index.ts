@@ -497,7 +497,8 @@ export function createAttachedLibraryService(
     const r = await resolveLibraryPath(o.root, item)
     if (r.path === 'escapes' || r.subtitlePath === 'escapes') return 'escapes'
     if (r.path === 'missing') return 'missing'
-    const st = await fsp.stat(r.path)
+    const st = await fsp.stat(r.path).catch(() => null)
+    if (!st) return 'missing'
     return st.size === item.size ? 'ok' : 'wrong-size'
   }
 
@@ -527,7 +528,10 @@ export function createAttachedLibraryService(
       if (!o.posters.has(animeId)) continue
       try {
         const r = await resolveLibraryPath(path.join(o.root, LIBRARY_DIR), { path: rel })
-        if (r.path !== 'missing' && r.path !== 'escapes') return r.path
+        if (r.path === 'missing' || r.path === 'escapes') continue
+        // Re-checked at serve time: the drive can change the file after `open()`.
+        const st = await fsp.stat(r.path)
+        if (st.isFile() && st.size <= POSTER_MAX_BYTES) return r.path
       } catch {
         // Next library.
       }

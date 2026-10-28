@@ -1,0 +1,97 @@
+{
+  "stateVersion": 1,
+  "stateMinor": 1,
+  "libraryId": "3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90",
+  "generation": 4,
+  "manifestGeneration": 7,
+  "doc": {
+    "stateVersion": 1,
+    "stateMinor": 1,
+    "installId": "pc-owner",
+    "titles": {
+      "101": {
+        "watch": {
+          "1": {
+            "position": {
+              "value": {
+                "position": 40,
+                "duration": 1440,
+                "translationId": 9001
+              },
+              "at": 1004,
+              "origin": "pc-owner"
+            },
+            "watched": {
+              "value": false,
+              "at": 1000,
+              "origin": "pc-owner"
+            },
+            "watchedAt": null,
+            "playbackRate": 1.25
+          }
+        },
+        "starred": {
+          "value": true,
+          "at": 900,
+          "origin": "pc-owner"
+        },
+        "dismissed": [
+          "3"
+        ],
+        "skip": {
+          "algorithm": {
+            "source": "local",
+            "sampleRate": 11025,
+            "matchBitThreshold": 10,
+            "minRunSec": 20,
+            "windowSec": 360,
+            "refineBitThreshold": 8,
+            "refineSustainHashes": 4
+          },
+          "analyzedAt": 1700000000000,
+          "episodeCount": 28,
+          "perEpisode": {
+            "1": {
+              "file": {
+                "translationId": 9001,
+                "fileSize": 10001
+              },
+              "episodeLabel": "1",
+              "durationSec": 1440,
+              "hashesPerSec": 8,
+              "op": {
+                "startSec": 60,
+                "endSec": 150,
+                "pairCount": 40
+              },
+              "ed": null
+            }
+          },
+          "fingerprintVersion": 2
+        },
+        "lastOpenedAt": 1761600000123
+      }
+    },
+    "priorityOrder": {
+      "value": [
+        "101"
+      ],
+      "at": 800,
+      "origin": "pc-owner"
+    },
+    "tombstones": {
+      "303": {
+        "starred": {
+          "deleted": true,
+          "at": 500,
+          "origin": "pc-owner"
+        },
+        "reason": "removed-from-drive"
+      }
+    },
+    "deviceNames": {
+      "pc-owner": "Desktop"
+    }
+  },
+  "compression": "none"
+}

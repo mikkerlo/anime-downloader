@@ -1,0 +1,40 @@
+{
+  "animeId": 101,
+  "malId": 52991,
+  "titles": {
+    "ru": "Провожающая в последний путь Фрирен",
+    "romaji": "Sousou no Frieren"
+  },
+  "genres": [
+    {
+      "id": 2,
+      "title": "Adventure"
+    }
+  ],
+  "year": 2023,
+  "type": "tv",
+  "episodes": [
+    {
+      "episodeInt": "1",
+      "episodeFull": "1 серия"
+    }
+  ],
+  "searchResult": {
+    "id": 101,
+    "title": "Frieren",
+    "titles": {
+      "ru": "Фрирен",
+      "romaji": "Sousou no Frieren",
+      "ja": "葬送のフリーレン",
+      "zh": "葬送的芙莉莲"
+    },
+    "posterUrlSmall": "https://example.invalid/101.jpg",
+    "numberOfEpisodes": 28,
+    "type": "tv",
+    "typeTitle": "TV",
+    "year": 2023,
+    "season": "fall",
+    "rating": 9.1,
+    "studio": "Madhouse"
+  }
+}

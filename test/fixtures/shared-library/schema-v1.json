@@ -1,0 +1,764 @@
+{
+  "versions": {
+    "layout": {
+      "version": 1,
+      "minor": 0
+    },
+    "state": {
+      "version": 1,
+      "minor": 0
+    }
+  },
+  "caps": {
+    "manifestBytes": 33554432,
+    "stateBytes": 33554432,
+    "metaBytes": 1048576,
+    "stringBytes": 2048,
+    "items": 200000
+  },
+  "fields": [
+    {
+      "path": "manifest.layoutVersion",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "manifest.layoutMinor",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "manifest.libraryId",
+      "type": "string:uuid",
+      "required": true
+    },
+    {
+      "path": "manifest.name",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "manifest.owner",
+      "type": "object|null",
+      "required": true
+    },
+    {
+      "path": "manifest.owner.shikimoriId",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "manifest.owner.nickname",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "manifest.mode",
+      "type": "string",
+      "required": true,
+      "enum": ["videos", "metadata"]
+    },
+    {
+      "path": "manifest.generation",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "manifest.stateGeneration",
+      "type": "integer|null",
+      "required": true
+    },
+    {
+      "path": "manifest.lastWriter",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "manifest.lastWriter.installId",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "manifest.lastWriter.appVersion",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "manifest.lastWriter.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "manifest.titles",
+      "type": "array:animeId",
+      "required": true
+    },
+    {
+      "path": "manifest.titles[].animeId",
+      "type": "integer>=1",
+      "required": true
+    },
+    {
+      "path": "manifest.titles[].name",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "manifest.items",
+      "type": "array:itemKey",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].animeId",
+      "type": "integer>=1",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].episodeInt",
+      "type": "string:nonEmpty",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].translationId",
+      "type": "integer>=1",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].translationType",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].author",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].quality",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].path",
+      "type": "string:path",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].subtitlePath",
+      "type": "string:path",
+      "required": false
+    },
+    {
+      "path": "manifest.items[].size",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].sha256",
+      "type": "string:sha256",
+      "required": false
+    },
+    {
+      "path": "manifest.naming",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "manifest.naming.rule",
+      "type": "string",
+      "required": true,
+      "enum": ["v1"]
+    },
+    {
+      "path": "manifest.naming.renamed",
+      "type": "array:self",
+      "required": true
+    },
+    {
+      "path": "state.stateVersion",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "state.stateMinor",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "state.libraryId",
+      "type": "string:uuid",
+      "required": true
+    },
+    {
+      "path": "state.generation",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "state.manifestGeneration",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "state.doc",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.stateVersion",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "state.doc.stateMinor",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "state.doc.installId",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles",
+      "type": "map",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.watch",
+      "type": "map",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position.value",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position.value.position",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position.value.duration",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position.value.translationId",
+      "type": "integer",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.position.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.watched",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.watched.value",
+      "type": "boolean",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.watched.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.watched.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.watch{}.watchedAt",
+      "type": "number|null",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.starred",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.starred.value",
+      "type": "true",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.starred.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.starred.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.priority",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.priority.value",
+      "type": "true",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.priority.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.priority.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.rate.malId",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.episodes",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.episodes.value",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.episodes.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.episodes.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.status",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.status.value",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.status.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.status.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.score",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.score.value",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.score.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.score.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.rewatches",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.rewatches.value",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.rewatches.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.rate.rewatches.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.dismissed",
+      "type": "array:self",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.skip",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.source",
+      "type": "string",
+      "required": true,
+      "enum": ["local"]
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.sampleRate",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.matchBitThreshold",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.minRunSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.windowSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.refineBitThreshold",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.algorithm.refineSustainHashes",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.analyzedAt",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.episodeCount",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode",
+      "type": "map",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.file",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.file.translationId",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.file.fileSize",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.episodeLabel",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.durationSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.hashesPerSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.op",
+      "type": "object|null",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.op.startSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.op.endSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.op.pairCount",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.ed",
+      "type": "object|null",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.ed.startSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.ed.endSec",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.titles{}.skip.perEpisode{}.ed.pairCount",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.priorityOrder",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.priorityOrder.value",
+      "type": "array:self",
+      "required": true
+    },
+    {
+      "path": "state.doc.priorityOrder.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.priorityOrder.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.tombstones",
+      "type": "map",
+      "required": false
+    },
+    {
+      "path": "state.doc.tombstones{}.starred",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.tombstones{}.starred.deleted",
+      "type": "true",
+      "required": true
+    },
+    {
+      "path": "state.doc.tombstones{}.starred.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.tombstones{}.starred.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "state.doc.tombstones{}.priority",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "state.doc.tombstones{}.priority.deleted",
+      "type": "true",
+      "required": true
+    },
+    {
+      "path": "state.doc.tombstones{}.priority.at",
+      "type": "number",
+      "required": true
+    },
+    {
+      "path": "state.doc.tombstones{}.priority.origin",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "meta.animeId",
+      "type": "integer>=1",
+      "required": true
+    },
+    {
+      "path": "meta.malId",
+      "type": "integer|null",
+      "required": false
+    },
+    {
+      "path": "meta.titles",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "meta.titles.ru",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.titles.romaji",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.titles.ja",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.titles.en",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.genres",
+      "type": "array:id",
+      "required": false
+    },
+    {
+      "path": "meta.genres[].id",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "meta.genres[].title",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "meta.year",
+      "type": "integer",
+      "required": false
+    },
+    {
+      "path": "meta.type",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.episodes",
+      "type": "array:episodeInt",
+      "required": false
+    },
+    {
+      "path": "meta.episodes[].episodeInt",
+      "type": "string:nonEmpty",
+      "required": true
+    },
+    {
+      "path": "meta.episodes[].episodeFull",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.searchResult",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "meta.searchResult.id",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.title",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.titles",
+      "type": "object",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.titles.ru",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.searchResult.titles.romaji",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.searchResult.titles.ja",
+      "type": "string",
+      "required": false
+    },
+    {
+      "path": "meta.searchResult.posterUrlSmall",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.numberOfEpisodes",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.type",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.typeTitle",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.year",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "path": "meta.searchResult.season",
+      "type": "string",
+      "required": true
+    }
+  ]
+}

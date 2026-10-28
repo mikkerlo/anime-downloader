@@ -1,0 +1,60 @@
+{
+  "layoutVersion": 1,
+  "layoutMinor": 0,
+  "libraryId": "3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90",
+  "name": "Test library",
+  "owner": {
+    "shikimoriId": 4242,
+    "nickname": "owner"
+  },
+  "mode": "metadata",
+  "generation": 8,
+  "stateGeneration": 4,
+  "lastWriter": {
+    "installId": "pc-owner",
+    "appVersion": "5.0.24",
+    "at": 1761600000000
+  },
+  "titles": [
+    {
+      "animeId": 101,
+      "name": "Frieren"
+    }
+  ],
+  "items": [
+    {
+      "animeId": 101,
+      "episodeInt": "1",
+      "translationId": 9001,
+      "translationType": "subRu",
+      "author": "Crunchyroll",
+      "quality": 1080,
+      "path": "Frieren/Frieren - 01 [Crunchyroll].mkv",
+      "size": 10001
+    },
+    {
+      "animeId": 101,
+      "episodeInt": "2",
+      "translationId": 9002,
+      "translationType": "subRu",
+      "author": "Crunchyroll",
+      "quality": 1080,
+      "path": "Frieren/Frieren - 02 [Crunchyroll].mkv",
+      "size": 10002
+    },
+    {
+      "animeId": 101,
+      "episodeInt": "3",
+      "translationId": 9003,
+      "translationType": "subRu",
+      "author": "Crunchyroll",
+      "quality": 1080,
+      "path": "Frieren/Frieren - 03 [Crunchyroll].mkv",
+      "size": 10003
+    }
+  ],
+  "naming": {
+    "rule": "v1",
+    "renamed": []
+  }
+}

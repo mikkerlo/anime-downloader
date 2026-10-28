@@ -1,0 +1,49 @@
+{
+  "stateVersion": 2,
+  "stateMinor": 0,
+  "libraryId": "3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90",
+  "generation": 5,
+  "manifestGeneration": 8,
+  "doc": {
+    "stateVersion": 2,
+    "stateMinor": 0,
+    "installId": "pc-owner",
+    "titles": {
+      "101": {
+        "watch": {
+          "1": {
+            "position": {
+              "value": {
+                "position": 50,
+                "duration": 1440,
+                "translationId": 9001
+              },
+              "at": 1005,
+              "origin": "pc-owner"
+            },
+            "watched": {
+              "value": false,
+              "at": 1000,
+              "origin": "pc-owner"
+            },
+            "watchedAt": null
+          }
+        },
+        "starred": {
+          "value": true,
+          "at": 900,
+          "origin": "pc-owner"
+        }
+      }
+    },
+    "priorityOrder": {
+      "value": [
+        "101"
+      ],
+      "at": 800,
+      "origin": "pc-owner"
+    },
+    "tombstones": {},
+    "watchV2": {}
+  }
+}

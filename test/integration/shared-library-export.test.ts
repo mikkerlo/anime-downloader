@@ -260,6 +260,39 @@ describe('Shared Library export (#574) — integration', () => {
     expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, c1].sort())
   })
 
+  it('Locate…: refuses a folder without the library, resumes at one with it, and keeps its "Found at" note', async () => {
+    const { a1, b1, c1 } = seedPc(env)
+    const kill = hangOn(/Beta Show - 01 \[Studio\]\.mp4\.anime-dl-tmp$/)
+    const doomed = env.restart({ xfs: kill.xfs })
+    const r = await doomed.start({ selection: sel(a1, b1, c1), target: env.drive, name: 'Trip' })
+    expect(r.ok).toBe(true)
+    await kill.hung
+    const moved = path.join(env.dir, 'elsewhere')
+    fs.mkdirSync(moved)
+    fs.renameSync(path.join(env.drive, 'Trip'), path.join(moved, 'Trip'))
+
+    const svc = env.restart({ setTimer: () => 0, clearTimer: () => {} })
+    await svc.init()
+    const [job] = svc.list()
+    await svc.resume(job.jobId)
+    await svc.settled(job.jobId)
+    expect(svc.list()[0].status).toBe('waiting-drive')
+
+    expect(await svc.locate(job.jobId, env.drive)).toEqual({
+      ok: false,
+      reason: "This folder doesn't hold the library 'Trip'."
+    })
+    expect(await svc.locate(job.jobId, moved)).toEqual({ ok: true })
+    await svc.settled(job.jobId)
+    const done = svc.list()[0]
+    expect(done.status).toBe('completed')
+    expect(done.root).toBe(path.join(moved, 'Trip'))
+    expect(done.note).toBe(`Found at ${path.join(moved, 'Trip')}`)
+    expect(manifestOf(path.join(moved, 'Trip')).items.map(itemKey).sort()).toEqual(
+      [a1, b1, c1].sort()
+    )
+  })
+
   it('re-plug at a different path: resumes by libraryId there, and the impostor at the old path is unchanged', async () => {
     const { a1, a2, b1, c1 } = seedPc(env)
     const mountA = path.join(env.dir, 'mountA')
@@ -374,6 +407,7 @@ describe('Shared Library export (#574) — integration', () => {
     await svc.settled(r.job.jobId)
 
     expect(svc.list()[0].status).toBe('waiting-drive')
+    expect(svc.list()[0].note).toMatch(/^The drive went away: /)
     expect(fs.readdirSync(root)).toEqual([])
     expect(svc.list()[0].failed).toEqual([])
 
@@ -382,6 +416,8 @@ describe('Shared Library export (#574) — integration', () => {
     timers.shift()!()
     await svc.settled(r.job.jobId)
     expect(svc.list()[0].status).toBe('completed')
+    // The drive is back: the note that said it went away is gone.
+    expect(svc.list()[0].note).toBeNull()
     expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, a2, b1, c1].sort())
     expect(Object.keys(scan(root)).some((f) => f.endsWith(TMP_SUFFIX))).toBe(false)
   })
@@ -451,11 +487,13 @@ describe('Shared Library export (#574) — integration', () => {
     await svc.settled(r.job.jobId)
     expect(pulled).toBe(true)
     expect(svc.list()[0].status).toBe('waiting-drive')
+    expect(svc.list()[0].note).toMatch(/^The drive went away: /)
 
     fs.renameSync(away, root)
     timers.shift()!()
     await svc.settled(r.job.jobId)
     expect(svc.list()[0].status).toBe('completed')
+    expect(svc.list()[0].note).toBeNull()
     expect(fs.existsSync(path.join(root, LIBRARY_DIR, 'meta', '101.json'))).toBe(true)
     expect(fs.readFileSync(path.join(root, LIBRARY_DIR, 'posters', '101.jpg'))).toEqual(poster)
     expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, b1].sort())

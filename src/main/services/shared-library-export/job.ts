@@ -98,6 +98,9 @@ export interface JobDeps {
 
 class DriveGoneError extends Error {}
 
+/** The note a lost drive leaves on the job; cleared once a run finds the library again. */
+const DRIVE_GONE_NOTE = 'The drive went away: '
+
 const isTerminal = (s: ExportJobStatus): boolean =>
   s === 'completed' || s === 'cancelled' || s === 'failed'
 
@@ -433,6 +436,9 @@ export class ExportJob {
         return
       }
       this.disarmRetry()
+      // The drive is back: a note saying it went away is no longer true. Other
+      // notes (Found at, the foreign-sibling one) stay.
+      if (this.rec.note?.startsWith(DRIVE_GONE_NOTE)) this.rec.note = null
       if (found.moved) {
         this.rec.root = found.root
         this.rec.note =
@@ -498,7 +504,7 @@ export class ExportJob {
           await this.setStatus(this.stop === 'pause' ? 'paused' : 'cancelled')
           return
         }
-        this.rec.note = `The drive went away: ${(err as Error).message}`
+        this.rec.note = `${DRIVE_GONE_NOTE}${(err as Error).message}`
         await this.setStatus('waiting-drive')
         this.armRetry()
         return

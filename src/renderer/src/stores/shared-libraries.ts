@@ -2,9 +2,9 @@
 //
 // One `shared-libraries:changed` and one `shared-library:found` (#581)
 // subscription for the app's lifetime (Pinia singleton, created by App.vue).
-// The ffmpeg availability is read through the existing `ffmpeg:check`, again
-// on window focus and before each `.mkv` Play, so the missing-ffmpeg banner
-// clears once ffmpeg is installed.
+// The ffmpeg availability is read through the existing `ffmpeg:check` once a
+// library is listed, again on window focus and before each `.mkv` Play, so the
+// missing-ffmpeg banner clears once ffmpeg is installed.
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -66,6 +66,7 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
   const openingFound = ref<SharedLibraryFound | null>(null)
   // Optimistic until the first check answers, so nothing flashes disabled.
   const ffmpegAvailable = ref(true)
+  let ffmpegChecked = false
   // Set by "Show in Library" after an open; LibraryView selects the tab and clears it.
   const focusTab = ref(false)
 
@@ -87,6 +88,7 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
   async function refresh(): Promise<void> {
     const list = await window.api.sharedLibraryList()
     libraries.value = Array.isArray(list) ? list : []
+    if (!ffmpegChecked && libraries.value.length > 0) void checkFfmpeg()
     // A library attached meanwhile (by the toast or by hand) is no longer offered.
     const attached = new Set(libraries.value.map((l) => l.libraryId))
     found.value = found.value
@@ -118,6 +120,7 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
   }
 
   async function checkFfmpeg(): Promise<boolean> {
+    ffmpegChecked = true
     try {
       ffmpegAvailable.value = (await window.api.ffmpegCheck())?.available === true
     } catch {
@@ -136,12 +139,12 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
   })
   void window.api.onSharedLibraryFound((f) => addFound(f))
   // App.vue creates this store at startup (#581), so only a PC with a library
-  // attached pays for the `ffmpeg -version` spawn on focus.
+  // attached pays for the `ffmpeg -version` spawn: the first check waits for a
+  // `refresh()` that lists one, and focus re-checks only while one is.
   window.addEventListener('focus', () => {
     if (libraries.value.length > 0) void checkFfmpeg()
   })
   void refresh().catch(() => {})
-  void checkFfmpeg()
 
   return {
     libraries,

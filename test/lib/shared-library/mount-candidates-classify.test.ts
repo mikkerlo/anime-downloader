@@ -4,6 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  CLASSIFY_RETRY_MS,
   createClassifyMounts,
   createMountCandidates,
   parseDarwinMount,
@@ -110,15 +111,17 @@ describe('classifyMounts per OS (#581)', () => {
 describe('classifyMounts runs only when the candidate set changes (#581)', () => {
   function setup(classify: ClassifyMounts) {
     let names = ['STICK']
+    let t = 0
     const spy = vi.fn(classify)
     const list = createMountCandidates({
       platform: 'linux',
       user: 'u',
       listDirs: async (dir) => (dir === '/media/u' ? names : []),
       classifyMounts: spy,
-      log: { warn: vi.fn() }
+      log: { warn: vi.fn() },
+      now: () => t
     })
-    return { list, spy, set: (n: string[]) => (names = n) }
+    return { list, spy, set: (n: string[]) => (names = n), advance: (ms: number) => (t += ms) }
   }
 
   it('once per change, only for the new paths; a removal needs no call', async () => {
@@ -145,13 +148,48 @@ describe('classifyMounts runs only when the candidate set changes (#581)', () =>
     expect(spy).toHaveBeenCalledTimes(2)
   })
 
-  it('a failed classification still lists the new candidates', async () => {
-    const { list, spy } = setup(async () => {
+  it('a failed classification still lists the new candidates, and is retried once a minute, not on every scan', async () => {
+    const { list, spy, advance } = setup(async () => {
       throw new Error('powershell blocked')
     })
     expect(await list()).toEqual(['/media/u/STICK'])
+    advance(CLASSIFY_RETRY_MS - 1)
     expect(await list()).toEqual(['/media/u/STICK'])
     expect(spy).toHaveBeenCalledTimes(1)
+    advance(1)
+    expect(await list()).toEqual(['/media/u/STICK'])
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('a cold-PowerShell timeout on the first run: Z: is a candidate until the retry classifies it as network', async () => {
+    let cold = true
+    let t = 0
+    const classify = vi.fn(
+      createClassifyMounts({
+        platform: 'win32',
+        queryDriveTypes: async () => {
+          if (cold) throw Object.assign(new Error('spawn timed out'), { killed: true })
+          return WIN_JSON
+        }
+      })
+    )
+    const present = new Set(['E:\\', 'Z:\\'])
+    const list = createMountCandidates({
+      platform: 'win32',
+      isDir: async (p) => present.has(p),
+      classifyMounts: classify,
+      log: { warn: vi.fn() },
+      now: () => t
+    })
+    expect(await list()).toEqual(['E:\\', 'Z:\\'])
+    cold = false
+    t += 10_000
+    expect(await list()).toEqual(['E:\\', 'Z:\\'])
+    t += CLASSIFY_RETRY_MS
+    expect(await list()).toEqual(['E:\\'])
+    t += CLASSIFY_RETRY_MS
+    expect(await list()).toEqual(['E:\\'])
+    expect(classify).toHaveBeenCalledTimes(2)
   })
 
   it('a path it leaves out (unclassified) is still a candidate', async () => {

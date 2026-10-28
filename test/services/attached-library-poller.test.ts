@@ -478,6 +478,47 @@ describe('with the real service (the behaviour difference)', () => {
     )
   })
 
+  it("a replica the poller finds on another drive doesn't redirect the Attach of a hand-opened one", async () => {
+    const m = make()
+    const opened = copyFixtureLibrary()
+    const mounts = path.join(tempRoot(), 'mounts')
+    const replica = path.join(mounts, 'STICK', 'Fixture library')
+    fs.mkdirSync(path.dirname(replica), { recursive: true })
+    fs.cpSync(opened, replica, { recursive: true })
+
+    // The user opens folder A by hand; the dialog is up.
+    const [candidate] = await m.svc.discover(opened)
+    expect(candidate.root).toBe(opened)
+    // Meanwhile the poller identifies the replica B on a newly mounted stick.
+    const onFound = vi.fn()
+    const p = createAvailabilityPoller({
+      target: m.svc,
+      candidates: createMountCandidates({
+        parents: [mounts],
+        classifyMounts: async () => new Map()
+      }),
+      onFound
+    })
+    await p.tick()
+    expect((onFound.mock.calls[0][0] as SharedLibraryFound).candidates[0].root).toBe(replica)
+
+    // Attach in the hand-opened dialog opens A.
+    const res = await m.svc.attach(FIXTURE_LIBRARY_ID, 'videos')
+    expect(res.ok && res.library.root).toBe(opened)
+    // The toast's Open would have taken B.
+    const viaToast = make().svc
+    await createAvailabilityPoller({
+      target: viaToast,
+      candidates: createMountCandidates({
+        parents: [mounts],
+        classifyMounts: async () => new Map()
+      }),
+      onFound: vi.fn()
+    }).tick()
+    const res2 = await viaToast.attach(FIXTURE_LIBRARY_ID, 'videos', 'found')
+    expect(res2.ok && res2.library.root).toBe(replica)
+  })
+
   it('an unknown library found by the poller can be attached from the event', async () => {
     const m = make()
     const mounts = path.join(tempRoot(), 'mounts')
@@ -499,7 +540,7 @@ describe('with the real service (the behaviour difference)', () => {
     const found = onFound.mock.calls[0][0] as SharedLibraryFound
     expect(found.volume).toBe('STICK')
     expect(found.candidates.map((c) => c.libraryId)).toEqual([FIXTURE_LIBRARY_ID])
-    const res = await m.svc.attach(FIXTURE_LIBRARY_ID, 'videos')
+    const res = await m.svc.attach(FIXTURE_LIBRARY_ID, 'videos', 'found')
     expect(res.ok).toBe(true)
 
     m.svc.dismissPrompt([U])

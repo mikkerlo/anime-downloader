@@ -14,7 +14,8 @@
 // Network mounts are dropped (#581): NAS and network shares are out of scope.
 // `classifyMounts` marks them, and runs only when the set of candidates gains
 // a path it hasn't classified; each verdict is kept until its path disappears.
-// A path it can't classify is still a candidate.
+// A path it can't classify is still a candidate. A failed run is retried after
+// `CLASSIFY_RETRY_MS`, not on every scan.
 
 import { execFile } from 'child_process'
 import { promises as fsp } from 'fs'
@@ -23,6 +24,8 @@ import * as path from 'path'
 
 export const CANDIDATE_BUDGET_MS = 1000
 export const CLASSIFY_TIMEOUT_MS = 5000
+/** How long a failed classification waits before it is tried again. */
+export const CLASSIFY_RETRY_MS = 60_000
 
 export type MountKind = 'local' | 'network'
 
@@ -195,6 +198,7 @@ export interface MountCandidateDeps {
   /** Folders whose children replace the per-OS list (a test or an unpackaged run). */
   parents?: string[]
   log: Pick<Console, 'warn'>
+  now: () => number
 }
 
 export type MountCandidates = () => Promise<string[]>
@@ -216,7 +220,8 @@ const defaultDeps = (): MountCandidateDeps => ({
   isDir: async (p) => (await fsp.stat(p)).isDirectory(),
   budgetMs: CANDIDATE_BUDGET_MS,
   classifyMounts: createClassifyMounts(),
-  log: console
+  log: console,
+  now: Date.now
 })
 
 /** The candidate mount roots for this OS, network mounts dropped; every part injectable for tests. */
@@ -260,24 +265,33 @@ export function createMountCandidates(
   }
 
   const kinds = new Map<string, MountKind>()
+  // The candidate set the last successful classification covered. A failure
+  // (a cold PowerShell past its timeout) leaves it unset, so the same set is
+  // tried again once `CLASSIFY_RETRY_MS` has passed.
   let lastSet: string | null = null
+  let retryAt = 0
 
   return async () => {
     const all = await listAll()
     const key = all.join('\0')
-    if (key !== lastSet) {
-      lastSet = key
+    if (key !== lastSet && deps.now() >= retryAt) {
       const present = new Set(all)
       for (const p of kinds.keys()) if (!present.has(p)) kinds.delete(p)
       const fresh = all.filter((p) => !kinds.has(p))
-      if (fresh.length > 0) {
-        try {
+      try {
+        if (fresh.length > 0) {
           for (const [p, kind] of await deps.classifyMounts(fresh)) {
             if (present.has(p)) kinds.set(p, kind)
           }
-        } catch (err) {
-          deps.log.warn('[shared-library] could not classify mounts; probing them anyway', err)
         }
+        lastSet = key
+        retryAt = 0
+      } catch (err) {
+        retryAt = deps.now() + CLASSIFY_RETRY_MS
+        deps.log.warn(
+          `[shared-library] could not classify mounts; probing them anyway, retrying in ${CLASSIFY_RETRY_MS / 1000} s`,
+          err
+        )
       }
     }
     return all.filter((p) => kinds.get(p) !== 'network')

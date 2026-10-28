@@ -252,7 +252,8 @@ describe('the found-on-a-drive toast', () => {
     expect(w.find('[data-testid="identity-warning"]').exists()).toBe(true)
     await w.find('[data-testid="use-videos"]').trigger('click')
     await flushPromises()
-    expect(attach).toHaveBeenCalledWith('aaaaaaaa-0000-4000-8000-000000000001', 'videos')
+    // The poller's root, not whatever a hand-opened dialog last discovered.
+    expect(attach).toHaveBeenCalledWith('aaaaaaaa-0000-4000-8000-000000000001', 'videos', 'found')
   })
 
   it('"Don\'t ask for this drive" remembers the libraryIds; a library attached meanwhile drops out', async () => {

@@ -65,7 +65,12 @@ export interface AttachedLibraryService {
    */
   refresh(libraryId: string, root: string): Promise<void>
   discover(dir: string): Promise<SharedLibraryCandidate[]>
-  attach(libraryId: string, choice?: SharedLibraryAttachChoice): Promise<SharedLibraryAttachResult>
+  /** `from: 'found'` attaches the root the poller found, not the last hand-opened one. */
+  attach(
+    libraryId: string,
+    choice?: SharedLibraryAttachChoice,
+    from?: SharedLibraryAttachSource
+  ): Promise<SharedLibraryAttachResult>
   list(): AttachedLibraryInfo[]
   get(libraryId: string): AttachedLibraryInfo | null
   getTitle(libraryId: string, animeId: number): Promise<AttachedTitleDetail | null>
@@ -99,7 +104,7 @@ export interface AttachedLibraryService {
   /** Unavailable, `lastSeenAt` kept; a no-op unless `root` is still its root. */
   markUnavailable(libraryId: string, root: string): void
   markSeen(libraryId: string): void
-  /** The library at `root` as the open flow lists it, and attachable by id. */
+  /** The library at `root` as the open flow lists it, attachable by id with `from: 'found'`. */
   identify(root: string): Promise<SharedLibraryCandidate | null>
   isDismissed(libraryId: string): boolean
   /** "Don't ask for this drive": remembered in `sharedLibraryPromptDismissed`. */
@@ -199,6 +204,8 @@ export function createAttachedLibraryService(
   const opened = new Map<string, Opened>()
   // The last discovery's libraries, by id, so `attach` takes an id, not a path.
   const discovered = new Map<string, string>()
+  // The same, for libraries the availability poller found on a drive (#581).
+  const found = new Map<string, string>()
   // How many times each library was attached, so a startup read that began earlier never replaces an attach's.
   const attaches = new Map<string, number>()
   // Opened, then found gone by the poller (#581); the in-memory copy is kept for S8 (#582).
@@ -468,13 +475,17 @@ export function createAttachedLibraryService(
     return entry.done
   }
 
-  async function identify(root: string): Promise<SharedLibraryCandidate | null> {
+  /** The library at `root`, remembered in `into` so `attach` can take its id. */
+  async function candidateAt(
+    root: string,
+    into: Map<string, string>
+  ): Promise<SharedLibraryCandidate | null> {
     const read = await readLibrary(root)
     if (read.status === 'none') return null
     const manifest = read.manifest
     const readOnly =
       read.status === 'read-only' ? { reason: read.reason, message: read.message } : undefined
-    if (manifest) discovered.set(manifest.libraryId, root)
+    if (manifest) into.set(manifest.libraryId, root)
     return {
       root,
       libraryId: manifest?.libraryId ?? null,
@@ -487,10 +498,15 @@ export function createAttachedLibraryService(
     }
   }
 
+  // The poller's own finds, apart from `discovered`: a background identify of a
+  // replica on another drive must not redirect the Attach of a hand-opened one.
+  const identify = (root: string): Promise<SharedLibraryCandidate | null> =>
+    candidateAt(root, found)
+
   async function discover(dir: string): Promise<SharedLibraryCandidate[]> {
     const out: SharedLibraryCandidate[] = []
     for (const root of await discoverLibraries(dir)) {
-      const c = await identify(root)
+      const c = await candidateAt(root, discovered)
       if (c) out.push(c)
     }
     return out
@@ -498,9 +514,10 @@ export function createAttachedLibraryService(
 
   async function attach(
     libraryId: string,
-    choice?: SharedLibraryAttachChoice
+    choice?: SharedLibraryAttachChoice,
+    from: SharedLibraryAttachSource = 'opened'
   ): Promise<SharedLibraryAttachResult> {
-    const root = discovered.get(libraryId)
+    const root = (from === 'found' ? found : discovered).get(libraryId)
     if (!root) return { ok: false, error: 'Open the folder again: this library was not found.' }
     const { read, opened: o } = await open(root)
     const manifest = o.manifest
@@ -826,6 +843,7 @@ export function createAttachedLibraryService(
     }
     opened.delete(libraryId)
     discovered.delete(libraryId)
+    found.delete(libraryId)
     unavailable.delete(libraryId)
     seenAt.delete(libraryId)
     deps.onChanged?.()

@@ -387,10 +387,14 @@ interface Api {
   // Shared Library (#578)
   /** Folder picker, then the libraries in it and one level below. */
   sharedLibraryPickAndDiscover: () => Promise<SharedLibraryDiscovery>
-  /** `choice` is the no-account answer: videos only, or a local claim. */
+  /**
+   * `choice` is the no-account answer: videos only, or a local claim. `from:
+   * 'found'` attaches the root the found-on-a-drive toast offered (#581).
+   */
   sharedLibraryAttach: (
     libraryId: string,
-    choice?: SharedLibraryAttachChoice
+    choice?: SharedLibraryAttachChoice,
+    from?: SharedLibraryAttachSource
   ) => Promise<SharedLibraryAttachResult>
   sharedLibraryList: () => Promise<AttachedLibraryInfo[]>
   sharedLibraryGetTitle: (libraryId: string, animeId: number) => Promise<AttachedTitleDetail | null>

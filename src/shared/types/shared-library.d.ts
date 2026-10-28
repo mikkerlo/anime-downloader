@@ -199,6 +199,9 @@ interface SharedLibraryDiscovery {
 /** The no-account choice: videos only, or a local claim as the owner. */
 type SharedLibraryAttachChoice = 'videos' | 'claim'
 
+/** Which discovery an attach takes its root from: the open flow's, or the poller's toast (#581). */
+type SharedLibraryAttachSource = 'opened' | 'found'
+
 /** One episode file a title's Play from drive can start. */
 interface AttachedPlayTarget {
   episodeInt: string

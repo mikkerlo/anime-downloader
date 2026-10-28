@@ -41,10 +41,10 @@ export function register({ attachedLibraryService, sharedLibraryExport }: AppDep
 
   ipcMain.handle(
     CHANNELS.SHARED_LIBRARY_ATTACH,
-    (_event, libraryId: string, choice?: SharedLibraryAttachChoice) => {
+    (_event, libraryId: string, choice?: SharedLibraryAttachChoice, from?: unknown) => {
       if (typeof libraryId !== 'string') return { ok: false, error: 'No library given.' }
       const c = choice === 'claim' || choice === 'videos' ? choice : undefined
-      return attachedLibraryService.attach(libraryId, c)
+      return attachedLibraryService.attach(libraryId, c, from === 'found' ? 'found' : 'opened')
     }
   )
 

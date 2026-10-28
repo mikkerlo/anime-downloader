@@ -53,7 +53,9 @@ async function attach(choice?: SharedLibraryAttachChoice): Promise<void> {
   if (!c?.libraryId) return;
   phase.value = 'attaching';
   error.value = '';
-  const res = await window.api.sharedLibraryAttach(c.libraryId, choice);
+  const res = props.found
+    ? await window.api.sharedLibraryAttach(c.libraryId, choice, 'found')
+    : await window.api.sharedLibraryAttach(c.libraryId, choice);
   if (!res.ok) {
     error.value = res.error;
     phase.value = candidates.value.length > 1 ? 'choose' : 'blocked';

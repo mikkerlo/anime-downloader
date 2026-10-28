@@ -536,11 +536,16 @@ const api = {
     ipcRenderer.invoke(
       CHANNELS.SHARED_LIBRARY_PICK_AND_DISCOVER
     ) as Promise<SharedLibraryDiscovery>,
-  sharedLibraryAttach: (libraryId: string, choice?: SharedLibraryAttachChoice) =>
+  sharedLibraryAttach: (
+    libraryId: string,
+    choice?: SharedLibraryAttachChoice,
+    from?: SharedLibraryAttachSource
+  ) =>
     ipcRenderer.invoke(
       CHANNELS.SHARED_LIBRARY_ATTACH,
       libraryId,
-      choice
+      choice,
+      from
     ) as Promise<SharedLibraryAttachResult>,
   sharedLibraryList: () =>
     ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_LIST) as Promise<AttachedLibraryInfo[]>,

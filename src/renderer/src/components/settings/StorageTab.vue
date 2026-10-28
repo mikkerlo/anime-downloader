@@ -6,6 +6,20 @@ import { formatBytes } from '../../utils';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 import SettingsSwitch from './SettingsSwitch.vue';
+import OpenLibraryDialog from '../shared-library/OpenLibraryDialog.vue';
+import { useLibraryStore } from '../../stores/library';
+import { useSharedLibrariesStore } from '../../stores/shared-libraries';
+
+const openShared = ref(false);
+const libraryNav = useLibraryStore();
+const sharedLibraries = useSharedLibrariesStore();
+
+/** "Show in Library" after an open: Library → Shared Libraries (#578). */
+function showShared(): void {
+  openShared.value = false;
+  sharedLibraries.focusTab = true;
+  libraryNav.navigate('library');
+}
 
 const { autoSave, showSaved } = useSettingsAutosave();
 
@@ -729,6 +743,18 @@ watch(autoCleanupDays, (val) => {
         </div>
       </SettingsRow>
     </SettingsGroup>
+
+    <SettingsGroup
+      title="Shared Libraries"
+      desc="A folder or drive with a Shared Library. It's never used as a download folder, and nothing on it is moved or deleted."
+    >
+      <SettingsRow label="Open" desc="Plays from the drive; its titles appear in Library.">
+        <button class="btn btn-sm" data-testid="open-shared-library" @click="openShared = true">
+          Open Shared Library…
+        </button>
+      </SettingsRow>
+    </SettingsGroup>
+    <OpenLibraryDialog v-if="openShared" @close="openShared = false" @show="showShared" />
 
     <SettingsGroup
       title="Storage usage"

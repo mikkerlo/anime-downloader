@@ -102,6 +102,12 @@ export const CHANNELS = {
   PLAYER_STREAM_SEEK: 'player:stream-seek',
   PLAYER_STREAM_START: 'player:stream-start',
 
+  // Shared Library
+  SHARED_LIBRARY_ATTACH: 'shared-library:attach',
+  SHARED_LIBRARY_GET_TITLE: 'shared-library:get-title',
+  SHARED_LIBRARY_LIST: 'shared-library:list',
+  SHARED_LIBRARY_PICK_AND_DISCOVER: 'shared-library:pick-and-discover',
+
   // Shell
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
   SHELL_OPEN_EXTERNAL_FILE: 'shell:open-external-file',
@@ -247,6 +253,9 @@ export const EVENT_CHANNELS = {
   PLAYER_STREAM_ERROR: 'player:stream-error',
   PLAYER_STREAM_PROGRESS: 'player:stream-progress',
   PLAYER_STREAM_SUBTITLES: 'player:stream-subtitles',
+
+  // Shared Library
+  SHARED_LIBRARIES_CHANGED: 'shared-libraries:changed',
 
   // Shikimori
   SHIKIMORI_ANIME_DETAILS_UPDATED: 'shikimori:anime-details-updated',

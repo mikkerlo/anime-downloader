@@ -220,11 +220,13 @@ interface Api {
     availableStreams: { height: number; url: string }[]
   } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
+  /** With `animeId`, an attached Shared Library's copy when nothing local resolves (#578). */
   playerFindLocalFile: (
     animeName: string,
     episodeInt: string,
     translationId: number,
-    episodeLabel: string
+    episodeLabel: string,
+    animeId?: number
   ) => Promise<PlayerLocalFileResult | null>
   /** Report a local file opened/closed in the built-in player — gates deferred .part finalize (#63). */
   playerOpened: (filePath: string) => Promise<void>
@@ -370,6 +372,18 @@ interface Api {
   offlineSetManual: (on: boolean) => Promise<OfflineState>
   offlineRetry: () => Promise<OfflineState>
   onOfflineStateChanged: (callback: (state: OfflineState) => void) => Unsubscribe
+
+  // Shared Library (#578)
+  /** Folder picker, then the libraries in it and one level below. */
+  sharedLibraryPickAndDiscover: () => Promise<SharedLibraryDiscovery>
+  /** `choice` is the no-account answer: videos only, or a local claim. */
+  sharedLibraryAttach: (
+    libraryId: string,
+    choice?: SharedLibraryAttachChoice
+  ) => Promise<SharedLibraryAttachResult>
+  sharedLibraryList: () => Promise<AttachedLibraryInfo[]>
+  sharedLibraryGetTitle: (libraryId: string, animeId: number) => Promise<AttachedTitleDetail | null>
+  onSharedLibrariesChanged: (callback: () => void) => Unsubscribe
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>

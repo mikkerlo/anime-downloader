@@ -53,9 +53,9 @@ test('sidebar navigates between local views', async () => {
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
 
-  // Library.
-  await page.getByRole('button', { name: 'Library' }).click()
-  await expect(page.getByRole('button', { name: 'Library' })).toHaveClass(/active/)
+  // Library. Exact: the Library header's "Open Shared Library…" (#578) is a button too.
+  await page.getByRole('button', { name: 'Library', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Library', exact: true })).toHaveClass(/active/)
 
   // Back to Home.
   await page.getByRole('button', { name: 'Home' }).click()

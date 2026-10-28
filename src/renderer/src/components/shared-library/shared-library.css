@@ -1,0 +1,117 @@
+/* Shared by the Shared Library components (#578), each as `<style scoped src>`. */
+
+.sl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s var(--ease);
+}
+
+.sl-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.sl-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sl-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.sl-btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.sl-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+}
+
+.sl-modal {
+  width: 520px;
+  max-width: calc(100% - 40px);
+  max-height: calc(100% - 80px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sl-title {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sl-text {
+  font-size: 0.88rem;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.sl-muted {
+  font-size: 0.8rem;
+  color: var(--text-3);
+}
+
+.sl-warn {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--st-orange);
+  background: color-mix(in srgb, var(--st-orange) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--st-orange) 32%, transparent);
+  border-radius: var(--radius-input);
+  padding: 8px 10px;
+}
+
+.sl-error {
+  font-size: 0.82rem;
+  color: var(--st-red);
+}
+
+.sl-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.sl-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-chip);
+  border: 1px solid var(--border-strong);
+  color: var(--text-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}

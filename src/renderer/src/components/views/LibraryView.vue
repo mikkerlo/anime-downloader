@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import AnimeCard from '../shared/AnimeCard.vue';
+import ExportDialog from '../shared-library/ExportDialog.vue';
 import { getAnimeName } from '../../utils';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
@@ -131,6 +132,39 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
   priorityIds.value = next.map(Number);
 }
 
+// Multi-select for "Export N titles…" (#574). While it is on, a click on a
+// card selects it instead of opening it.
+const selectMode = ref(false);
+const selectedIds = ref(new Set<number>());
+const exportIds = ref<number[] | null>(null);
+
+function toggleSelectMode(): void {
+  selectMode.value = !selectMode.value;
+  selectedIds.value = new Set();
+}
+
+function toggleSelected(anime: AnimeSearchResult): void {
+  const next = new Set(selectedIds.value);
+  if (next.has(anime.id)) next.delete(anime.id);
+  else next.add(anime.id);
+  selectedIds.value = next;
+}
+
+function onCardClick(anime: AnimeSearchResult): void {
+  if (selectMode.value) toggleSelected(anime);
+  else libraryStore.openAnime(anime.id);
+}
+
+function openExport(): void {
+  exportIds.value = [...selectedIds.value];
+}
+
+function closeExport(): void {
+  exportIds.value = null;
+  selectMode.value = false;
+  selectedIds.value = new Set();
+}
+
 async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
   const name = getAnimeName(anime);
   await window.api.downloadedAnimeDelete(anime.id, name);
@@ -143,7 +177,27 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
     <header class="topbar">
       <h2>Library</h2>
       <span v-if="library.length > 0" class="sub">· {{ library.length }} shows</span>
+      <div v-if="library.length > 0" class="topbar-actions">
+        <button
+          v-if="selectMode"
+          class="btn btn-primary btn-sm"
+          data-testid="library-export-selected"
+          :disabled="selectedIds.size === 0"
+          @click="openExport"
+        >
+          Export {{ selectedIds.size }} {{ selectedIds.size === 1 ? 'title' : 'titles' }}…
+        </button>
+        <button
+          class="btn btn-sm"
+          :class="selectMode ? 'btn-secondary' : 'btn-outline'"
+          data-testid="library-select-toggle"
+          @click="toggleSelectMode"
+        >
+          {{ selectMode ? 'Done' : 'Select' }}
+        </button>
+      </div>
     </header>
+    <ExportDialog v-if="exportIds" :anime-ids="exportIds" preselect @close="closeExport" />
     <div class="body">
       <div v-if="showFilterRow" class="filter-row">
         <div class="pill-tabs">
@@ -165,12 +219,15 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
             :anime="anime"
             :starred="starredIds.has(anime.id)"
             :prioritized="prioritySet.has(anime.id)"
+            :selectable="selectMode"
+            :selected="selectedIds.has(anime.id)"
             @toggle-star="toggleStar"
             @toggle-priority="togglePriority"
-            @click="libraryStore.openAnime(anime.id)"
+            @toggle-select="toggleSelected"
+            @click="onCardClick(anime)"
           />
           <span
-            v-if="statusFilter === 'priority' && priorityRank.has(anime.id)"
+            v-if="!selectMode && statusFilter === 'priority' && priorityRank.has(anime.id)"
             class="rank-badge"
             >{{ priorityRank.get(anime.id) }}</span
           >
@@ -244,6 +301,12 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
 .topbar .sub {
   color: var(--text-3);
   font-size: 0.85rem;
+}
+
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
 }
 
 .body {

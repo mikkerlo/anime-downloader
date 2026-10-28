@@ -15,8 +15,9 @@
 // against the real handlers rather than against `index.ts` as source text — see
 // the equivalence block at the bottom. `index.ts` itself is still not importable
 // under Vitest (module-scope Electron boot) and is still excluded from coverage,
-// so the one constraint that is purely about the wiring — that the manager's
-// single `onVideoDownloaded` slot is claimed exactly once — remains a text guard.
+// so the one constraint that is purely about the wiring — that the episode
+// completion handler is subscribed to `onVideoDownloaded` exactly once — remains
+// a text guard.
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import * as fs from 'fs'
@@ -149,6 +150,9 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
   let videoHookCalls: Array<{ filePath: string; itemId: string }>
   let mirrorVideoHook: (filePath: string, item: DownloadItem) => void
   let mirrorEpisodeHook: (info: EpisodeCompleteInfo) => void
+  // The hook is a listener list (#574), so a case that swaps in another video
+  // listener removes the mirror first instead of relying on a replace.
+  let offMirrorVideoHook: () => void
 
   beforeEach(() => {
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-meta-ud-'))
@@ -170,7 +174,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
       episodePayloads.push(info)
       if (info.hasVideo) persistDownloadedEpisode(store, info)
     }
-    dm.onVideoDownloaded(mirrorVideoHook)
+    offMirrorVideoHook = dm.onVideoDownloaded(mirrorVideoHook)
     dm.onEpisodeComplete(mirrorEpisodeHook)
 
     global.fetch = vi.fn(
@@ -716,7 +720,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
 
     it('takes the group payload from the video item, not from whichever row is first', async () => {
       // The stale-embed divergence: `restart` re-resolves the embed and corrects
-      // only the VIDEO item's quality (`download-manager.ts:893`); the subtitle
+      // only the VIDEO item's quality (`download-manager.ts:898`); the subtitle
       // branch sets `url` alone, so the two genuinely disagree afterwards.
       // Queue order is then the only thing deciding which number gets persisted,
       // and the payload must not depend on it.
@@ -801,17 +805,18 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     const source = (): string =>
       fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'), 'utf-8')
 
-    it('registers onVideoDownloaded exactly once', () => {
-      // The manager holds one callback slot, not a list: a second registration
-      // would silently unregister the mp4-stats consumer — the metadata write
-      // would work and the .mp4 probe would stop, with no error anywhere.
-      // Comment lines are dropped first; the comment inside the hook names the
-      // method and would otherwise count as a call site.
+    it('registers the episode-completion video handler exactly once', () => {
+      // The hook is a listener list (#574), so a second subscriber can no
+      // longer unregister this one (`download-manager-hooks.test.ts` pins
+      // that). What stays a wiring claim is that the metadata write is
+      // subscribed once: twice would run it twice per video. Comment lines are
+      // dropped first, since the comment above the hook names the handler.
       const registrations = source()
         .split('\n')
         .filter((l) => !l.trim().startsWith('//'))
-        .filter((l) => l.includes('onVideoDownloaded('))
+        .filter((l) => l.includes('episodeCompletion.handleVideoDownloaded'))
       expect(registrations).toHaveLength(1)
+      expect(registrations[0]).toContain('onVideoDownloaded(')
     })
   })
 
@@ -899,6 +904,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     /** Replaces the mirror hook with the real production tail over `target`. */
     const wireReal = (target: DownloadedEpisodesStore): void => {
       const handlers = realHandlers(target)
+      offMirrorVideoHook()
       dm.onVideoDownloaded((filePath, item) => {
         videoHookCalls.push({ filePath, itemId: item.id })
         handlers.handleVideoDownloaded(filePath, item)
@@ -972,6 +978,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
       try {
         const failing = makeFailingStore()
         const handlers = realHandlers(failing)
+        offMirrorVideoHook()
         dm.onVideoDownloaded(async (filePath, item) => {
           videoHookCalls.push({ filePath, itemId: item.id })
           // The await is the point: the throw lands after the dispatch has
@@ -1070,6 +1077,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
         }
       }
       const handlers = realHandlers(flaky)
+      offMirrorVideoHook()
       dm.onVideoDownloaded((filePath, item) => {
         videoHookCalls.push({ filePath, itemId: item.id })
         handlers.handleVideoDownloaded(filePath, item)

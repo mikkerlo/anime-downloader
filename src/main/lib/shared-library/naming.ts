@@ -144,10 +144,28 @@ const fold = (s: string): string => s.toUpperCase()
  * collides with an earlier one when case-folded (exFAT, NTFS, APFS) gets the
  * hash suffix: the title directory a hash of the title, the file a hash of
  * the item key.
+ *
+ * `existing` are the paths of the items already in the library, which come
+ * before `inputs` in `items[]` (an export appends): they take part in the
+ * collision check as the earlier items they are, and keep their names.
  */
-export function nameItems(inputs: readonly NamingInput[]): NamedItem[] {
+export function nameItems(
+  inputs: readonly NamingInput[],
+  existing: readonly Pick<SharedLibraryItem, 'path' | 'subtitlePath'>[] = []
+): NamedItem[] {
   const dirs = new Map<string, string>()
   const files = new Set<string>()
+  for (const item of existing) {
+    for (const rel of [item.path, item.subtitlePath]) {
+      if (rel === undefined) continue
+      const slash = rel.indexOf('/')
+      if (slash > 0) {
+        const dir = rel.slice(0, slash)
+        if (!dirs.has(fold(dir))) dirs.set(fold(dir), dir)
+      }
+      files.add(fold(rel))
+    }
+  }
   return inputs.map((input) => {
     let forced = false
     let b = nameOne(input, false, '')
@@ -169,6 +187,15 @@ export function nameItems(inputs: readonly NamingInput[]): NamedItem[] {
     out.renamed = out.path !== plain.path || out.subtitlePath !== plain.subtitlePath
     return out
   })
+}
+
+/**
+ * A library folder's name from the name the user typed: today's
+ * `sanitizeFilename`, then steps 2 and 4 (#574). Not budgeted: it is part of
+ * the root, not of the relative path.
+ */
+export function libraryFolderName(name: string): string {
+  return finish(sanitizeFilename(name.trim()))
 }
 
 /** One item, with no other item to collide with. */

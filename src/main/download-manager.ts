@@ -9,6 +9,7 @@ import Ffmpeg from 'fluent-ffmpeg'
 import type { SmotretApi } from './smotret-api'
 import { fetchWithTimeout } from './lib/net'
 import { isNetworkError } from './lib/errors'
+import { createListenerSet } from './lib/listener-set'
 
 interface RunFfmpegOptions {
   ffmpegPath: string
@@ -188,6 +189,23 @@ export interface EpisodeCompleteInfo {
   hasVideo: boolean
 }
 
+/** What `onMergeComplete` listeners receive for one merged group. */
+export interface MergeCompleteInfo {
+  animeName: string
+  animeId: number
+  episodeInt: string
+  episodeLabel: string
+  /**
+   * The merged `.mkv`, as a path relative to the download dir — it already
+   * carries the anime directory, because it derives from
+   * `group.video.filename` (itself `path.join(animeDirName, …)`). Lets a
+   * handler move exactly the file this merge produced instead of matching the
+   * whole episode, which is wider than one file even now that it is
+   * author-scoped, and back then swept sibling translations (#414, #416).
+   */
+  mkvFilename: string
+}
+
 const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
 // A failed attempt that grew the `.part` by at least this much retries at the
@@ -347,29 +365,16 @@ export class DownloadManager {
   // escaped as an unhandled rejection. `dispatchHook` now handles both shapes
   // identically, and the widened type says so instead of leaving it to the far
   // side of the slot.
+  //
+  // `onMergeComplete` and `onVideoDownloaded` are lists (#574): each
+  // registration appends, and each listener is wrapped in its own
+  // `dispatchHook` call, so one failing listener can't stop another. The other
+  // two stay single slots; nothing else subscribes to them.
   private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void | Promise<void>) | null =
     null
-  private mergeCompleteCallback:
-    | ((info: {
-        animeName: string
-        animeId: number
-        episodeInt: string
-        episodeLabel: string
-        /**
-         * The merged `.mkv`, as a path relative to the download dir — it
-         * already carries the anime directory, because it derives from
-         * `group.video.filename` (itself `path.join(animeDirName, …)`). Lets a
-         * handler move exactly the file this merge produced instead of matching
-         * the whole episode, which is wider than one file even now that it is
-         * author-scoped, and back then swept sibling translations (#414, #416).
-         */
-        mkvFilename: string
-      }) => void | Promise<void>)
-    | null = null
+  private mergeCompleteListeners = createListenerSet<[MergeCompleteInfo]>('download')
   private queueCompleteCallback: (() => void | Promise<void>) | null = null
-  private videoDownloadedCallback:
-    | ((filePath: string, item: DownloadItem) => void | Promise<void>)
-    | null = null
+  private videoDownloadedListeners = createListenerSet<[string, DownloadItem]>('download')
   private merging = false
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
   private activeMergeTranslationId: number | null = null
@@ -505,27 +510,24 @@ export class DownloadManager {
     this.episodeCompleteCallback = callback
   }
 
-  onMergeComplete(
-    callback: (info: {
-      animeName: string
-      animeId: number
-      episodeInt: string
-      episodeLabel: string
-      /** Download-dir-relative path of the merged `.mkv` — see the field (#414). */
-      mkvFilename: string
-    }) => void | Promise<void>
-  ): void {
-    this.mergeCompleteCallback = callback
+  /** Appends a listener for a successful merge; returns its unsubscribe (#574). */
+  onMergeComplete(callback: (info: MergeCompleteInfo) => void | Promise<void>): () => void {
+    return this.mergeCompleteListeners.add((info) =>
+      this.dispatchHook('mergeComplete', () => callback(info))
+    )
   }
 
   onQueueComplete(callback: () => void | Promise<void>): void {
     this.queueCompleteCallback = callback
   }
 
+  /** Appends a listener for a landed video; returns its unsubscribe (#574). */
   onVideoDownloaded(
     callback: (filePath: string, item: DownloadItem) => void | Promise<void>
-  ): void {
-    this.videoDownloadedCallback = callback
+  ): () => void {
+    return this.videoDownloadedListeners.add((filePath, item) =>
+      this.dispatchHook('videoDownloaded', () => callback(filePath, item), item)
+    )
   }
 
   /**
@@ -548,7 +550,10 @@ export class DownloadManager {
    *
    * `item`, when given, is marked with `error` so the queue row stops claiming
    * a clean completion. Only `videoDownloaded` has an item to mark; the other
-   * three hooks carry no queue row (see `docs/data-flow.md`).
+   * three hooks carry no queue row (see `docs/data-flow.md`). With several
+   * `onVideoDownloaded` listeners rejecting for one item, `item.error` keeps
+   * only the last message: a listener that needs its own failure reported
+   * (S6c #576, S6d #577) must record it itself, not rely on `item.error`.
    *
    * This method must never throw. Its `videoDownloaded` call site sits inside
    * `startDownload`'s try, whose catch re-queues with exponential backoff — an
@@ -1112,7 +1117,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1745-1750`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1748-1753`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1141,7 +1146,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1741`)
+   * (`src/main/download-manager.ts:1744`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1473,17 +1478,15 @@ export class DownloadManager {
       // Still fire-and-forget — awaiting it would hold `this.merging`, and the
       // whole merge queue behind it, for a multi-GB cross-drive copy that the
       // between-groups `mergeCancelled` check cannot interrupt.
-      if (merged && this.mergeCompleteCallback) {
-        const callback = this.mergeCompleteCallback
-        this.dispatchHook('mergeComplete', () =>
-          callback({
-            animeName: group.animeName,
-            animeId: group.animeId,
-            episodeInt: group.episodeInt,
-            episodeLabel: group.episodeLabel,
-            mkvFilename
-          })
-        )
+      if (merged) {
+        // Each listener runs inside its own `dispatchHook` (`onMergeComplete`).
+        this.mergeCompleteListeners.emit({
+          animeName: group.animeName,
+          animeId: group.animeId,
+          episodeInt: group.episodeInt,
+          episodeLabel: group.episodeLabel,
+          mkvFilename
+        })
       }
     }
     this.activeMergeTranslationId = null
@@ -1906,15 +1909,14 @@ export class DownloadManager {
       item.speed = 0
       this.schedulePersist()
 
-      if (item.kind === 'video' && this.videoDownloadedCallback) {
-        // `item` is passed so a failed metadata write marks the row (#428).
-        // Status and persist above already said 'completed', so without the
-        // mark the queue reports a clean download for a video whose
-        // `downloadedEpisodes` entry is missing — and nothing in the tree can
-        // reconstruct that entry, because the file scanner is pure filesystem
-        // and no filename carries a translation id.
-        const callback = this.videoDownloadedCallback
-        this.dispatchHook('videoDownloaded', () => callback(filePath, item), item)
+      if (item.kind === 'video') {
+        // Each listener's `dispatchHook` gets `item`, so a failed metadata
+        // write marks the row (#428). Status and persist above already said
+        // 'completed', so without the mark the queue reports a clean download
+        // for a video whose `downloadedEpisodes` entry is missing — and nothing
+        // in the tree can reconstruct that entry, because the file scanner is
+        // pure filesystem and no filename carries a translation id.
+        this.videoDownloadedListeners.emit(filePath, item)
       }
 
       this.checkEpisodeComplete(item.translationId)

@@ -21,9 +21,10 @@ src/renderer/src/
       PlayerView.vue
       SettingsView.vue         (thin wrapper around settings/SettingsShell.vue)
     shared/                    Reusable atoms used across views
-      AnimeCard.vue             props { anime, starred, prioritized? }; emits toggleStar, togglePriority.
-                                Both toggles are poster overlays inside .poster-wrap (star top-right,
-                                priority flag stacked below it) so they can never collide with the title/meta.
+      AnimeCard.vue             props { anime, starred, prioritized?, selectable?, selected? }; emits toggleStar,
+                                togglePriority, toggleSelect. Both toggles are poster overlays inside .poster-wrap
+                                (star top-right, priority flag stacked below it) so they can never collide with the
+                                title/meta; `selectable` adds the Library multi-select checkbox top-left (#574).
       CleanupModal.vue
       OfflineNotice.vue         The one offline empty state (#568): icon, props { reason, compact? }, and a
                                 button that turns Work offline off (manual) or probes now (auto, "Retry")
@@ -39,6 +40,16 @@ src/renderer/src/
       EpisodeRow.vue
       keys.ts                  InjectionKey<...> symbols for provide/inject
       translation-types.ts     Shared TRANSLATION_TYPES + typeChip(type)
+    shared-library/            Shared Library export (#574)
+      ExportDialog.vue          props { animeIds: number[] | null, preselect? }; the tree, folder picker, library
+                                name, target line, mode (Videos only; With metadata "Coming soon") and the
+                                size-vs-free bar. Mounted by LibraryView ("Export N titles…" in Select mode),
+                                AnimeDetailView ("Export…") and StorageTab ("Export to a Shared Library…")
+      ExportTree.vue            Title → translation → episode tree, tri-state checkboxes, per-node sizes;
+                                missing and busy episodes greyed out
+      ExportJobCard.vue         One export job in DownloadsView: progress, Pause/Resume/Cancel, "Paused while
+                                the player is open", "Waiting for drive '<name>'" with Locate…, Dismiss
+      export-selection.ts       Pure tri-state selection and size helpers for the tree
     player/                    PlayerView sub-components (controls bar)
       PlayerTitleBar.vue
       TranslationMenu.vue
@@ -57,7 +68,7 @@ src/renderer/src/
       WatchTogetherTab.vue
       DebugTab.vue
   composables/                 Reactive logic (16 modules — see below)
-  stores/                      Pinia stores (6 stores — see below)
+  stores/                      Pinia stores (see below)
   assets/                      Shared CSS
     theme.css                  Global design tokens + base + shared primitives (imported once in main.ts)
     player-menus.css           Imported scoped into each component
@@ -68,7 +79,7 @@ src/renderer/src/
 
 ## Pinia stores
 
-The six stores in `src/renderer/src/stores/` own cross-view state and, where applicable, the disposable IPC subscriptions for their domain (Phase 4 ownership rule — see [IPC](./ipc.md#broadcast-subscription-contract-phase-4-slice-4a-111)).
+The stores in `src/renderer/src/stores/` own cross-view state and, where applicable, the disposable IPC subscriptions for their domain (Phase 4 ownership rule — see [IPC](./ipc.md#broadcast-subscription-contract-phase-4-slice-4a-111)).
 
 | Store | File | State | Subscriptions owned |
 |---|---|---|---|
@@ -79,6 +90,7 @@ The six stores in `src/renderer/src/stores/` own cross-view state and, where app
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
 | `useOfflineStore` | `offline.ts` | `state` (`OfflineState`), `isOffline`/`isManual` (computed), `retrying`, `setManual(on)`, `retry()` — backs the Sidebar Offline pill and the Settings › General Work offline switch (#567), `OfflineNotice`, and each view's offline state (#568, see below) | `onOfflineStateChanged` (lifetime-scoped) |
 | `useSyncplayStore` | `syncplay.ts` | `status` (`SyncplayStatus`), `roomUsers`, `isActive` (computed), `refresh()` re-seed from `get-status`/`get-room-users` | `onSyncplayConnectionStatus`, `onSyncplayRoomUsers` (lifetime-scoped) |
+| `useExportStore` | `export.ts` | `jobs` (`ExportJobView[]`, seeded from `export:list-jobs`), `activeJob` (computed), `locateErrors`; `start`, `pause`, `resume`, `cancel` (dismisses a finished job), `locate` — the Shared Library export jobs (#574) shown by `ExportJobCard` in Downloads | `onExportJobUpdated` (lifetime-scoped) |
 
 Stores singleton-own their broadcast subscriptions and never dispose them — they live for the app's lifetime. Component-local subscriptions (per-anime, per-player-instance) bind to `onUnmounted` instead. See [IPC](./ipc.md) for the full ownership rule and the CI gate.
 

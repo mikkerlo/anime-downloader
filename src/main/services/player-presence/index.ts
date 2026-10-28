@@ -1,4 +1,5 @@
 import type { WebContents } from 'electron'
+import { createListenerSet } from '../../lib/listener-set'
 
 /**
  * The part of a renderer's `WebContents` the presence service needs — the
@@ -23,8 +24,13 @@ export interface PlayerPresenceService {
   /** Drops every count `senderId` holds — its renderer went away. */
   releaseSender(senderId: number): void
   isOpen(): boolean
-  /** Fires when the last open view releases. */
-  onRelease(cb: () => void): void
+  /**
+   * Adds a listener for the last open view's release, after any added before
+   * it (the merge hold's `resumeHeldMerges`, a Shared Library export's per-file
+   * hold, #574). Returns its unsubscribe. A listener that throws is logged and
+   * the rest still run.
+   */
+  onRelease(cb: () => void): () => void
 }
 
 export function createPlayerPresenceService(): PlayerPresenceService {
@@ -33,11 +39,11 @@ export function createPlayerPresenceService(): PlayerPresenceService {
   // sender, not per open: one player open per episode would otherwise stack
   // three listeners each time and trip MaxListenersExceededWarning.
   const wired = new Set<number>()
-  let releaseCallback: (() => void) | null = null
+  const release = createListenerSet<[]>('player-presence')
 
   function drop(senderId: number): void {
     counts.delete(senderId)
-    if (counts.size === 0) releaseCallback?.()
+    if (counts.size === 0) release.emit()
   }
 
   function releaseSender(senderId: number): void {
@@ -69,8 +75,8 @@ export function createPlayerPresenceService(): PlayerPresenceService {
     isOpen(): boolean {
       return counts.size > 0
     },
-    onRelease(cb: () => void): void {
-      releaseCallback = cb
+    onRelease(cb: () => void): () => void {
+      return release.add(cb)
     }
   }
 }

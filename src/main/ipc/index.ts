@@ -36,6 +36,8 @@ import * as playerRouter from './player.ipc'
 import * as syncplayRouter from './syncplay.ipc'
 import * as debugRouter from './debug.ipc'
 import * as offlineRouter from './offline.ipc'
+import * as sharedLibraryRouter from './shared-library.ipc'
+import type { SharedLibraryExportService } from '../services/shared-library-export'
 import type { FileCheckResult } from '../lib/episode-file-scan'
 
 export interface FfmpegInfo {
@@ -118,6 +120,8 @@ export interface AppDeps {
   offlineService: OfflineService
   /** Titles watched in the last 90 days, part of the anime-cache scope (#570). */
   recentWatch: RecentWatchIndex
+  /** Export to a Shared Library: plan, jobs, re-plug (#574). */
+  sharedLibraryExport: SharedLibraryExportService
 }
 
 /**
@@ -174,4 +178,5 @@ function registerAllRouters(deps: AppDeps): void {
   syncplayRouter.register(deps)
   debugRouter.register(deps)
   offlineRouter.register(deps)
+  sharedLibraryRouter.register(deps)
 }

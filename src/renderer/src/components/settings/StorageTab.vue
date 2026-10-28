@@ -6,8 +6,12 @@ import { formatBytes } from '../../utils';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 import SettingsSwitch from './SettingsSwitch.vue';
+import ExportDialog from '../shared-library/ExportDialog.vue';
 
 const { autoSave, showSaved } = useSettingsAutosave();
+
+// "Export to a Shared Library…" with an empty selection (#574).
+const exportOpen = ref(false);
 
 const loaded = ref(false);
 
@@ -818,6 +822,18 @@ watch(autoCleanupDays, (val) => {
         </div>
       </SettingsRow>
     </SettingsGroup>
+
+    <SettingsGroup title="Shared Library">
+      <SettingsRow
+        label="Export"
+        desc="Copy downloaded episodes to a folder or a flash drive that another PC can open, or that plays with VLC."
+      >
+        <button class="btn btn-sm" data-testid="storage-export" @click="exportOpen = true">
+          Export to a Shared Library…
+        </button>
+      </SettingsRow>
+    </SettingsGroup>
+    <ExportDialog v-if="exportOpen" :anime-ids="null" @close="exportOpen = false" />
 
     <SettingsGroup title="Auto-cleanup">
       <SettingsRow

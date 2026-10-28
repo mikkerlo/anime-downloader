@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { getAnimeName as _getAnimeName, getPosterSrc, POSTER_SCHEME } from '../../utils';
 import { storeToRefs } from 'pinia';
 import CleanupModal from '../shared/CleanupModal.vue';
+import ExportDialog from '../shared-library/ExportDialog.vue';
 import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
@@ -85,6 +86,8 @@ const autoDlSubscription = ref<AutoDownloadSubscription | null>(null);
 const autoDlSaving = ref(false);
 const isDownloaded = ref(false);
 const cleanupModalOpen = ref(false);
+// "Export…" to a Shared Library, with this title preselected (#574).
+const exportOpen = ref(false);
 
 const episodeMeta = ref<Record<string, EpisodeMeta[]>>({});
 const fileStatus = ref<Record<string, EpisodeFileEntry[]>>({});
@@ -718,6 +721,15 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
                 </svg>
                 Cleanup files…
               </button>
+              <button
+                v-if="isDownloaded"
+                class="btn btn-ghost"
+                data-testid="detail-export"
+                title="Copy this title's episodes to a Shared Library"
+                @click="exportOpen = true"
+              >
+                Export…
+              </button>
             </div>
             <div v-if="autoDlSubscription" class="autodl-note">
               <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">
@@ -847,6 +859,12 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
       :anime-name="getAnimeName()"
       @closed="cleanupModalOpen = false"
       @deleted="onCleanupDeleted"
+    />
+    <ExportDialog
+      v-if="exportOpen"
+      :anime-ids="[props.animeId]"
+      preselect
+      @close="exportOpen = false"
     />
   </main>
 </template>

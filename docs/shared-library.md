@@ -13,6 +13,9 @@ The code lives in `src/main/lib/shared-library/`, and its types in `src/shared/t
 | `index-html.ts` | `renderIndexHtml`: the escaped, script-free `index.html` |
 | `discover.ts` | `discoverLibraries(dir)` |
 | `paths.ts` | The lexical path check, `resolveItem`, `resolveWriteTarget`, `absoluteOverflow`, poster names |
+| `mount-candidates.ts` | Where a removable drive can be mounted, per OS, each check on a 1 s async budget (#574; S7c #581 reuses it) |
+
+The export (S6a #574) lives in `src/main/services/shared-library-export/` (`plan.ts`, `copy.ts`, `snapshot.ts`, `locate.ts`, `job.ts`, `index.ts`); see [Export](#export-videos-only-574).
 
 Nothing calls `writeState` before S9 (#584).
 
@@ -164,6 +167,41 @@ The budget is relative, so an item gets the same name whatever the mount point. 
 ## Discovery
 
 `discoverLibraries(dir)` checks `dir`, then each folder one level below it, for `.anime-dl/manifest.json` (or a lone `manifest.prev.json`, left by a crash inside a manifest write). One drive can hold several libraries.
+
+## Export, Videos only (#574)
+
+The user picks titles, translations and episodes, a folder and a library name, and gets a *Videos only* library: the episodes, the manifest, and per title a `meta/<animeId>.json` snapshot and `posters/<animeId>.jpg`. No watch state is written (S9 #584). Entry points: "Export…" on a title's page (that title preselected), Library's **Select** → "Export N titles…", and Settings → Storage → "Export to a Shared Library…" (every downloaded title, nothing selected). Jobs show in Downloads.
+
+**Plan.** The selection is `[{ animeId, translationId, episodeInt }]`. Each item is looked up in `downloadedEpisodes` (`${animeId}:${episodeInt}:${translationId}`) and resolved on disk across the hot and cold roots with the episode list's scan (`scanEpisodeFilesAsync`), under each of the title's folder names (romaji, ru, title), tagged file first, then legacy. An item with no file is *missing* (pre-fetching is S6d #577); one whose translation is `merging` or `deferred` is *busy*; both are skipped. An unmerged `.mp4` + `.ass` pair is copied as both files (`subtitlePath`); merging on export is S6c (#576). The source is re-resolved just before each copy, so an auto-move between hot and cold during a job is followed.
+
+**Target.** The library root is the picked folder when it holds a library itself, otherwise `<folder>/<name>` (`libraryFolderName`: `sanitizeFilename` plus the naming rule's Windows-safety and trailing-dot steps). It is classified by its manifest's `mode` and `owner` against `shikimoriUser.id` only (claims arrive with S7a #578, and S6e #586 tells them apart):
+
+| Target | Videos-only export |
+|---|---|
+| No library | `new`: create `<folder>/<name>/` with `mode: 'videos'` and `owner: null` |
+| A Videos-only library (`owner: null`), made by any PC | `add`: anyone may add to it, a PC with no account included |
+| A With metadata library owned by this PC's account | `own-metadata`: blocked ("This library carries watch state…"). S6e (#586) routes it to With metadata |
+| A With metadata library with any other owner, or a claim | `foreign`: never written; the export creates a sibling library, `<name>`, `<name> (2)`, … next to it |
+| A library this version can't write (a newer major, over a cap, interrupted) | `read-only`: blocked with the reader's message |
+
+The size estimate counts only items the library doesn't already have with the same key and the same size (`present`). Free space is `statfs(folder)` against those bytes plus a 1% margin (`fitsFreeSpace`, `src/shared/shared-library-export.ts`, shared by the dialog's live bar and main's start check). The start also refuses an empty copy, a library that would pass the 200k item cap, and a second job while one runs.
+
+**Copy.** For each file:
+
+1. `resolveWriteTarget(root, path)`; on `'escapes'` the item is skipped and logged, so a symlinked directory can't redirect a copy outside the root. The item's folder is created one level deep only, so a vanished drive root is never recreated;
+2. stream to `<dest>.anime-dl-tmp`, hashing as it goes, fsync, delete any old `<dest>` (never rename onto an existing file), rename into place;
+3. verify: the size, plus a re-read sha256 for files under 2 GB (size only above that). A mismatch deletes the file and marks the item failed; it stays out of the manifest;
+4. the item joins the manifest at the next checkpoint.
+
+The manifest is written through `writeManifest` every 10 items and at the end (and on pause and cancel), so a cancelled or crashed job leaves a valid library holding whatever finished. Items keep their `sha256`. A title joins `titles[]` with its first finished item; its `meta` and poster are written just before its first file. Names come from the v1 rule, with the library's existing items passed to `nameItems` as the earlier items they are; renamed keys go to `naming.renamed`, and `index.html` is rewritten at each checkpoint when that list is non-empty. Filesystem-specific checks (FAT32, writability, path length) are S6b (#575).
+
+**The `meta` re-export.** A `meta/<animeId>.json` that reads at a known major gets the local snapshot's known fields merged over it, and `carryUnknown` carries the existing file's unknown fields at every record level (the file, `titles`, `searchResult` and its `titles`, each `genres` and `episodes` entry by key), so a re-export keeps a newer minor's fields. A file over its 1 MB cap is left alone; an invalid one is replaced. The local snapshot passes the v1 schema check first, so nothing a reader would drop is written, and only allow-listed fields leave this PC.
+
+**Job identity is the library id.** A new library's `libraryId` is generated at start and its manifest, with no items, is written before the first file is copied. The job is saved as `userData/export-jobs/<jobId>.json` ([Storage](./storage.md)). Every run first finds the library: the last known root if its manifest has the same `libraryId`, otherwise the candidate mounts from `mount-candidates.ts` (`D:`–`Z:` on Windows, `/Volumes/*` on macOS, `/media/$USER/*`, `/run/media/$USER/*` and `/mnt/*` on Linux), each searched at its root and one level below with a 1 s budget per check. Two drives with the same `libraryId` (a cloned stick): the first match wins and the job's note says which path it chose and where else the library is. Before each file the job checks the root still holds that library (a `stat` of the manifest it last read or wrote, a full read when that changed), so a different drive at the old letter or path, with another library or none, is never written. Not found: the job is "Waiting for drive '<name>'", retried every 10 s, on Resume, and through "Locate…", a folder picker that accepts only a folder (or a folder one level below it) holding that `libraryId`. A drive pulled mid-copy is the same state: the rename never happens and the manifest stays at the last checkpoint. On resume the leftover `.anime-dl-tmp` is deleted and that file restarts; at boot an unfinished job shows as paused.
+
+**Playback hold, per file.** Before each file the job checks `playerPresenceService.isOpen()`, the merge hold's signal (`docs/ffmpeg.md`, #516). A file already copying when the player opens finishes; the next one waits, shown as "Paused while the player is open", for an `onRelease` listener the job adds when it starts and removes (the returned unsubscribe) when it ends, is cancelled or is paused. Episodes are at most about 700 MB, roughly 25 s on USB 2; a movie in flight can take longer, an accepted risk.
+
+**Jobs reach the renderer** through `export:job-updated` ([IPC](./ipc.md)), into `useExportStore`, and a job card in Downloads: "Exporting to <library> — 12 / 40 files, 8.1 / 23 GB", with Pause, Resume and Cancel, the two waiting states, and Dismiss once it's finished.
 
 ## Tests
 

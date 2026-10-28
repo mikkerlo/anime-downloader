@@ -47,6 +47,14 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `offline:set-manual` | invoke | Work offline on/off (`boolean`). Persists `workOffline` and returns the new state; turning it off runs the online kick-off |
 | `offline:retry` | invoke | Probe both API hosts now, joining a probe in flight, and return the resulting state — the auto-mode pill's "check again" instead of waiting out the 15 s → 2 min backoff. A no-op in manual mode |
 | `offline:state-changed` | main→renderer | Broadcast on every mode change and after every probe; payload is the same state. Consumed by `useOfflineStore` |
+| `export:plan` | invoke | Shared Library export (#574): `ExportPlanRequest` `{ animeIds \| null, target \| null, name }` → `ExportPlan` `{ titles, target }`. `titles` is the title → translation → episode tree with each episode's state (`ready`, `missing`, `busy`) and size; `target` classifies the picked folder by the target table in `docs/shared-library.md` (`new`, `add`, `own-metadata`, `foreign`, `read-only`), with its `blocked` reason, `statfs` free bytes and the tree keys the library already has |
+| `export:start` | invoke | `ExportStartRequest` `{ selection, target, name }` → `{ ok: true, job }` or `{ ok: false, reason }`. Re-plans in main and refuses a blocked target, a selection that doesn't fit (bytes + 1%), an empty copy, the item cap, or a second running job |
+| `export:pause` / `export:resume` | invoke | `(jobId)` → the job's `ExportJobView`. Resume on a job waiting for its drive retries the search at once |
+| `export:cancel` | invoke | `(jobId)`: cancels a running, held, waiting or paused job (the library keeps what finished); on a finished job it dismisses it and returns null |
+| `export:list-jobs` | invoke | Every saved job, newest first (`ExportJobView[]`), for the `useExportStore` seed |
+| `export:pick-target` | invoke | Folder picker for the export target; the chosen path or null |
+| `export:locate-target` | invoke | `(jobId)`: "Locate…" for a job waiting for its drive. A folder picker that accepts only a folder holding the job's `libraryId` (itself or one level below) → `{ ok, reason }` (`reason: null` when the picker was cancelled) |
+| `export:job-updated` | main→renderer | `ExportJobView` on every status change and, throttled to 250 ms, on copy progress. Consumed by `useExportStore` |
 | `library-get` | invoke | List all starred + downloaded anime (merged) |
 | `library-toggle` | invoke | Add/remove from starred library |
 | `library-has` | invoke | Check if anime is starred |

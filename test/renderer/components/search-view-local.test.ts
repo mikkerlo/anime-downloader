@@ -201,6 +201,165 @@ describe('SearchView — offline local search (#571)', () => {
   })
 })
 
+describe('SearchView — a chip clicked while a new local search is in flight (#612 review)', () => {
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((r) => (resolve = r))
+    return { promise, resolve }
+  }
+
+  const OLD = [
+    local(1, ['starred'], { genres: ['Drama', 'Action'] }),
+    local(2, ['starred'], { genres: ['Action'] })
+  ]
+  const NEW = [local(3, ['downloaded'], { genres: ['Comedy'] })]
+
+  const activeGenre = (wrapper: VueWrapper): string[] =>
+    wrapper
+      .find('[data-testid="genre-chips"]')
+      .findAll('.pill-tab')
+      .filter((t) => t.classes('active'))
+      .map((t) => t.text())
+
+  async function setup(): Promise<{
+    wrapper: VueWrapper
+    searchLocal: Fn
+    fresh: ReturnType<typeof deferred<LocalSearchResponse>>
+    chip: ReturnType<typeof deferred<LocalSearchResponse>>
+    submitNew: () => Promise<void>
+    clickDrama: () => Promise<void>
+  }> {
+    const fresh = deferred<LocalSearchResponse>()
+    const chip = deferred<LocalSearchResponse>()
+    // The old query lands at once; the new query and any chip wait.
+    const searchLocal = vi.fn((q: string, filters?: LocalSearchFilters) =>
+      filters
+        ? chip.promise
+        : q === 'old'
+          ? Promise.resolve({ results: OLD, corpusSize: 3 })
+          : fresh.promise
+    )
+    stubApi({ searchLocal }, 'offline-manual')
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'old')
+    expect(cardIds(wrapper, '.local-grid')).toEqual([1, 2])
+    return {
+      wrapper,
+      searchLocal,
+      fresh,
+      chip,
+      submitNew: async () => {
+        await wrapper.find('input.search-input').setValue('new')
+        await wrapper.find('form.search-wrap').trigger('submit')
+      },
+      clickDrama: async () => {
+        await wrapper
+          .find('[data-testid="genre-chips"]')
+          .findAll('.pill-tab')
+          .find((t) => t.text() === 'Drama')!
+          .trigger('click')
+      }
+    }
+  }
+
+  async function expectNewQuery(wrapper: VueWrapper): Promise<void> {
+    expect(cardIds(wrapper, '.local-grid')).toEqual([3])
+    const chips = wrapper.find('[data-testid="genre-chips"]').findAll('.pill-tab')
+    expect(chips.map((t) => t.text())).toEqual(['All genres', 'Comedy'])
+    expect(activeGenre(wrapper)).toEqual(['All genres'])
+  }
+
+  // The review's scenario: an old chip clicked after the new query went out.
+  it.each(['the new search lands first', 'the chip lands first'])(
+    'a chip from the old results, clicked while the new query is in flight: %s',
+    async (order) => {
+      const { wrapper, fresh, chip, submitNew, clickDrama } = await setup()
+      await submitNew()
+      await clickDrama()
+
+      if (order === 'the new search lands first') {
+        fresh.resolve({ results: NEW, corpusSize: 3 })
+        await flushPromises()
+        chip.resolve({ results: [OLD[0]], corpusSize: 3 })
+      } else {
+        chip.resolve({ results: [OLD[0]], corpusSize: 3 })
+        await flushPromises()
+        // No old filtered hits under the new query's text in the meantime.
+        expect(cardIds(wrapper, '.local-grid')).toEqual([1, 2])
+        fresh.resolve({ results: NEW, corpusSize: 3 })
+      }
+      await flushPromises()
+      await expectNewQuery(wrapper)
+    }
+  )
+
+  it('a chip clicked on the landed results yields to a query submitted after it', async () => {
+    const { wrapper, searchLocal, fresh, chip, submitNew, clickDrama } = await setup()
+    await clickDrama()
+    expect(searchLocal).toHaveBeenLastCalledWith('old', { genre: 'Drama' })
+    await submitNew()
+    chip.resolve({ results: [OLD[0]], corpusSize: 3 })
+    await flushPromises()
+    // The filter refined a query that is no longer the one in the input.
+    expect(cardIds(wrapper, '.local-grid')).toEqual([1, 2])
+    expect(activeGenre(wrapper)).toEqual(['All genres'])
+
+    fresh.resolve({ results: NEW, corpusSize: 3 })
+    await flushPromises()
+    await expectNewQuery(wrapper)
+  })
+})
+
+describe('SearchView — the Starred badge follows the star (#612 review)', () => {
+  const badges = (wrapper: VueWrapper): string[] =>
+    wrapper.findAll('[data-testid="local-card"] .local-badge').map((b) => b.text())
+
+  it('un-starring a local card removes its Starred badge', async () => {
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({
+          results: [local(1, ['starred', 'downloaded'])],
+          corpusSize: 1
+        }),
+        libraryToggle: vi.fn().mockResolvedValue(false)
+      },
+      'offline-manual'
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'anime')
+    expect(badges(wrapper)).toEqual(['Starred', 'Downloaded'])
+
+    await wrapper.find('[data-testid="local-card"] .star-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="local-card"] .star-btn').classes()).not.toContain('active')
+    expect(badges(wrapper)).toEqual(['Downloaded'])
+  })
+
+  it('starring a downloaded-only local card adds the Starred badge', async () => {
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({
+          results: [local(2, ['downloaded'])],
+          corpusSize: 1
+        }),
+        libraryToggle: vi.fn().mockResolvedValue(true)
+      },
+      'offline-manual'
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'anime')
+    expect(badges(wrapper)).toEqual(['Downloaded'])
+
+    await wrapper.find('[data-testid="local-card"] .star-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="local-card"] .star-btn').classes()).toContain('active')
+    expect(badges(wrapper)).toEqual(['Starred', 'Downloaded'])
+  })
+})
+
 describe('SearchView — "In your library" online (#571)', () => {
   it('renders the local section above the remote results, de-duplicated by id', async () => {
     const order: string[] = []

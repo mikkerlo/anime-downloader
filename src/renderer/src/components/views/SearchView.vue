@@ -75,6 +75,9 @@ const genreFilter = ref<string | null>(null);
 const statusFilter = ref<ShikiUserRateStatus | null>(null);
 let localQuery = '';
 let localGeneration = 0;
+let filterGeneration = 0;
+// The `localGeneration` whose results are on screen.
+let landedGeneration = 0;
 
 const genreChips = computed(() =>
   Array.from(new Set(localAll.value.flatMap((a) => a.genres))).sort((a, b) => a.localeCompare(b))
@@ -92,6 +95,12 @@ const remoteResults = computed(() => {
   const shown = new Set(shownLocal.value.map((a) => a.id));
   return filteredResults.value.filter((a) => !shown.has(a.id));
 });
+
+// The Starred badge follows the star, not the snapshot the search returned.
+function badgesOf(a: LocalSearchResult): LocalSource[] {
+  const rest = a.localSources.filter((s) => s.kind !== 'starred');
+  return starredIds.has(a.id) ? [{ kind: 'starred' }, ...rest] : rest;
+}
 
 function clearLocal(): void {
   localGeneration++;
@@ -115,6 +124,7 @@ async function runLocal(q: string): Promise<void> {
   try {
     const [response] = await Promise.all([window.api.searchLocal(q), libraryStore.loadPosterIds()]);
     if (generation !== localGeneration) return;
+    landedGeneration = generation;
     localQuery = q;
     localAll.value = response.results;
     localResults.value = response.results;
@@ -134,15 +144,22 @@ async function setLocalFilter(
   genre: string | null,
   status: ShikiUserRateStatus | null
 ): Promise<void> {
+  // A filter refines the landed query; it never supersedes an in-flight one.
+  // While a newer search is in flight the old chips are inert, and a filter
+  // already in flight yields to any search submitted after it.
+  if (!localSearched.value || localGeneration !== landedGeneration) return;
   genreFilter.value = genre;
   statusFilter.value = status;
-  const generation = ++localGeneration;
+  const base = localGeneration;
+  const generation = ++filterGeneration;
   try {
     const response = await window.api.searchLocal(localQuery, {
       ...(genre ? { genre } : {}),
       ...(status ? { status } : {})
     });
-    if (generation === localGeneration) localResults.value = response.results;
+    if (generation === filterGeneration && base === localGeneration) {
+      localResults.value = response.results;
+    }
   } catch (err) {
     console.error('Local search failed:', err);
   }
@@ -347,7 +364,7 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
             />
             <div class="local-badges">
               <span
-                v-for="s in anime.localSources"
+                v-for="s in badgesOf(anime)"
                 :key="s.kind"
                 class="local-badge"
                 :class="`src-${s.kind}`"

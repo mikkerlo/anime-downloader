@@ -158,6 +158,8 @@ export function createAttachedLibraryService(
   const opened = new Map<string, Opened>()
   // The last discovery's libraries, by id, so `attach` takes an id, not a path.
   const discovered = new Map<string, string>()
+  // How many times each library was attached, so a startup read that began earlier never replaces an attach's.
+  const attaches = new Map<string, number>()
 
   const records = (): Record<string, AttachedLibraryRecord> =>
     (deps.store.get(STORE_KEY) as Record<string, AttachedLibraryRecord> | undefined) ?? {}
@@ -338,26 +340,38 @@ export function createAttachedLibraryService(
     rec.lastSeenAt = now()
   }
 
-  async function init(): Promise<void> {
+  // The startup reopen; a `refresh` waits for it, so its older read never lands last.
+  let ready: Promise<void> = Promise.resolve()
+
+  function init(): Promise<void> {
+    ready = reopenAll()
+    return ready
+  }
+
+  async function reopenAll(): Promise<void> {
     reconcileClaims()
-    const recs = records()
-    let changed = false
     await Promise.all(
-      Object.entries(recs).map(async ([libraryId, rec]) => {
+      Object.entries(records()).map(async ([libraryId, rec]) => {
+        const before = attaches.get(libraryId)
         try {
           const r = await reopen(libraryId, rec)
           if (!r) return
-          commit(libraryId, rec, r)
-          changed = true
+          // Fetched after the read, so an `attach` that landed meanwhile is
+          // kept; one that opened this library itself has the newer read.
+          const recs = records()
+          const current = recs[libraryId]
+          if (!current || current.root !== rec.root || attaches.get(libraryId) !== before) return
+          commit(libraryId, current, r)
+          save(recs)
         } catch (err) {
           log.warn(`[shared-library] could not reopen ${rec.root}`, err)
         }
       })
     )
-    if (changed) save(recs)
   }
 
   async function refreshOnce(libraryId: string, root: string): Promise<void> {
+    await ready.catch(() => {})
     const rec = records()[libraryId]
     if (!rec) return
     try {
@@ -459,6 +473,7 @@ export function createAttachedLibraryService(
     recs[libraryId] = rec
     save(recs)
     opened.set(libraryId, o)
+    attaches.set(libraryId, (attaches.get(libraryId) ?? 0) + 1)
     const library = infoOf(libraryId, rec)
     let ffmpegMissing: { mkvCount: number } | undefined
     if (library.mkvCount > 0) {

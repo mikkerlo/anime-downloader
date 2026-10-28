@@ -770,6 +770,93 @@ describe('refresh after a write (#616)', () => {
     ).toEqual([FIXTURE_LIBRARY_ID, LIB].sort())
     expect(await m.svc.resolveItem(202, '2', 9101)).not.toBeNull()
   })
+
+  describe('against a slow startup reopen (#616 review)', () => {
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+    /** A restart on `rootA`'s persisted record, its `init()` held mid-read of `rootA`. */
+    async function restartHeld(rootA: string): Promise<{
+      m: Made
+      init: Promise<void>
+      release: () => void
+      lastNow: () => number
+    }> {
+      const first = makeCloned()
+      await attachAt(first, rootA)
+      let release!: () => void
+      const gate = new Promise<void>((r) => (release = r))
+      let entered!: () => void
+      const blocked = new Promise<void>((r) => (entered = r))
+      let held = false
+      let t = 5_000
+      const m = makeCloned(
+        { attachedLibraries: structuredClone(first.store.get('attachedLibraries')) },
+        {
+          now: () => ++t,
+          checkWritable: async (root) => {
+            if (root === rootA && !held) {
+              held = true
+              entered()
+              await gate
+            }
+            return { kind: 'writable' }
+          }
+        }
+      )
+      const init = m.svc.init()
+      await blocked
+      return { m, init, release, lastNow: () => t }
+    }
+
+    it('a refresh started while init() reads lands after it: memory and the saved record hold the refreshed manifest', async () => {
+      const root = videosOnly()
+      const { m, init, release, lastNow } = await restartHeld(root)
+      await exportEpisode(root, '2')
+      const refreshed = m.svc.refresh(FIXTURE_LIBRARY_ID, root)
+      // Unwaited, the refresh would finish here and the held startup read would then replace it.
+      await Promise.race([refreshed, sleep(200)])
+      release()
+      await Promise.all([init, refreshed])
+
+      const meshi = m.svc.get(FIXTURE_LIBRARY_ID)!.titles.find((x) => x.animeId === 202)!
+      expect(meshi.itemCount).toBe(2)
+      expect(await m.svc.resolveItem(202, '2', 9101)).not.toBeNull()
+      const saved = m.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>
+      expect(saved[FIXTURE_LIBRARY_ID]).toMatchObject({
+        root,
+        access: 'read-write',
+        lastSeenAt: lastNow()
+      })
+      expect(m.onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it('another library attached while init() reads is kept in the saved records', async () => {
+      const rootA = videosOnly()
+      const { m, init, release } = await restartHeld(rootA)
+      const rootB = tree({ 'manifest.json': manifest(1, null, { mode: 'videos' }) })
+      await attachAt(m, rootB)
+      release()
+      await init
+
+      const saved = m.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>
+      expect(Object.keys(saved).sort()).toEqual([FIXTURE_LIBRARY_ID, LIB].sort())
+      expect(saved[LIB].root).toBe(rootB)
+      expect(m.svc.get(FIXTURE_LIBRARY_ID)?.available).toBe(true)
+    })
+
+    it('the same library re-attached while init() reads keeps the attach’s newer read', async () => {
+      const root = videosOnly()
+      const { m, init, release } = await restartHeld(root)
+      await exportEpisode(root, '2')
+      await attachAt(m, root)
+      release()
+      await init
+
+      const meshi = m.svc.get(FIXTURE_LIBRARY_ID)!.titles.find((x) => x.animeId === 202)!
+      expect(meshi.itemCount).toBe(2)
+      expect(await m.svc.resolveItem(202, '2', 9101)).not.toBeNull()
+    })
+  })
 })
 
 describe('spawnPathFor', () => {

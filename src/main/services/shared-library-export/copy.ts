@@ -90,8 +90,10 @@ export class TooLargeError extends Error {
  * know (S6c #576 re-encodes, a filesystem the probe called `unknown`): a write
  * failure is "too large for the filesystem" when it is `EFBIG` or ffmpeg's
  * "File too large", or when, on `fat32` or `unknown`, the partial temp file had
- * reached the FAT32 limit (`FAT32_TEMP_THRESHOLD`). Windows reports that limit
- * as a full disk (`ENOSPC`), and a probe that timed out there gives `unknown`.
+ * reached the FAT32 limit (`FAT32_TEMP_THRESHOLD`) without passing it: past
+ * 4 GiB − 1 bytes the drive isn't FAT32, and that is a real disk-full. Windows
+ * reports the limit as a full disk (`ENOSPC`), and a probe that timed out there
+ * gives `unknown`.
  * S6c's merge step reuses it.
  */
 export function isTooLargeForFilesystem(
@@ -105,7 +107,8 @@ export function isTooLargeForFilesystem(
   return (
     (fsType === 'fat32' || fsType === 'unknown') &&
     partialBytes !== null &&
-    partialBytes >= FAT32_TEMP_THRESHOLD
+    partialBytes >= FAT32_TEMP_THRESHOLD &&
+    partialBytes <= FAT32_MAX_FILE_SIZE
   )
 }
 

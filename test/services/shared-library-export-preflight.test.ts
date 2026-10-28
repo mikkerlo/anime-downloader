@@ -464,6 +464,10 @@ describe('the run-time size rule', () => {
     }
     // A real disk-full well short of 4 GiB stays a failure.
     expect(isTooLargeForFilesystem(enospc, 'unknown', 100)).toBe(false)
+    // So does one past 4 GiB − 1: FAT32 can't hold that, so the drive isn't FAT32 (#575 review).
+    expect(isTooLargeForFilesystem(enospc, 'unknown', FAT32_MAX_FILE_SIZE)).toBe(true)
+    expect(isTooLargeForFilesystem(enospc, 'unknown', FAT32_MAX_FILE_SIZE + 1)).toBe(false)
+    expect(isTooLargeForFilesystem(enospc, 'unknown', 6 * 1024 ** 3)).toBe(false)
     expect(isTooLargeForFilesystem(enospc, 'unknown', null)).toBe(false)
     // A known filesystem other than FAT32 never takes the size branch.
     expect(isTooLargeForFilesystem(enospc, 'exfat', FAT32_MAX_FILE_SIZE)).toBe(false)
@@ -602,6 +606,19 @@ describe('the run-time size rule', () => {
     const { keys, job } = await jobWithThirdWriteFailing(
       () => errno('ENOSPC', 'ENOSPC: no space left on device, write'),
       { fsType: 'unknown' }
+    )
+    expect(job.status).toBe('completed')
+    expect(job.skipped).toEqual([])
+    expect(job.failed).toEqual([
+      { key: keys[2], label: 'Show — Episode 3', reason: 'ENOSPC: no space left on device, write' }
+    ])
+    expect(tmpFiles(env!.drive)).toEqual([])
+  })
+
+  it('ENOSPC 6 GB into a file on an unknown filesystem (ntfs-3g) is a real disk-full, not a skip (#575 review)', async () => {
+    const { keys, job } = await jobWithThirdWriteFailing(
+      () => errno('ENOSPC', 'ENOSPC: no space left on device, write'),
+      { fsType: 'unknown', tmpSize: 6 * 1024 ** 3 }
     )
     expect(job.status).toBe('completed')
     expect(job.skipped).toEqual([])

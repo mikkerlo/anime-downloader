@@ -43,6 +43,12 @@ export interface AttachedLibraryServiceDeps {
 export interface AttachedLibraryService {
   /** Re-reads every persisted library. Never throws. */
   init(): Promise<void>
+  /**
+   * Re-reads one attached library after a write to `root`, as `init` does,
+   * and fires `onChanged`. A no-op unless `root` is the attached copy.
+   * Serialized per library. Never throws.
+   */
+  refresh(libraryId: string, root: string): Promise<void>
   discover(dir: string): Promise<SharedLibraryCandidate[]>
   attach(libraryId: string, choice?: SharedLibraryAttachChoice): Promise<SharedLibraryAttachResult>
   list(): AttachedLibraryInfo[]
@@ -152,6 +158,8 @@ export function createAttachedLibraryService(
   const opened = new Map<string, Opened>()
   // The last discovery's libraries, by id, so `attach` takes an id, not a path.
   const discovered = new Map<string, string>()
+  // How many times each library was attached, so a startup read that began earlier never replaces an attach's.
+  const attaches = new Map<string, number>()
 
   const records = (): Record<string, AttachedLibraryRecord> =>
     (deps.store.get(STORE_KEY) as Record<string, AttachedLibraryRecord> | undefined) ?? {}
@@ -314,26 +322,97 @@ export function createAttachedLibraryService(
     }
   }
 
-  async function init(): Promise<void> {
+  type Reopened = { o: Opened } & Pick<AttachedLibraryRecord, 'access' | 'accessReason'>
+
+  /** One persisted root re-read, or null when it no longer holds `libraryId`. */
+  async function reopen(libraryId: string, rec: AttachedLibraryRecord): Promise<Reopened | null> {
+    const { read, opened: o } = await open(rec.root)
+    if (!o.manifest || o.manifest.libraryId !== libraryId) return null
+    logRead(rec.root, read)
+    return { o, ...(await accessOf(rec.root, read)) }
+  }
+
+  function commit(libraryId: string, rec: AttachedLibraryRecord, r: Reopened): void {
+    opened.set(libraryId, r.o)
+    rec.access = r.access
+    if (r.accessReason) rec.accessReason = r.accessReason
+    else delete rec.accessReason
+    rec.lastSeenAt = now()
+  }
+
+  // The startup reopen; a `refresh` waits for it, so its older read never lands last.
+  let ready: Promise<void> = Promise.resolve()
+
+  function init(): Promise<void> {
+    ready = reopenAll()
+    return ready
+  }
+
+  async function reopenAll(): Promise<void> {
     reconcileClaims()
-    const recs = records()
-    let changed = false
     await Promise.all(
-      Object.entries(recs).map(async ([libraryId, rec]) => {
+      Object.entries(records()).map(async ([libraryId, rec]) => {
+        const before = attaches.get(libraryId)
         try {
-          const { read, opened: o } = await open(rec.root)
-          if (!o.manifest || o.manifest.libraryId !== libraryId) return
-          logRead(rec.root, read)
-          opened.set(libraryId, o)
-          Object.assign(rec, await accessOf(rec.root, read), { lastSeenAt: now() })
-          if (!rec.accessReason) delete rec.accessReason
-          changed = true
+          const r = await reopen(libraryId, rec)
+          if (!r) return
+          // Fetched after the read, so an `attach` that landed meanwhile is
+          // kept; one that opened this library itself has the newer read.
+          const recs = records()
+          const current = recs[libraryId]
+          if (!current || current.root !== rec.root || attaches.get(libraryId) !== before) return
+          commit(libraryId, current, r)
+          save(recs)
         } catch (err) {
           log.warn(`[shared-library] could not reopen ${rec.root}`, err)
         }
       })
     )
-    if (changed) save(recs)
+  }
+
+  async function refreshOnce(libraryId: string, root: string): Promise<void> {
+    await ready.catch(() => {})
+    const rec = records()[libraryId]
+    if (!rec) return
+    try {
+      const attachedReal = opened.get(libraryId)?.realRoot ?? (await fsp.realpath(rec.root))
+      if ((await fsp.realpath(root)) !== attachedReal) return
+      const r = await reopen(libraryId, rec)
+      if (!r) return
+      // Fetched after the read, so an `attach` that landed meanwhile is kept.
+      const recs = records()
+      const current = recs[libraryId]
+      if (!current || current.root !== rec.root) return
+      commit(libraryId, current, r)
+      save(recs)
+      deps.onChanged?.()
+    } catch (err) {
+      log.warn(`[shared-library] could not refresh ${root}`, err)
+    }
+  }
+
+  const refreshing = new Map<string, { root: string; dirty: boolean; done: Promise<void> }>()
+
+  function refresh(libraryId: string, root: string): Promise<void> {
+    const running = refreshing.get(libraryId)
+    if (running) {
+      running.root = root
+      running.dirty = true
+      return running.done
+    }
+    const entry = { root, dirty: true, done: Promise.resolve() }
+    refreshing.set(libraryId, entry)
+    entry.done = (async () => {
+      try {
+        while (entry.dirty) {
+          entry.dirty = false
+          await refreshOnce(libraryId, entry.root)
+        }
+      } finally {
+        refreshing.delete(libraryId)
+      }
+    })()
+    return entry.done
   }
 
   async function discover(dir: string): Promise<SharedLibraryCandidate[]> {
@@ -394,6 +473,7 @@ export function createAttachedLibraryService(
     recs[libraryId] = rec
     save(recs)
     opened.set(libraryId, o)
+    attaches.set(libraryId, (attaches.get(libraryId) ?? 0) + 1)
     const library = infoOf(libraryId, rec)
     let ffmpegMissing: { mkvCount: number } | undefined
     if (library.mkvCount > 0) {
@@ -551,6 +631,7 @@ export function createAttachedLibraryService(
 
   return {
     init,
+    refresh,
     discover,
     attach,
     list,

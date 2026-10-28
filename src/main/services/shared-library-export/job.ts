@@ -95,6 +95,8 @@ export interface JobDeps {
   /** `bytesDone` includes the file in flight. */
   update: (rec: JobRecord, bytesDone: number) => void
   checkpointEvery: number
+  /** After each manifest write, fire-and-forget: it can never fail or stall the job (#616). */
+  onLibraryWritten?: (libraryId: string, root: string) => void | Promise<void>
   retryMs: number
   setTimer: (fn: () => void, ms: number) => unknown
   clearTimer: (handle: unknown) => void
@@ -351,6 +353,7 @@ export class ExportJob {
           layoutMinor: this.base.layoutMinor,
           layoutVersion: 1
         }
+        this.libraryWritten()
         this.signature = await this.manifestSignature()
         this.sinceCheckpoint = 0
         const html = renderIndexHtml(this.base)
@@ -369,6 +372,15 @@ export class ExportJob {
         throw err
       }
     }
+  }
+
+  private libraryWritten(): void {
+    const hook = this.deps.onLibraryWritten
+    if (!hook) return
+    const { libraryId, root } = this.rec
+    void Promise.resolve()
+      .then(() => hook(libraryId, root))
+      .catch((err) => console.warn(`[export] refreshing ${libraryId} failed:`, err))
   }
 
   private async holdWhilePlayerOpen(): Promise<void> {

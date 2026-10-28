@@ -414,7 +414,8 @@ const sharedLibraryExport = createSharedLibraryExportService({
     shikimoriUserId: (store.get('shikimoriUser') as { id: number } | null)?.id ?? null,
     claim: null
   }),
-  broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job)
+  broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
+  onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root)
 })
 
 const skipAnalysisService = createSkipAnalysisService({

@@ -16,6 +16,11 @@ import {
 } from '../../src/main/services/shared-library-export/copy'
 import { BLOCKED_OWN_METADATA } from '../../src/main/services/shared-library-export/plan'
 import {
+  createAttachedLibraryService,
+  type AttachedLibraryService,
+  type AttachedLibraryServiceDeps
+} from '../../src/main/services/attached-library'
+import {
   bytesFor,
   makeExportEnv,
   scan,
@@ -943,5 +948,206 @@ describe('Shared Library export (#574) — integration', () => {
     const root = path.join(env.drive, 'Trip')
     expect(manifestOf(root).items.map(itemKey).sort()).toEqual([a1, c1].sort())
     expect(fs.existsSync(path.join(root, 'Alpha Show', 'Alpha Show - 02 [Studio].mkv'))).toBe(false)
+  })
+})
+
+describe('an export into an attached library refreshes its in-memory copy (#616)', () => {
+  let attached: AttachedLibraryService
+  let onChanged: ReturnType<typeof vi.fn>
+  let written: [string, string][]
+  let refreshes: Promise<unknown>[]
+  let shared: string
+  let pc: ReturnType<typeof seedPc>
+
+  /** The app's wiring (`src/main/index.ts`), recording each call so a test can wait for its re-read. */
+  const hook = (libraryId: string, root: string): Promise<void> => {
+    written.push([libraryId, root])
+    const p = attached.refresh(libraryId, root)
+    refreshes.push(p)
+    return p
+  }
+
+  /** Settles the job, then every re-read it fired. */
+  async function settle(svc: ExportEnv['svc'], jobId: string): Promise<void> {
+    await svc.settled(jobId)
+    await Promise.all(refreshes)
+  }
+
+  async function attachedKeys(): Promise<string[]> {
+    const out: string[] = []
+    for (const t of attached.get(OTHER_LIB)?.titles ?? []) {
+      const d = await attached.getTitle(OTHER_LIB, t.animeId)
+      for (const e of d?.episodes ?? []) {
+        for (const i of e.items) out.push(`${t.animeId}:${e.episodeInt}:${i.translationId}`)
+      }
+    }
+    return out.sort()
+  }
+
+  beforeEach(async () => {
+    env = makeExportEnv()
+    pc = seedPc(env)
+    written = []
+    refreshes = []
+    // A Videos-only library another PC made, holding a1, attached on this PC.
+    shared = path.join(env.drive, 'Shared')
+    const a1Src = path.join(env.hot, 'Alpha Show', 'Alpha Show - 01 [Studio].mkv')
+    fs.mkdirSync(path.join(shared, 'Alpha Show'), { recursive: true })
+    fs.copyFileSync(a1Src, path.join(shared, 'Alpha Show', 'Alpha Show - 01 [Studio].mkv'))
+    await seedLibrary(shared, {
+      libraryId: OTHER_LIB,
+      name: 'Shared',
+      titles: [{ animeId: 101, name: 'Alpha Show' }],
+      items: [
+        {
+          animeId: 101,
+          episodeInt: '1',
+          translationId: 11,
+          translationType: 'subRu',
+          author: 'Studio',
+          quality: 720,
+          path: 'Alpha Show/Alpha Show - 01 [Studio].mkv',
+          size: fs.statSync(a1Src).size
+        }
+      ]
+    })
+    onChanged = vi.fn()
+    // The real store clones on get and set.
+    const store = {
+      get: (key: string) => structuredClone(env.store.get(key)),
+      set: (key: string, value: unknown) => env.store.set(key, structuredClone(value))
+    } as AttachedLibraryServiceDeps['store']
+    attached = createAttachedLibraryService({
+      store,
+      checkFfmpeg: async () => ({ available: true }),
+      onChanged,
+      log: { log: () => {}, warn: () => {}, error: () => {} }
+    })
+    await attached.discover(env.drive)
+    const res = await attached.attach(OTHER_LIB)
+    if (!res.ok) throw new Error(res.error)
+    onChanged.mockClear()
+  })
+
+  it('one more episode: listed and resolved without a restart, onChanged fired (red on main)', async () => {
+    const svc = env.restart({ onLibraryWritten: hook })
+    const r = await svc.start({ selection: sel(pc.a2), target: env.drive, name: 'Shared' })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.job.libraryId).toBe(OTHER_LIB)
+    await settle(svc, r.job.jobId)
+    expect(svc.list()[0].status).toBe('completed')
+
+    expect(await attachedKeys()).toEqual([pc.a1, pc.a2].sort())
+    expect((await attached.resolveItem(101, '2', 12))?.path).toBe(
+      path.join(shared, 'Alpha Show', 'Alpha Show - 02 [Studio].mkv')
+    )
+    // One item under checkpointEvery 2 is one manifest write, so one re-read
+    // here; the hook fires per checkpoint, so only "at least once" is the contract.
+    expect(onChanged.mock.calls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('paused after the first checkpoint: the copied item already shows', async () => {
+    let jobId = ''
+    let paused: Promise<unknown> | null = null
+    const svc: ExportEnv['svc'] = env.restart({
+      onLibraryWritten: hook,
+      checkpointEvery: 1,
+      xfs: {
+        open: async (p, flags) => {
+          const h = await nodeFs.open(p, flags)
+          if (!/Beta Show - 01 .*\.mp4\.anime-dl-tmp$/.test(p)) return h
+          return {
+            ...h,
+            write: async (buf) => {
+              await h.write(buf)
+              paused ??= svc.pause(jobId)
+            }
+          }
+        }
+      }
+    })
+    const r = await svc.start({ selection: sel(pc.a2, pc.b1), target: env.drive, name: 'Shared' })
+    if (!r.ok) throw new Error(r.reason)
+    jobId = r.job.jobId
+    await settle(svc, jobId)
+    await paused
+    expect(svc.list()[0].status).toBe('paused')
+    expect(await attachedKeys()).toEqual([pc.a1, pc.a2].sort())
+    expect(await attached.resolveItem(202, '1', 21)).toBeNull()
+  })
+
+  it.each([
+    [
+      'throws',
+      (): void => {
+        throw new Error('boom')
+      }
+    ],
+    ['rejects', async (): Promise<void> => Promise.reject(new Error('boom'))]
+  ])('a hook that %s never fails the job', async (_kind, bad) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const svc = env.restart({ onLibraryWritten: bad, checkpointEvery: 1 })
+    const r = await svc.start({
+      selection: sel(pc.a2, pc.b1),
+      target: env.drive,
+      name: 'Shared'
+    })
+    if (!r.ok) throw new Error(r.reason)
+    await svc.settled(r.job.jobId)
+    const job = svc.list()[0]
+    expect(job.error).toBeNull()
+    expect(job.status).toBe('completed')
+    expect(manifestOf(shared).items.map(itemKey).sort()).toEqual([pc.a1, pc.a2, pc.b1].sort())
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        `[export] refreshing ${OTHER_LIB} failed:`,
+        expect.any(Error)
+      )
+    )
+  })
+
+  it('back-to-back checkpoints: the last copy holds every item and the record matches what was saved', async () => {
+    const svc = env.restart({ onLibraryWritten: hook, checkpointEvery: 1 })
+    const r = await svc.start({
+      selection: sel(pc.a2, pc.b1, pc.c1),
+      target: env.drive,
+      name: 'Shared'
+    })
+    if (!r.ok) throw new Error(r.reason)
+    await settle(svc, r.job.jobId)
+    expect(svc.list()[0].status).toBe('completed')
+    // Three items, one checkpoint each, then the final write.
+    expect(written).toHaveLength(4)
+    expect(written.every(([id, root]) => id === OTHER_LIB && root === shared)).toBe(true)
+    expect(onChanged.mock.calls.length).toBeGreaterThanOrEqual(1)
+
+    expect(await attachedKeys()).toEqual([pc.a1, pc.a2, pc.b1, pc.c1].sort())
+    const saved = env.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>
+    expect(Object.keys(saved)).toEqual([OTHER_LIB])
+    expect(saved[OTHER_LIB]).toMatchObject({
+      root: shared,
+      name: 'Shared',
+      mode: 'videos',
+      owner: null,
+      access: 'read-write'
+    })
+    expect(saved[OTHER_LIB].accessReason).toBeUndefined()
+    expect(attached.list()).toEqual([attached.get(OTHER_LIB)])
+  })
+
+  it("an export into a new library: the hook fires, and refresh is a no-op (it isn't attached)", async () => {
+    const before = structuredClone(env.store.get('attachedLibraries'))
+    const svc = env.restart({ onLibraryWritten: hook })
+    const r = await svc.start({ selection: sel(pc.a2), target: env.drive, name: 'Trip' })
+    if (!r.ok) throw new Error(r.reason)
+    await settle(svc, r.job.jobId)
+    expect(svc.list()[0].status).toBe('completed')
+    expect(r.job.libraryId).not.toBe(OTHER_LIB)
+    expect(written.length).toBeGreaterThanOrEqual(1)
+    expect(written.every(([id]) => id === r.job.libraryId)).toBe(true)
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(attached.get(r.job.libraryId)).toBeNull()
+    expect(env.store.get('attachedLibraries')).toEqual(before)
+    expect(await attachedKeys()).toEqual([pc.a1])
   })
 })

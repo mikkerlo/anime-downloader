@@ -46,6 +46,8 @@ export interface SharedLibraryExportDeps {
   presence: Pick<PlayerPresenceService, 'isOpen' | 'onRelease'>
   actor: () => SharedLibraryActor
   broadcast: (job: ExportJobView) => void
+  /** After each manifest write into `root` (#616); never awaited. */
+  onLibraryWritten?: (libraryId: string, root: string) => void | Promise<void>
   candidates?: MountCandidates
   xfs?: Partial<ExportFs>
   checkpointEvery?: number
@@ -217,6 +219,7 @@ export function createSharedLibraryExportService(
       persist,
       update: () => update(job),
       checkpointEvery: deps.checkpointEvery ?? 10,
+      onLibraryWritten: deps.onLibraryWritten,
       retryMs: deps.retryMs ?? 10_000,
       setTimer: deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms)),
       clearTimer: deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))

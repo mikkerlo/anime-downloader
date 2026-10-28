@@ -18,7 +18,10 @@ export interface AnimePosterHandlerDeps {
 async function readCapped(file: string, max: number): Promise<Buffer> {
   const fh = await fs.promises.open(file, 'r')
   try {
-    const buf = Buffer.alloc(max + 1)
+    // Sized from this handle: a file that grows after the `stat` is cut at
+    // `size + 1`, and no read ever goes past `max + 1`.
+    const { size } = await fh.stat()
+    const buf = Buffer.alloc(Math.min(size, max) + 1)
     let total = 0
     while (total < buf.length) {
       const { bytesRead } = await fh.read(buf, total, buf.length - total, null)

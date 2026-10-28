@@ -109,6 +109,25 @@ describe('an attached library poster (#578)', () => {
     readFile.mockRestore()
   })
 
+  it('a small poster allocates about its own size, not the cap', async () => {
+    const alloc = vi.spyOn(Buffer, 'alloc')
+    const res = await serve(swappedAfterCheck(1000))
+    expect(res.status).toBe(200)
+    const sizes = alloc.mock.calls.map((c) => Number(c[0]))
+    alloc.mockRestore()
+    expect(sizes).toContain(1001)
+    expect(Math.max(...sizes)).toBeLessThan(MAX)
+  })
+
+  it('a huge file never allocates past the cap + 1', async () => {
+    const alloc = vi.spyOn(Buffer, 'alloc')
+    const res = await serve(swappedAfterCheck(3 * MAX))
+    const sizes = alloc.mock.calls.map((c) => Number(c[0]))
+    alloc.mockRestore()
+    expect(res.status).toBe(404)
+    expect(Math.max(...sizes)).toBe(MAX + 1)
+  })
+
   it('is the cap the service enforces', () => {
     expect(MAX).toBe(POSTER_MAX_BYTES)
   })

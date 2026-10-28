@@ -5,6 +5,8 @@ import { subscribe } from './subscribe'
 const api = {
   validateToken: () => ipcRenderer.invoke(CHANNELS.VALIDATE_TOKEN),
   searchAnime: (query: string) => ipcRenderer.invoke(CHANNELS.SEARCH_ANIME, query),
+  searchLocal: (query: string, filters?: LocalSearchFilters) =>
+    ipcRenderer.invoke(CHANNELS.SEARCH_LOCAL, query, filters),
   getAnime: (id: number) => ipcRenderer.invoke(CHANNELS.GET_ANIME, id),
   getAnimeCache: (id: number) =>
     ipcRenderer.invoke(CHANNELS.GET_ANIME_CACHE, id) as Promise<AnimeCacheResult | null>,

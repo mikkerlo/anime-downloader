@@ -32,6 +32,32 @@ interface AnimeSearchResult {
   season: string
 }
 
+/** Why a title is on this PC (#571). Consumers switch on `kind`. */
+type LocalSource = { kind: 'starred' } | { kind: 'downloaded' } | { kind: 'watching' }
+
+/**
+ * A `search:local` hit: a title this PC has. `genres` (titles) feeds the
+ * view's genre chips; `listStatus` is the joined Shikimori list status;
+ * `airingStatus` is Shikimori's (`anons` / `ongoing` / `released`) where cached.
+ */
+type LocalSearchResult = AnimeSearchResult & {
+  localSources: LocalSource[]
+  listStatus?: ShikiUserRateStatus
+  genres: string[]
+  airingStatus?: string
+}
+
+interface LocalSearchFilters {
+  genre?: string
+  status?: ShikiUserRateStatus
+}
+
+/** `search:local`. `corpusSize` 0 means this PC has no titles at all. */
+interface LocalSearchResponse {
+  results: LocalSearchResult[]
+  corpusSize: number
+}
+
 interface AnimeDetail extends AnimeSearchResult {
   posterUrl: string
   descriptions: { source: string; value: string }[]

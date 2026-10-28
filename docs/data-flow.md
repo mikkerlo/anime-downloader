@@ -28,6 +28,8 @@ SearchView  -->  window.api.searchAnime(query)
 
 SearchView uses `v-show` (never destroyed) so search state persists across tab switches.
 
+A query of 2+ code points also runs `window.api.searchLocal(query)` → `search:local` over the titles this PC has (#571), started before the remote search. Online its hits are the "In your library" section above the remote grid; offline they replace it. See [Renderer](./renderer.md#search-over-local-titles-571).
+
 ## Navigation State
 
 ```

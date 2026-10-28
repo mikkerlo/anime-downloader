@@ -3,12 +3,15 @@ import { CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
 import type { EpisodeDetail } from '../smotret-api'
 import { OfflineError } from '../lib/net'
+import { buildCorpus, searchLocal, type LocalSearchSnapshot } from '../lib/local-search'
 
 export function register({
+  store,
   smotretApi,
   animeCacheService,
   rememberAnimeMeta,
-  offlineService
+  offlineService,
+  recentWatch
 }: AppDeps): void {
   // Shared cache read for the cache-first channel + the network-first
   // error-fallback (#196) so the two reads can't drift: id → cached episode
@@ -26,6 +29,28 @@ export function register({
   ipcMain.handle(CHANNELS.SEARCH_ANIME, async (_event, query: string) => {
     return smotretApi.searchAnime(query)
   })
+
+  // Local search (#571): one read of each key per call, so one clone of
+  // `animeCache` per search. Fine on submit; an as-you-type search would need a
+  // corpus cached in main and invalidated on writes to these keys.
+  ipcMain.handle(
+    CHANNELS.SEARCH_LOCAL,
+    (_event, query: string, filters?: LocalSearchFilters): LocalSearchResponse => {
+      const corpus = buildCorpus({
+        library: store.get('library') as LocalSearchSnapshot['library'],
+        downloadedAnime: store.get('downloadedAnime') as LocalSearchSnapshot['downloadedAnime'],
+        animeCache: store.get('animeCache') as LocalSearchSnapshot['animeCache'],
+        shikimoriUserRates: store.get(
+          'shikimoriUserRates'
+        ) as LocalSearchSnapshot['shikimoriUserRates'],
+        shikimoriAnimeDetails: store.get(
+          'shikimoriAnimeDetails'
+        ) as LocalSearchSnapshot['shikimoriAnimeDetails'],
+        isRecentlyWatched: (animeId) => recentWatch.has(animeId)
+      })
+      return { results: searchLocal(corpus, query, filters), corpusSize: corpus.length }
+    }
+  )
 
   ipcMain.handle(CHANNELS.GET_ANIME, async (_event, id: number) => {
     // Offline (#568) the cache is the answer, without a refused round trip.

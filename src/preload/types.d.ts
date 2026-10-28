@@ -24,6 +24,7 @@ declare module 'libass-wasm/dist/js/subtitles-octopus.js' {
 interface Api {
   validateToken: () => Promise<{ valid: boolean; error?: string }>
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
+  searchLocal: (query: string, filters?: LocalSearchFilters) => Promise<LocalSearchResponse>
   getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
   getAnimeCache: (id: number) => Promise<AnimeCacheResult | null>
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>

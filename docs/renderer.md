@@ -88,7 +88,7 @@ Every view reads `isOffline` from `useOfflineStore` (a `watch` in setup, stopped
 
 | View | Offline |
 |---|---|
-| `SearchView` | `OfflineNotice` "Search needs an internet connection" in place of the results; the input stays enabled, a submit doesn't call `searchAnime` and runs once on the online edge |
+| `SearchView` | Searches the titles this PC has instead (#571, below), under the subtitle "Showing titles saved on this PC". `OfflineNotice` "Search needs an internet connection" only when the corpus is empty (`corpusSize` 0). A submit doesn't call `searchAnime` and runs once on the online edge |
 | `CalendarView` | Paints main's snapshot with "Last updated <relative>" (`formatAgo`) in the topbar; with none (`fetchedAt: null`), `OfflineNotice` "Calendar needs an internet connection". The stamp also shows online when `stale` (a failed fetch served the snapshot), worded without "offline" |
 | `FriendsActivityView` (Activity tab) | The same, with "Friends activity needs an internet connection" |
 | `DownloadsView` | A queued group's status reads "waiting for connection"; pause, cancel and merge are unchanged |
@@ -96,6 +96,15 @@ Every view reads `isOffline` from `useOfflineStore` (a `watch` in setup, stopped
 | `AnimeDetailView` | Paints from `get-anime-cache` (no TTL offline) with a "Saved <date>, offline" chip in place of the OFFLINE chip; with no cache entry, `OfflineNotice` "This title needs an internet connection". On the online edge a cache paint reruns the background `getAnime` refresh once (so neither chip lingers and the episode list re-fetches), and the notice loads the title once. `useEpisodeDownloads` takes `isOffline` and exposes `downloadBlockedReason`: Download all and each row's download button are disabled with it as the tooltip, and both actions refuse |
 
 Tests: one component test per view under `offline: true` and `offline: false` in `test/renderer/components/`, and `e2e/offline-views.spec.ts` on a `workOffline` profile seeded with a library title and a past-TTL detail cache. A component test that mounts an offline-aware view spreads `test/helpers/offline-api.ts` into its `window.api` stub: a permissive stub answers `offlineGetState()` with a function, which reads as offline.
+
+### Search over local titles (#571)
+
+`SearchView` calls `window.api.searchLocal` (`search:local`, see [IPC](./ipc.md)); the matcher and corpus stay in main. A query under 2 code points runs no local search: offline the view shows "Type at least 2 characters" and calls nothing, online only the remote search runs. Each local hit renders as the usual `AnimeCard` (local poster via `libraryStore.loadPosterIds()` + `getPosterSrc`) in a `.local-card` wrapper with a badge per `LocalSource` kind (Starred / Downloaded / Watching); a starred source fills the star without `libraryHas`, starring from a local card stores the plain `AnimeSearchResult`, and the Starred badge follows `starredIds` (`badgesOf`) rather than the search snapshot.
+
+- **Offline:** the local hits replace the results, uncapped, with genre and status (`listStatus`) chips built from the unfiltered hits; a chip re-queries main with `{ genre, status }`. A filter only refines the landed query: chips are inert while a newer search is in flight, and a filter in flight yields to any search submitted after it (its own `filterGeneration` counter, checked against `localGeneration`). No hits: "Nothing saved on this PC matches"; an empty corpus: the `OfflineNotice`.
+- **Online:** the local query starts first and its **In your library** section (6 cards, "Show all") renders above the remote results, which drop any id the section shows. A failed local search leaves the remote one untouched.
+
+Tests: `test/renderer/components/search-view-local.test.ts`, and the Search step of `e2e/offline-library.spec.ts`.
 
 ## Composables
 

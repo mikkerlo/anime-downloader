@@ -45,25 +45,138 @@ const filteredResults = computed(() =>
     : results.value.filter((a) => a.typeTitle === typeFilter.value)
 );
 
+// Local search over the titles this PC has (#571). Offline it replaces the
+// remote results; online it is the "In your library" section above them.
+const LOCAL_MIN_CODE_POINTS = 2;
+const LOCAL_SECTION_MAX = 6;
+const STATUS_CHIPS: { id: ShikiUserRateStatus; label: string }[] = [
+  { id: 'watching', label: 'Watching' },
+  { id: 'rewatching', label: 'Rewatching' },
+  { id: 'planned', label: 'Planned' },
+  { id: 'completed', label: 'Completed' },
+  { id: 'on_hold', label: 'On hold' },
+  { id: 'dropped', label: 'Dropped' }
+];
+const SOURCE_LABELS: Record<LocalSource['kind'], string> = {
+  starred: 'Starred',
+  downloaded: 'Downloaded',
+  watching: 'Watching'
+};
+
+// `localAll` is the unfiltered hit list the chips are built from; the chips
+// re-query main with `genre` / `status`.
+const localAll = ref<LocalSearchResult[]>([]);
+const localResults = ref<LocalSearchResult[]>([]);
+const localSearched = ref(false);
+const corpusSize = ref(0);
+const tooShort = ref(false);
+const showAllLocal = ref(false);
+const genreFilter = ref<string | null>(null);
+const statusFilter = ref<ShikiUserRateStatus | null>(null);
+let localQuery = '';
+let localGeneration = 0;
+
+const genreChips = computed(() =>
+  Array.from(new Set(localAll.value.flatMap((a) => a.genres))).sort((a, b) => a.localeCompare(b))
+);
+const statusChips = computed(() =>
+  STATUS_CHIPS.filter((s) => localAll.value.some((a) => a.listStatus === s.id))
+);
+const shownLocal = computed(() =>
+  isOffline.value || showAllLocal.value
+    ? localResults.value
+    : localResults.value.slice(0, LOCAL_SECTION_MAX)
+);
+// Remote results already shown in "In your library" are dropped by id.
+const remoteResults = computed(() => {
+  const shown = new Set(shownLocal.value.map((a) => a.id));
+  return filteredResults.value.filter((a) => !shown.has(a.id));
+});
+
+function clearLocal(): void {
+  localGeneration++;
+  localAll.value = [];
+  localResults.value = [];
+  localSearched.value = false;
+  corpusSize.value = 0;
+}
+
+async function loadPriority(): Promise<void> {
+  const priority = await window.api.libraryGetPriority();
+  priorityIds.clear();
+  for (const id of priority) priorityIds.add(Number(id));
+}
+
+async function runLocal(q: string): Promise<void> {
+  const generation = ++localGeneration;
+  genreFilter.value = null;
+  statusFilter.value = null;
+  showAllLocal.value = false;
+  try {
+    const [response] = await Promise.all([window.api.searchLocal(q), libraryStore.loadPosterIds()]);
+    if (generation !== localGeneration) return;
+    localQuery = q;
+    localAll.value = response.results;
+    localResults.value = response.results;
+    corpusSize.value = response.corpusSize;
+    localSearched.value = true;
+    for (const a of response.results) {
+      if (a.localSources.some((s) => s.kind === 'starred')) starredIds.add(a.id);
+      else starredIds.delete(a.id);
+    }
+  } catch (err) {
+    console.error('Local search failed:', err);
+    if (generation === localGeneration) clearLocal();
+  }
+}
+
+async function setLocalFilter(
+  genre: string | null,
+  status: ShikiUserRateStatus | null
+): Promise<void> {
+  genreFilter.value = genre;
+  statusFilter.value = status;
+  const generation = ++localGeneration;
+  try {
+    const response = await window.api.searchLocal(localQuery, {
+      ...(genre ? { genre } : {}),
+      ...(status ? { status } : {})
+    });
+    if (generation === localGeneration) localResults.value = response.results;
+  } catch (err) {
+    console.error('Local search failed:', err);
+  }
+}
+
 async function search(): Promise<void> {
   const q = query.value.trim();
   if (!q) return;
+  const short = [...q].length < LOCAL_MIN_CODE_POINTS;
   if (isOffline.value) {
     pendingOfflineQuery = true;
+    tooShort.value = short;
+    if (short) {
+      clearLocal();
+      return;
+    }
+    await Promise.all([runLocal(q), loadPriority().catch(() => {})]);
     return;
   }
 
+  tooShort.value = false;
   loading.value = true;
   searched.value = true;
   typeFilter.value = 'all';
+  // The local query goes first, so its section paints while the remote loads.
+  let localDone: Promise<void> = Promise.resolve();
+  if (short) clearLocal();
+  else localDone = runLocal(q);
   try {
     const response = await window.api.searchAnime(q);
     results.value = response.data;
     // One call for the whole result set — cheaper than the N sequential
     // `libraryHas` round-trips below, which predate it.
-    const priority = await window.api.libraryGetPriority();
-    priorityIds.clear();
-    for (const id of priority) priorityIds.add(Number(id));
+    await loadPriority();
     for (const anime of results.value) {
       if (await window.api.libraryHas(anime.id)) {
         starredIds.add(anime.id);
@@ -77,6 +190,14 @@ async function search(): Promise<void> {
   } finally {
     loading.value = false;
   }
+  await localDone;
+}
+
+// A local hit without its search-only fields, so starring it from here stores
+// the same record a remote card would.
+function plain(a: LocalSearchResult): AnimeSearchResult {
+  const { id, title, titles, posterUrlSmall, numberOfEpisodes, type, typeTitle, year, season } = a;
+  return { id, title, titles, posterUrlSmall, numberOfEpisodes, type, typeTitle, year, season };
 }
 
 async function toggleStar(anime: AnimeSearchResult): Promise<void> {
@@ -109,6 +230,12 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
       <span v-if="searched && !loading && !isOffline" class="sub"
         >· {{ results.length }} titles</span
       >
+      <span
+        v-else-if="isOffline && !(localSearched && corpusSize === 0)"
+        class="sub"
+        data-testid="local-subtitle"
+        >· Showing titles saved on this PC</span
+      >
     </header>
     <div class="body">
       <form class="search-wrap" @submit.prevent="search">
@@ -134,42 +261,107 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
         />
       </form>
 
-      <div v-if="!isOffline && availableTypes.length > 1" class="filter-row">
-        <div class="pill-tabs">
-          <button
-            class="pill-tab"
-            :class="{ active: typeFilter === 'all' }"
-            @click="typeFilter = 'all'"
+      <template v-if="isOffline">
+        <div v-if="tooShort" class="status-text" data-testid="local-too-short">
+          Type at least 2 characters
+        </div>
+        <OfflineNotice
+          v-else-if="localSearched && corpusSize === 0"
+          reason="Search needs an internet connection"
+        />
+        <template v-else-if="localSearched">
+          <div
+            v-if="genreChips.length > 0 || statusChips.length > 0"
+            class="filter-row"
+            data-testid="local-chips"
           >
-            All
-          </button>
+            <div v-if="genreChips.length > 0" class="pill-tabs" data-testid="genre-chips">
+              <button
+                class="pill-tab"
+                :class="{ active: genreFilter === null }"
+                @click="setLocalFilter(null, statusFilter)"
+              >
+                All genres
+              </button>
+              <button
+                v-for="g in genreChips"
+                :key="g"
+                class="pill-tab"
+                :class="{ active: genreFilter === g }"
+                @click="setLocalFilter(g, statusFilter)"
+              >
+                {{ g }}
+              </button>
+            </div>
+            <div v-if="statusChips.length > 0" class="pill-tabs" data-testid="status-chips">
+              <button
+                class="pill-tab"
+                :class="{ active: statusFilter === null }"
+                @click="setLocalFilter(genreFilter, null)"
+              >
+                Any status
+              </button>
+              <button
+                v-for="s in statusChips"
+                :key="s.id"
+                class="pill-tab"
+                :class="{ active: statusFilter === s.id }"
+                @click="setLocalFilter(genreFilter, s.id)"
+              >
+                {{ s.label }}
+              </button>
+            </div>
+          </div>
+        </template>
+        <div v-else class="status-text">Search titles saved on this PC.</div>
+      </template>
+
+      <section v-if="shownLocal.length > 0" class="local-section" data-testid="local-section">
+        <div v-if="!isOffline" class="section-head">
+          <h3>In your library</h3>
+          <span class="muted">{{ localResults.length }} saved on this PC</span>
           <button
-            v-for="t in availableTypes"
-            :key="t"
-            class="pill-tab"
-            :class="{ active: typeFilter === t }"
-            @click="typeFilter = t"
+            v-if="localResults.length > LOCAL_SECTION_MAX"
+            type="button"
+            class="show-all"
+            data-testid="local-show-all"
+            @click="showAllLocal = !showAllLocal"
           >
-            {{ t }}
+            {{ showAllLocal ? 'Show less' : 'Show all' }}
           </button>
         </div>
-      </div>
-
-      <OfflineNotice v-if="isOffline" reason="Search needs an internet connection" />
-      <div v-else-if="loading" class="status-text">Searching…</div>
-      <div v-else-if="filteredResults.length > 0" class="poster-grid">
-        <AnimeCard
-          v-for="anime in filteredResults"
-          :key="anime.id"
-          :anime="anime"
-          :starred="starredIds.has(anime.id)"
-          :prioritized="priorityIds.has(anime.id)"
-          @toggle-star="toggleStar"
-          @toggle-priority="togglePriority"
-          @click="libraryStore.openAnime(anime.id)"
-        />
-      </div>
-      <div v-else-if="searched" class="empty-state">
+        <div class="poster-grid local-grid">
+          <div
+            v-for="anime in shownLocal"
+            :key="anime.id"
+            class="local-card"
+            data-testid="local-card"
+          >
+            <AnimeCard
+              :anime="anime"
+              :starred="starredIds.has(anime.id)"
+              :prioritized="priorityIds.has(anime.id)"
+              @toggle-star="toggleStar(plain(anime))"
+              @toggle-priority="togglePriority(plain(anime))"
+              @click="libraryStore.openAnime(anime.id)"
+            />
+            <div class="local-badges">
+              <span
+                v-for="s in anime.localSources"
+                :key="s.kind"
+                class="local-badge"
+                :class="`src-${s.kind}`"
+                >{{ SOURCE_LABELS[s.kind] }}</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+      <div
+        v-else-if="isOffline && localSearched && corpusSize > 0"
+        class="empty-state"
+        data-testid="local-empty"
+      >
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
             <path
@@ -179,9 +371,64 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
             />
           </svg>
         </div>
-        <p>No titles match your search.</p>
+        <p>Nothing saved on this PC matches</p>
       </div>
-      <div v-else class="status-text">Search for anime to get started.</div>
+
+      <template v-if="!isOffline">
+        <div
+          v-if="shownLocal.length > 0 && (loading || remoteResults.length > 0)"
+          class="section-head remote-head"
+        >
+          <h3>Search results</h3>
+        </div>
+        <div v-if="availableTypes.length > 1" class="filter-row">
+          <div class="pill-tabs">
+            <button
+              class="pill-tab"
+              :class="{ active: typeFilter === 'all' }"
+              @click="typeFilter = 'all'"
+            >
+              All
+            </button>
+            <button
+              v-for="t in availableTypes"
+              :key="t"
+              class="pill-tab"
+              :class="{ active: typeFilter === t }"
+              @click="typeFilter = t"
+            >
+              {{ t }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="loading" class="status-text">Searching…</div>
+        <div v-else-if="remoteResults.length > 0" class="poster-grid remote-grid">
+          <AnimeCard
+            v-for="anime in remoteResults"
+            :key="anime.id"
+            :anime="anime"
+            :starred="starredIds.has(anime.id)"
+            :prioritized="priorityIds.has(anime.id)"
+            @toggle-star="toggleStar"
+            @toggle-priority="togglePriority"
+            @click="libraryStore.openAnime(anime.id)"
+          />
+        </div>
+        <div v-else-if="searched && shownLocal.length === 0" class="empty-state">
+          <div class="es-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+              />
+            </svg>
+          </div>
+          <p>No titles match your search.</p>
+        </div>
+        <div v-else-if="!searched" class="status-text">Search for anime to get started.</div>
+      </template>
     </div>
   </main>
 </template>
@@ -274,6 +521,86 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
 
 .poster-grid {
   margin-top: 22px;
+}
+
+.local-section {
+  margin-top: 22px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.section-head h3 {
+  font-family: var(--font-display);
+  font-size: 1.04rem;
+  font-weight: 700;
+}
+
+.section-head .muted {
+  font-size: 0.82rem;
+  color: var(--text-3);
+}
+
+.local-section .poster-grid {
+  margin-top: 14px;
+}
+
+.remote-head {
+  margin-top: 30px;
+}
+
+.show-all {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.show-all:hover {
+  text-decoration: underline;
+}
+
+.local-card {
+  position: relative;
+}
+
+.local-badges {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.local-badge {
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--bg-deep) 70%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.local-badge.src-starred {
+  color: var(--st-orange);
+}
+
+.local-badge.src-downloaded {
+  color: var(--st-green);
+}
+
+.local-badge.src-watching {
+  color: var(--st-blue);
 }
 
 .status-text {

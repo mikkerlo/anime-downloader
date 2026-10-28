@@ -197,6 +197,7 @@ export const CHANNELS = {
   PROBE_FULL_SCAN_NEEDED: 'probe-full-scan-needed',
   REPORT_QUALITY_MISMATCH: 'report-quality-mismatch',
   SEARCH_ANIME: 'search-anime',
+  SEARCH_LOCAL: 'search:local',
   SET_SETTING: 'set-setting',
   VALIDATE_TOKEN: 'validate-token'
 } as const

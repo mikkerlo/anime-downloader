@@ -122,6 +122,27 @@ test('Library, Home and Detail keep their posters and details offline', async ()
     await expect(page.locator('.detail-view h1')).toHaveText(WATCHING_TITLE)
     await expectRendered(page.locator('.detail-poster img'))
     expect(fs.existsSync(path.join(posterDir, `${WATCHING_ID}.jpg`))).toBe(true)
+
+    // Search offline (#571): part of a seeded title finds its card, with the
+    // local poster, including the continue-watching title (cache only).
+    await nav('Search').click()
+    const search = page.locator('.search-view')
+    const input = page.locator('.search-input')
+    await input.fill('watch')
+    await input.press('Enter')
+    const hit = search.getByTestId('local-card')
+    await expect(hit).toHaveCount(1)
+    await expect(hit).toContainText(WATCHING_TITLE)
+    await expect(hit.locator('.local-badge')).toHaveText(['Watching'])
+    await expectRendered(hit.locator('img.poster'))
+
+    await input.fill('offl tit')
+    await input.press('Enter')
+    await expect(search.getByTestId('local-card')).toHaveCount(2)
+    const starredHit = search.getByTestId('local-card').filter({ hasText: STARRED_TITLE })
+    await expect(starredHit.locator('.local-badge')).toHaveText(['Starred'])
+    await expectRendered(starredHit.locator('img.poster'))
+    await expect(search.getByTestId('offline-notice')).toHaveCount(0)
   } finally {
     try {
       if (launched) assertNoDownloads(launched)

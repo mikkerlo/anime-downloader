@@ -22,7 +22,12 @@ function anime(id: number, typeTitle: string): AnimeSearchResult {
 }
 
 function stubApi(overrides: Record<string, unknown>, offline: OfflineApi = offlineApi()): void {
-  const target = { ...offline.api, ...overrides }
+  const target = {
+    ...offline.api,
+    searchLocal: vi.fn().mockResolvedValue({ results: [], corpusSize: 0 }),
+    getCachedPosterIds: vi.fn().mockResolvedValue([]),
+    ...overrides
+  }
   ;(window as unknown as { api: unknown }).api = new Proxy(target, {
     get: (t, prop, recv) => (prop in t ? Reflect.get(t, prop, recv) : () => () => {})
   })
@@ -117,19 +122,20 @@ describe('SearchView — offline (#568)', () => {
     await flushPromises()
   }
 
-  it('offline: shows the OfflineNotice, keeps the input enabled, never calls searchAnime', async () => {
+  // #571: the notice now stays only when this PC has no titles at all.
+  it('offline with an empty corpus: shows the OfflineNotice, keeps the input enabled, never calls searchAnime', async () => {
     const api = apis()
     stubApi(api, offlineApi('offline-manual'))
     const wrapper = mount(SearchView)
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="offline-notice"] p').text()).toBe(
-      'Search needs an internet connection'
-    )
     const input = wrapper.find('input.search-input')
     expect(input.attributes('disabled')).toBeUndefined()
     await submit(wrapper, 'frieren')
 
+    expect(wrapper.find('[data-testid="offline-notice"] p').text()).toBe(
+      'Search needs an internet connection'
+    )
     expect(api.searchAnime).not.toHaveBeenCalled()
     expect(wrapper.find('.poster-grid').exists()).toBe(false)
   })

@@ -75,13 +75,17 @@ test('Search, Calendar and the detail page each say what works offline', async (
 
     const nav = (name: string): ReturnType<typeof page.getByRole> =>
       page.locator('.sidebar').getByRole('button', { name, exact: true })
+    // This PC has a title, so Search searches it (#571) instead of the notice.
     await nav('Search').click()
-    const searchNotice = page.locator('.search-view').getByTestId('offline-notice')
-    await expect(searchNotice).toContainText('Search needs an internet connection')
-    await expect(searchNotice.getByTestId('offline-notice-action')).toHaveText(
-      'Work offline is on — go online'
+    const search = page.locator('.search-view')
+    await expect(search.getByTestId('local-subtitle')).toContainText(
+      'Showing titles saved on this PC'
     )
     await expect(page.locator('.search-input')).toBeEnabled()
+    await page.locator('.search-input').fill('nothing like it')
+    await page.locator('.search-input').press('Enter')
+    await expect(search.getByTestId('local-empty')).toHaveText('Nothing saved on this PC matches')
+    await expect(search.getByTestId('offline-notice')).toHaveCount(0)
 
     await nav('Calendar').click()
     await expect(page.locator('.calendar-view').getByTestId('offline-notice')).toContainText(

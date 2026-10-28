@@ -199,6 +199,9 @@ interface SharedLibraryDiscovery {
 /** The no-account choice: videos only, or a local claim as the owner. */
 type SharedLibraryAttachChoice = 'videos' | 'claim'
 
+/** Which discovery an attach takes its root from: the open flow's, or the poller's toast (#581). */
+type SharedLibraryAttachSource = 'opened' | 'found'
+
 /** One episode file a title's Play from drive can start. */
 interface AttachedPlayTarget {
   episodeInt: string
@@ -231,8 +234,13 @@ interface AttachedLibraryInfo {
   accessReason?: AttachedLibraryAccessReason
   // S5's read-only message (`version`, `size`, `interrupted`).
   message?: string
-  // Read on this run: false when the root couldn't be read at startup.
+  // Read on this run and still there (#581): false when the root couldn't be
+  // read at startup, or the poller found it gone.
   available: boolean
+  // While available, when the poller last saw it; otherwise the last time it was.
+  lastSeenAt: number
+  // S9 (#584) sets it; null shows "Last sync: never".
+  lastSyncAt: number | null
   // Items past Windows' MAX_PATH at this root (`absoluteOverflow`).
   pathOverflow: number
   mkvCount: number
@@ -278,6 +286,32 @@ interface AttachedResolvedItem {
 
 /** `checkItem` (S12 #592's integrity step). */
 type AttachedItemCheck = 'ok' | 'missing' | 'wrong-size' | 'escapes'
+
+// --- Drive detection, Forget, Re-locate (S7c #581) ---------------------------------
+
+/** `shared-library:found`: unknown libraries on a newly mounted volume, one event per volume. */
+interface SharedLibraryFound {
+  // `E:` or the mount folder's name.
+  volume: string
+  dir: string
+  candidates: SharedLibraryCandidate[]
+}
+
+/** What Forget would discard; the two never overlap. */
+interface SharedLibraryPendingCount {
+  libraryChanges: number
+  resolutions: number
+}
+
+/** `shared-library:forget`: asks first when anything would be discarded. */
+type SharedLibraryForgetResult =
+  | { needsConfirm: true; pendingCount: SharedLibraryPendingCount }
+  | { needsConfirm: false }
+
+/** `shared-library:relocate`: `error` is null when the picker was cancelled. */
+type SharedLibraryRelocateResult =
+  | { ok: true; library: AttachedLibraryInfo }
+  | { ok: false; error: string | null }
 
 // --- Export (S6a #574) -------------------------------------------------------------
 

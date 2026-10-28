@@ -1,7 +1,8 @@
 // Shared Library IPC: opening a library (#578) and export jobs (#574). The
 // work lives in `services/attached-library` and `services/shared-library-export`;
 // this router adds the folder pickers. `SHARED_LIBRARIES_CHANGED` is broadcast
-// by the attached-library service's `onChanged` hook, wired in `src/main/index.ts`.
+// by the attached-library service's `onChanged` hook, and `SHARED_LIBRARY_FOUND`
+// by the availability poller (#581), both wired in `src/main/index.ts`.
 
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
@@ -40,10 +41,10 @@ export function register({ attachedLibraryService, sharedLibraryExport }: AppDep
 
   ipcMain.handle(
     CHANNELS.SHARED_LIBRARY_ATTACH,
-    (_event, libraryId: string, choice?: SharedLibraryAttachChoice) => {
+    (_event, libraryId: string, choice?: SharedLibraryAttachChoice, from?: unknown) => {
       if (typeof libraryId !== 'string') return { ok: false, error: 'No library given.' }
       const c = choice === 'claim' || choice === 'videos' ? choice : undefined
-      return attachedLibraryService.attach(libraryId, c)
+      return attachedLibraryService.attach(libraryId, c, from === 'found' ? 'found' : 'opened')
     }
   )
 
@@ -56,6 +57,33 @@ export function register({ attachedLibraryService, sharedLibraryExport }: AppDep
       ? attachedLibraryService.getTitle(libraryId, animeId)
       : null
   )
+
+  // --- Forget, Re-locate, "Don't ask for this drive" (#581)
+  ipcMain.handle(
+    CHANNELS.SHARED_LIBRARY_FORGET,
+    (_event, libraryId: string, opts?: { confirmDropPending?: boolean }) =>
+      typeof libraryId === 'string'
+        ? attachedLibraryService.forget(libraryId, {
+            confirmDropPending: opts?.confirmDropPending === true
+          })
+        : { needsConfirm: false }
+  )
+
+  ipcMain.handle(
+    CHANNELS.SHARED_LIBRARY_RELOCATE,
+    async (event, libraryId: string): Promise<SharedLibraryRelocateResult> => {
+      if (typeof libraryId !== 'string') return { ok: false, error: 'No library given.' }
+      const dir = await pickFolder(event.sender, 'Re-locate the Shared Library')
+      if (!dir) return { ok: false, error: null }
+      return attachedLibraryService.relocate(libraryId, dir)
+    }
+  )
+
+  ipcMain.handle(CHANNELS.SHARED_LIBRARY_DISMISS_PROMPT, (_event, libraryIds: unknown) => {
+    if (Array.isArray(libraryIds)) {
+      attachedLibraryService.dismissPrompt(libraryIds.filter((id) => typeof id === 'string'))
+    }
+  })
 
   // --- Export to a Shared Library (#574)
   const svc = sharedLibraryExport

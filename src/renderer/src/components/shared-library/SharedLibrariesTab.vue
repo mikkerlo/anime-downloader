@@ -3,18 +3,24 @@ import { ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import AnimeCard from '../shared/AnimeCard.vue';
 import FfmpegMissingBanner from './FfmpegMissingBanner.vue';
+import LibraryActionsMenu from './LibraryActionsMenu.vue';
 import { useLibraryStore } from '../../stores/library';
 import {
   FFMPEG_MISSING_REASON,
+  ROLE_BADGE,
+  lastSyncWhen,
   pathOverflowText,
   useSharedLibrariesStore
 } from '../../stores/shared-libraries';
 import { usePlayFromDrive } from '../../composables/use-play-from-drive';
+import { formatAgo } from '../../utils';
 
 // Library → Shared Libraries (#578, owner decision 3): one section per
 // attached library, its titles from the drive's snapshot. Copy to this PC and
-// Import all arrive with S7b (#579); availability, Last seen and Forget with
-// S7c (#581). Strings from the drive are rendered as text only.
+// Import all arrive with S7b (#579). Each section header is the library's
+// management row (#581): availability, Last seen, a badge, Last sync, and the
+// ⋯ menu. The empty `slot-*` spans are where S9 (#584) and S10 (#585) render.
+// Strings from the drive are rendered as text only.
 defineProps<{ starredIds: ReadonlySet<number> }>();
 const emit = defineEmits<{ toggleStar: [anime: AnimeSearchResult] }>();
 
@@ -24,10 +30,6 @@ const { libraries, ffmpegAvailable } = storeToRefs(shared);
 const { play } = usePlayFromDrive();
 const error = ref('');
 
-const MODE_LABEL: Record<SharedLibraryMode, string> = {
-  videos: 'Videos only',
-  metadata: 'With metadata'
-};
 const ROLE_NOTE: Partial<Record<AttachedLibraryRole, string>> = {
   foreign: 'Owned by someone else: used as videos only, its watch state is ignored.',
   owner: 'Sync arrives in a later update.',
@@ -44,15 +46,42 @@ async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle):
 <template>
   <div class="shared-tab" data-testid="shared-libraries-tab">
     <p v-if="libraries.length === 0" class="status-text">No Shared Library is open.</p>
+    <header v-else class="tab-head" data-testid="shared-tab-head">
+      <span class="slot" data-testid="slot-sync-now"></span>
+      <span class="slot" data-testid="slot-sync-history"></span>
+    </header>
     <p v-if="error" class="sl-error">{{ error }}</p>
-    <section v-for="lib in libraries" :key="lib.libraryId" class="lib-section">
+    <section
+      v-for="lib in libraries"
+      :key="lib.libraryId"
+      class="lib-section"
+      data-testid="shared-library-section"
+    >
       <header class="lib-head">
+        <span
+          class="dot"
+          :class="lib.available ? 'on' : 'off'"
+          data-testid="availability-dot"
+          :data-available="lib.available"
+          :title="lib.available ? 'Connected' : 'Not connected'"
+        ></span>
         <h3 class="lib-name">{{ lib.name }}</h3>
         <span v-if="lib.ownerNickname" class="sl-muted">{{ lib.ownerNickname }}</span>
-        <span class="sl-badge" data-testid="mode-badge">{{ MODE_LABEL[lib.mode] }}</span>
-        <span v-if="lib.access === 'read-only'" class="sl-badge">Read-only</span>
+        <span class="sl-badge" data-testid="role-badge">{{ ROLE_BADGE[lib.role] }}</span>
+        <span v-if="lib.access === 'read-only'" class="sl-badge" data-testid="read-only-badge"
+          >Read-only</span
+        >
+        <span v-if="!lib.available" class="sl-muted" data-testid="last-seen"
+          >Last seen {{ formatAgo(lib.lastSeenAt) }}</span
+        >
+        <span class="sl-muted" data-testid="last-sync"
+          >Last sync: {{ lastSyncWhen(lib.lastSyncAt) }}</span
+        >
+        <span class="slot" data-testid="slot-sync-status"></span>
+        <span class="slot" data-testid="slot-conflicts"></span>
         <div class="grow"></div>
         <button class="sl-btn" disabled title="Arrives in a later update">Import all</button>
+        <LibraryActionsMenu :library="lib" @error="error = $event" />
       </header>
       <p v-if="ROLE_NOTE[lib.role]" class="sl-muted">{{ ROLE_NOTE[lib.role] }}</p>
       <p v-if="lib.message" class="sl-warn" data-testid="read-only-message">{{ lib.message }}</p>
@@ -116,6 +145,32 @@ async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle):
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.tab-head {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.slot:empty,
+.tab-head:not(:has(.slot:not(:empty))) {
+  display: none;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot.on {
+  background: var(--st-green);
+}
+
+.dot.off {
+  background: var(--text-faint);
 }
 
 .lib-name {

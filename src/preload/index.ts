@@ -536,11 +536,16 @@ const api = {
     ipcRenderer.invoke(
       CHANNELS.SHARED_LIBRARY_PICK_AND_DISCOVER
     ) as Promise<SharedLibraryDiscovery>,
-  sharedLibraryAttach: (libraryId: string, choice?: SharedLibraryAttachChoice) =>
+  sharedLibraryAttach: (
+    libraryId: string,
+    choice?: SharedLibraryAttachChoice,
+    from?: SharedLibraryAttachSource
+  ) =>
     ipcRenderer.invoke(
       CHANNELS.SHARED_LIBRARY_ATTACH,
       libraryId,
-      choice
+      choice,
+      from
     ) as Promise<SharedLibraryAttachResult>,
   sharedLibraryList: () =>
     ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_LIST) as Promise<AttachedLibraryInfo[]>,
@@ -551,6 +556,21 @@ const api = {
       animeId
     ) as Promise<AttachedTitleDetail | null>,
   onSharedLibrariesChanged: subscribe<void>(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED),
+  // Drive detection, Forget, Re-locate (#581)
+  sharedLibraryForget: (libraryId: string, opts?: { confirmDropPending?: boolean }) =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_FORGET,
+      libraryId,
+      opts
+    ) as Promise<SharedLibraryForgetResult>,
+  sharedLibraryRelocate: (libraryId: string) =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_RELOCATE,
+      libraryId
+    ) as Promise<SharedLibraryRelocateResult>,
+  sharedLibraryDismissPrompt: (libraryIds: string[]) =>
+    ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_DISMISS_PROMPT, libraryIds) as Promise<void>,
+  onSharedLibraryFound: subscribe<SharedLibraryFound>(EVENT_CHANNELS.SHARED_LIBRARY_FOUND),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>

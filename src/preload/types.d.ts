@@ -387,14 +387,28 @@ interface Api {
   // Shared Library (#578)
   /** Folder picker, then the libraries in it and one level below. */
   sharedLibraryPickAndDiscover: () => Promise<SharedLibraryDiscovery>
-  /** `choice` is the no-account answer: videos only, or a local claim. */
+  /**
+   * `choice` is the no-account answer: videos only, or a local claim. `from:
+   * 'found'` attaches the root the found-on-a-drive toast offered (#581).
+   */
   sharedLibraryAttach: (
     libraryId: string,
-    choice?: SharedLibraryAttachChoice
+    choice?: SharedLibraryAttachChoice,
+    from?: SharedLibraryAttachSource
   ) => Promise<SharedLibraryAttachResult>
   sharedLibraryList: () => Promise<AttachedLibraryInfo[]>
   sharedLibraryGetTitle: (libraryId: string, animeId: number) => Promise<AttachedTitleDetail | null>
   onSharedLibrariesChanged: (callback: () => void) => Unsubscribe
+  /** Never touches the drive; `needsConfirm` first when pending changes would be discarded (#581). */
+  sharedLibraryForget: (
+    libraryId: string,
+    opts?: { confirmDropPending?: boolean }
+  ) => Promise<SharedLibraryForgetResult>
+  /** Folder picker; accepted only when it holds this `libraryId`. */
+  sharedLibraryRelocate: (libraryId: string) => Promise<SharedLibraryRelocateResult>
+  /** "Don't ask for this drive", by `libraryId`. */
+  sharedLibraryDismissPrompt: (libraryIds: string[]) => Promise<void>
+  onSharedLibraryFound: (callback: (found: SharedLibraryFound) => void) => Unsubscribe
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>

@@ -163,9 +163,113 @@ describe('ExportDialog (#574)', () => {
         { animeId: 1, translationId: 11, episodeInt: '2' }
       ],
       target: '/drive',
-      name: 'Anime Library'
+      name: 'Anime Library',
+      unmerged: 'copy-as-is',
+      codec: 'copy'
     })
     expect(w.text()).toContain('refused by main')
+  })
+})
+
+// One unmerged pair (E2) next to a merged episode (E1).
+const PAIR_TITLES: ExportTreeTitle[] = [
+  {
+    ...TITLES[0],
+    translations: [
+      {
+        ...TITLES[0].translations[0],
+        episodes: [
+          { ...TITLES[0].translations[0].episodes[0] },
+          { ...TITLES[0].translations[0].episodes[1], unmerged: true }
+        ]
+      }
+    ]
+  }
+]
+
+async function openWithPairs(merge: ExportMergeSupport | undefined, free = 1_000_000) {
+  stubApi(target({ free }))
+  api.exportPlan = vi.fn(async (req: ExportPlanRequest) => ({
+    titles: PAIR_TITLES,
+    target: req.target ? target({ free }) : null,
+    preflight: null,
+    ...(merge ? { merge } : {})
+  }))
+  const w = mount(ExportDialog, { props: { animeIds: [1], preselect: true } })
+  await flushPromises()
+  await w.find('[data-testid="export-pick"]').trigger('click')
+  await flushPromises()
+  return w
+}
+
+const radio = (w: ReturnType<typeof mount>, id: string): HTMLInputElement =>
+  w.find(`[data-testid="${id}"]`).element as HTMLInputElement
+
+describe('ExportDialog unmerged pairs (#576)', () => {
+  it('shows no merge option when the selection has no unmerged pair', async () => {
+    const w = await open(target({}))
+    expect(w.find('[data-testid="export-unmerged"]').exists()).toBe(false)
+  })
+
+  it('with ffmpeg: Merge into MKV is the default, the codec list comes from its encoders, and the codec is No', async () => {
+    const w = await openWithPairs({ available: true, encoders: ['libx265', 'hevc_nvenc'] })
+    const block = w.find('[data-testid="export-unmerged"]')
+    expect(block.text()).toContain('Unmerged episodes (1):')
+    expect(radio(w, 'export-unmerged-merge').checked).toBe(true)
+    expect(radio(w, 'export-unmerged-merge').disabled).toBe(false)
+    const select = w.find('[data-testid="export-codec"]')
+    expect(select.findAll('option').map((o) => o.text())).toEqual([
+      'No (fastest)',
+      'H.265 (CPU)',
+      'H.265 (NVIDIA GPU)'
+    ])
+    expect((select.element as HTMLSelectElement).value).toBe('copy')
+    expect(block.text()).toContain('Resolution is never reduced.')
+    expect(block.text()).toContain('Other PCs need ffmpeg to play .mkv files.')
+
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(
+      expect.objectContaining({ unmerged: 'merge', codec: 'copy' })
+    )
+  })
+
+  it('the option goes when the unmerged pair is deselected', async () => {
+    const w = await openWithPairs({ available: true, encoders: [] })
+    expect(w.find('[data-testid="export-unmerged"]').exists()).toBe(true)
+    await w.find('[data-testid="tree-episode-1:2:11"]').trigger('change')
+    expect(w.find('[data-testid="export-unmerged"]').exists()).toBe(false)
+  })
+
+  it('without ffmpeg: Merge is disabled with the reason, and Copy as they are is selected', async () => {
+    const w = await openWithPairs({ available: false, encoders: [] })
+    expect(radio(w, 'export-unmerged-merge').disabled).toBe(true)
+    expect(radio(w, 'export-unmerged-copy').checked).toBe(true)
+    expect(w.find('[data-testid="export-merge-missing"]').text()).toBe(
+      "ffmpeg isn't installed on this PC. Download it in Settings → Merging"
+    )
+    expect(w.find('[data-testid="export-codec"]').exists()).toBe(false)
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(
+      expect.objectContaining({ unmerged: 'copy-as-is' })
+    )
+  })
+
+  it('a re-encode says the size will change, counts the pair plus 10%, and re-plans with the choice', async () => {
+    // E1 1000 + E2 3000: a copy merge needs 4040 free, a re-encode 1000 + 3300 → 4343.
+    const w = await openWithPairs({ available: true, encoders: ['libx265'] }, 4100)
+    expect(startButton(w).disabled).toBe(false)
+    expect(w.text()).not.toContain('size will change')
+    await w.find('[data-testid="export-codec"]').setValue('libx265')
+    await flushPromises()
+    expect(w.text()).toContain('size will change')
+    expect(w.text()).toContain('doesn’t fit')
+    expect(startButton(w).disabled).toBe(true)
+    const calls = (api.exportPlan as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0] as ExportPlanRequest
+    )
+    expect(calls[calls.length - 1]).toMatchObject({ unmerged: 'merge', codec: 'libx265' })
   })
 })
 

@@ -10,6 +10,8 @@ import type { SmotretApi } from './smotret-api'
 import { fetchWithTimeout } from './lib/net'
 import { isNetworkError } from './lib/errors'
 import { createListenerSet } from './lib/listener-set'
+import { createMutex } from './lib/async-mutex'
+import { subtitleMeta } from './lib/subtitle-meta'
 
 interface RunFfmpegOptions {
   ffmpegPath: string
@@ -20,6 +22,47 @@ interface RunFfmpegOptions {
   codec?: string
   subMeta?: { language: string; title: string }
   onPercent?: (pct: number) => void
+  /** Checked after the probe, beside the hold: true stops the merge before the spawn. */
+  stopped?: () => boolean
+}
+
+function mergeAbortError(): Error {
+  const err = new Error('The merge was stopped')
+  err.name = 'AbortError'
+  return err
+}
+
+/** One Shared Library export merge (#576): `.mp4` + `.ass` into an MKV on the target. */
+export interface ExportMergeOptions {
+  jobId: string
+  ffmpegPath: string
+  ffprobePath: string
+  videoPath: string
+  subtitlePath: string | null
+  /** `<dest>.anime-dl-tmp.mkv` on the target. */
+  outputPath: string
+  codec: string
+  subMeta?: { language: string; title: string }
+  onPercent?: (pct: number) => void
+  /** The ffmpeg mutex is held by another merge: this one waits for it. */
+  onWaiting?: () => void
+  /** The mutex is ours and the gates passed: ffmpeg is about to run. */
+  onAcquired?: () => void
+}
+
+/**
+ * What `mergeForExport` resolves with: `'held'` when a player view is open
+ * (nothing ran), `'gone'` when the source `.mp4` vanished while it waited (a
+ * download merge took it).
+ */
+export type ExportMergeOutcome = 'done' | 'held' | 'gone'
+
+/** `mergeForExport`'s rejection when the app quit under it (#576): not a failed item. */
+export class MergeQuitError extends Error {
+  constructor() {
+    super('The app is quitting')
+    this.name = 'MergeQuitError'
+  }
 }
 
 /**
@@ -328,22 +371,6 @@ export function sanitizeFilename(name: string): string {
     .trim()
 }
 
-function subtitleLanguage(translationType: string): string {
-  if (
-    translationType.endsWith('Ru') ||
-    translationType === 'voiceRu' ||
-    translationType === 'subRu'
-  )
-    return 'rus'
-  if (
-    translationType.endsWith('En') ||
-    translationType === 'voiceEn' ||
-    translationType === 'subEn'
-  )
-    return 'eng'
-  return 'und'
-}
-
 export class DownloadManager {
   private queue: DownloadItem[] = []
   private mergeStatuses = new Map<
@@ -403,6 +430,16 @@ export class DownloadManager {
   private destroyed = false
   private activeMergeOutputPath: string | null = null
   private ffmpegDriver: FfmpegDriver = DEFAULT_FFMPEG_DRIVER
+  // One ffmpeg at a time (#576): taken per merge — one queue group, one scan
+  // file or one export file — never per cycle, and handed FIFO to the next
+  // waiter. It owns `activeFfmpegCmd`, `activeMergeOutputPath`,
+  // `activeMergeTranslationId` and `activeMergeOwner`.
+  private ffmpegMutex = createMutex()
+  private activeMergeOwner: 'queue' | 'scan' | 'export' | null = null
+  private activeExportJobId: string | null = null
+  // Export merges waiting for the mutex, and those cancelled while waiting.
+  private exportMergesWaiting = new Set<string>()
+  private exportMergesCancelled = new Set<string>()
 
   constructor(
     downloadDir: string,
@@ -982,12 +1019,27 @@ export class DownloadManager {
     // Global cancel (the user's Cancel button) ends the whole cycle. The flag
     // goes up whenever a cycle is running, not only when a command is active,
     // so a Cancel pressed while duration is being probed or between two groups
-    // is not lost.
+    // is not lost. An export's merge (#576) isn't the queue's to cancel.
     if (this.merging) this.mergeCancelled = true
-    if (this.activeFfmpegCmd) {
+    if (this.activeFfmpegCmd && this.activeMergeOwner !== 'export') {
       this.mergeCancelled = true
       this.activeFfmpegCmd.kill('SIGKILL')
     }
+  }
+
+  /**
+   * Stops export `jobId`'s merge (#576): kills its ffmpeg, or, while it still
+   * waits for the mutex, makes it give the lock straight back. Never touches a
+   * queue or scan merge.
+   */
+  cancelExportMerge(jobId: string): void {
+    if (this.activeMergeOwner === 'export' && this.activeExportJobId === jobId) {
+      // Before the spawn (probing), the flag stops it after the probe.
+      this.exportMergesCancelled.add(jobId)
+      this.activeFfmpegCmd?.kill('SIGKILL')
+      return
+    }
+    if (this.exportMergesWaiting.has(jobId)) this.exportMergesCancelled.add(jobId)
   }
 
   cancelByEpisode(animeName: string, episodeLabel?: string): void {
@@ -1117,7 +1169,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1748-1753`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1879-1884`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1146,7 +1198,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1744`)
+   * (`src/main/download-manager.ts:1875`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1330,125 +1382,138 @@ export class DownloadManager {
       // hand them to ffmpeg; finalizeDeferred() re-queues them as 'pending'.
       if (group.mergeStatus === 'deferred') continue
 
-      const videoPath = path.join(this.downloadDir, group.video.filename)
-      if (!fs.existsSync(videoPath)) continue
-
-      // A player that grabbed the file between finalize and this merge pass
-      // holds it open (merging would unlink it out from under the <video>).
-      // Defer again — the lock's onRelease hook re-runs finalizeDeferred().
-      if (this.isFileLocked(videoPath)) {
-        this.mergeStatuses.set(group.translationId, { status: 'deferred' })
-        this.schedulePersist()
-        continue
-      }
-
-      // A player view is open (#516): start nothing new. The group stays
-      // 'pending', so its source .mp4 keeps serving `find-local-file`.
-      if (this.isMergeHeld()) {
-        this.heldRequest = true
-        held = true
-        break
-      }
-
-      const hasSubtitle = group.subtitle && group.subtitle.status === 'completed'
-      const subtitlePath = hasSubtitle
-        ? path.join(this.downloadDir, group.subtitle!.filename)
-        : null
-
-      const mkvFilename = group.video.filename.replace(/\.mp4$/, '.mkv')
-      const mkvPath = path.join(this.downloadDir, mkvFilename)
-
-      this.mergeStatuses.set(group.translationId, { status: 'merging' })
-      // On disk before ffmpeg spawns (#516): the boot fallback in `loadQueue`
-      // only runs for a persisted 'merging'.
-      this.schedulePersist()
-      this.activeMergeTranslationId = group.translationId
-
-      const subMeta = hasSubtitle
-        ? {
-            language: subtitleLanguage(group.translationType),
-            title: group.author || 'Subtitles'
-          }
-        : undefined
-
-      // Gates the merge-complete dispatch below the try (#428). A plain
+      // Gates the merge-complete dispatch below the lock (#428). A plain
       // fall-through after the catch would fire the hook for a failed or
       // cancelled merge as well, so the success path has to say so explicitly.
       let merged = false
+      let mkvFilename = ''
 
+      // One merge under the ffmpeg mutex (#576), from the file checks to the
+      // final status: an export merge may run between two groups, never inside
+      // one. A group waiting here is still 'pending', on disk and in memory.
+      const release = await this.ffmpegMutex.acquire()
       try {
-        const outcome = await this.runFfmpeg({
-          ffmpegPath,
-          ffprobePath,
-          videoPath,
-          subtitlePath,
-          outputPath: mkvPath,
-          codec: videoCodec,
-          subMeta,
-          onPercent: (pct) => {
-            this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
-          }
-        })
-        // The player opened while the duration was probed (#516): nothing was
-        // spawned, so there is no output to unlink and nothing failed. Put the
-        // group back the way the gate above would have left it.
-        if (outcome === 'held') {
-          this.mergeStatuses.set(group.translationId, { status: 'pending' })
+        // What the wait may have changed: a global Cancel or quit ends the pass,
+        // a per-translation cancel skips this group.
+        if (this.mergeCancelled || this.destroyed) break
+        if (this.cancelledMerges.has(group.translationId)) continue
+
+        const videoPath = path.join(this.downloadDir, group.video.filename)
+        if (!fs.existsSync(videoPath)) continue
+
+        // A player that grabbed the file between finalize and this merge pass
+        // holds it open (merging would unlink it out from under the <video>).
+        // Defer again — the lock's onRelease hook re-runs finalizeDeferred().
+        if (this.isFileLocked(videoPath)) {
+          this.mergeStatuses.set(group.translationId, { status: 'deferred' })
           this.schedulePersist()
-          this.activeMergeTranslationId = null
+          continue
+        }
+
+        // A player view is open (#516): start nothing new. The group stays
+        // 'pending', so its source .mp4 keeps serving `find-local-file`.
+        if (this.isMergeHeld()) {
           this.heldRequest = true
           held = true
           break
         }
-        this.mergeStatuses.set(group.translationId, { status: 'completed' })
+
+        const hasSubtitle = group.subtitle && group.subtitle.status === 'completed'
+        const subtitlePath = hasSubtitle
+          ? path.join(this.downloadDir, group.subtitle!.filename)
+          : null
+
+        mkvFilename = group.video.filename.replace(/\.mp4$/, '.mkv')
+        const mkvPath = path.join(this.downloadDir, mkvFilename)
+
+        this.mergeStatuses.set(group.translationId, { status: 'merging' })
+        // On disk before ffmpeg spawns (#516): the boot fallback in `loadQueue`
+        // only runs for a persisted 'merging'.
         this.schedulePersist()
-        console.log(`[merge] Completed: ${mkvFilename}`)
-        // Delete source files after successful merge
+        this.activeMergeTranslationId = group.translationId
+        this.activeMergeOwner = 'queue'
+
+        const subMeta = hasSubtitle ? subtitleMeta(group.translationType, group.author) : undefined
+
         try {
-          fs.unlinkSync(videoPath)
-        } catch {
-          /* ignore */
-        }
-        if (subtitlePath) {
+          const outcome = await this.runFfmpeg({
+            ffmpegPath,
+            ffprobePath,
+            videoPath,
+            subtitlePath,
+            outputPath: mkvPath,
+            codec: videoCodec,
+            subMeta,
+            onPercent: (pct) => {
+              this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
+            }
+          })
+          // The player opened while the duration was probed (#516): nothing was
+          // spawned, so there is no output to unlink and nothing failed. Put the
+          // group back the way the gate above would have left it.
+          if (outcome === 'held') {
+            this.mergeStatuses.set(group.translationId, { status: 'pending' })
+            this.schedulePersist()
+            this.activeMergeTranslationId = null
+            this.heldRequest = true
+            held = true
+            break
+          }
+          this.mergeStatuses.set(group.translationId, { status: 'completed' })
+          this.schedulePersist()
+          console.log(`[merge] Completed: ${mkvFilename}`)
+          // Delete source files after successful merge
           try {
-            fs.unlinkSync(subtitlePath)
+            fs.unlinkSync(videoPath)
           } catch {
             /* ignore */
           }
+          if (subtitlePath) {
+            try {
+              fs.unlinkSync(subtitlePath)
+            } catch {
+              /* ignore */
+            }
+          }
+          // The last statement of the success path, so the dispatch below the try
+          // still lands after the unlinks (#414/#431).
+          merged = true
+        } catch (err) {
+          // Clean up partial output file
+          try {
+            fs.unlinkSync(mkvPath)
+          } catch {
+            /* ignore */
+          }
+          // Quit (#516): `destroy()` already wrote queue.json with this group
+          // 'merging' and killed ffmpeg. Recording 'failed' and persisting would
+          // overwrite that write — the episode would boot as failed instead of
+          // reaching the boot fallback — and carrying on would start the next
+          // group during quit.
+          if (this.destroyed) {
+            console.log(`[merge] Stopped by quit: ${mkvFilename}`)
+            break
+          }
+          // The cancel set counts as a cancel here as much as the global flag
+          // does. A per-translation cancel kills ffmpeg without raising the
+          // global flag, so without this check the rejection would be recorded
+          // as a 'failed' merge — and 'failed' is eligible again on the next
+          // pass, which would re-merge exactly what the user cancelled.
+          if (this.mergeCancelled || this.cancelledMerges.has(group.translationId)) {
+            this.mergeStatuses.delete(group.translationId)
+            console.log(`[merge] Cancelled: ${mkvFilename}`)
+          } else {
+            const msg = err instanceof Error ? err.message : 'Unknown error'
+            this.mergeStatuses.set(group.translationId, { status: 'failed', error: msg })
+            this.schedulePersist()
+            console.error(`[merge] Failed: ${mkvFilename} - ${msg}`)
+          }
         }
-        // The last statement of the success path, so the dispatch below the try
-        // still lands after the unlinks (#414/#431).
-        merged = true
-      } catch (err) {
-        // Clean up partial output file
-        try {
-          fs.unlinkSync(mkvPath)
-        } catch {
-          /* ignore */
-        }
-        // Quit (#516): `destroy()` already wrote queue.json with this group
-        // 'merging' and killed ffmpeg. Recording 'failed' and persisting would
-        // overwrite that write — the episode would boot as failed instead of
-        // reaching the boot fallback — and carrying on would start the next
-        // group during quit.
-        if (this.destroyed) {
-          console.log(`[merge] Stopped by quit: ${mkvFilename}`)
-          break
-        }
-        // The cancel set counts as a cancel here as much as the global flag
-        // does. A per-translation cancel kills ffmpeg without raising the
-        // global flag, so without this check the rejection would be recorded
-        // as a 'failed' merge — and 'failed' is eligible again on the next
-        // pass, which would re-merge exactly what the user cancelled.
-        if (this.mergeCancelled || this.cancelledMerges.has(group.translationId)) {
-          this.mergeStatuses.delete(group.translationId)
-          console.log(`[merge] Cancelled: ${mkvFilename}`)
-        } else {
-          const msg = err instanceof Error ? err.message : 'Unknown error'
-          this.mergeStatuses.set(group.translationId, { status: 'failed', error: msg })
-          this.schedulePersist()
-          console.error(`[merge] Failed: ${mkvFilename} - ${msg}`)
-        }
+      } finally {
+        // Every exit releases: merged, failed, cancelled, held or quit.
+        this.activeMergeTranslationId = null
+        this.activeMergeOwner = null
+        release()
       }
 
       // Three things are load-bearing about where this sits.
@@ -1477,7 +1542,8 @@ export class DownloadManager {
       //
       // Still fire-and-forget — awaiting it would hold `this.merging`, and the
       // whole merge queue behind it, for a multi-GB cross-drive copy that the
-      // between-groups `mergeCancelled` check cannot interrupt.
+      // between-groups `mergeCancelled` check cannot interrupt. It is outside
+      // the ffmpeg mutex (#576) for the same reason.
       if (merged) {
         // Each listener runs inside its own `dispatchHook` (`onMergeComplete`).
         this.mergeCompleteListeners.emit({
@@ -1504,6 +1570,7 @@ export class DownloadManager {
     // the player can open or the app quit while ffprobe runs.
     if (this.destroyed) throw new Error('destroyed')
     if (this.isMergeHeld()) return 'held'
+    if (opts.stopped?.()) throw mergeAbortError()
 
     return new Promise((resolve, reject) => {
       Ffmpeg.setFfmpegPath(ffmpegPath)
@@ -1565,6 +1632,7 @@ export class DownloadManager {
           this.activeFfmpegCmd = null
           this.activeMergeTranslationId = null
           this.activeMergeOutputPath = null
+          this.activeMergeOwner = null
           // ffmpeg can exit 0 just before `destroy()` and have 'end' arrive
           // after it, once stderr closes. `destroy()` has then unlinked this
           // finished output, so resolving would let the caller unlink the
@@ -1576,6 +1644,7 @@ export class DownloadManager {
           this.activeFfmpegCmd = null
           this.activeMergeTranslationId = null
           this.activeMergeOutputPath = null
+          this.activeMergeOwner = null
           reject(err)
         })
 
@@ -1644,57 +1713,67 @@ export class DownloadManager {
 
       for (let i = 0; i < toMerge.length; i++) {
         if (this.destroyed) break
-        // Merge hold (#516). Reported in `failed` so a stopped scan never looks
-        // like a silent success; the resumed pass only covers queue groups.
-        if (this.isMergeHeld()) {
-          this.heldRequest = true
-          result.failed.push(heldScanMessage(toMerge.length - i))
-          break
-        }
-        const item = toMerge[i]
-        onProgress?.(i + 1, toMerge.length, item.label, 0)
-
+        // Per file under the ffmpeg mutex (#576): an export merge that holds
+        // it makes this file wait instead of failing the scan.
+        const release = await this.ffmpegMutex.acquire()
         try {
-          const outcome = await this.runFfmpeg({
-            ffmpegPath,
-            ffprobePath,
-            videoPath: item.videoPath,
-            subtitlePath: item.subtitlePath,
-            outputPath: item.outputPath,
-            codec: videoCodec,
-            onPercent: (pct) => {
-              onProgress?.(i + 1, toMerge.length, item.label, pct)
-            }
-          })
-          if (outcome === 'held') {
+          if (this.destroyed) break
+          // Merge hold (#516). Reported in `failed` so a stopped scan never looks
+          // like a silent success; the resumed pass only covers queue groups.
+          if (this.isMergeHeld()) {
             this.heldRequest = true
             result.failed.push(heldScanMessage(toMerge.length - i))
             break
           }
+          const item = toMerge[i]
+          onProgress?.(i + 1, toMerge.length, item.label, 0)
 
-          // Delete source files
           try {
-            fs.unlinkSync(item.videoPath)
-          } catch {
-            /* ignore */
-          }
-          if (item.subtitlePath) {
+            this.activeMergeOwner = 'scan'
+            const outcome = await this.runFfmpeg({
+              ffmpegPath,
+              ffprobePath,
+              videoPath: item.videoPath,
+              subtitlePath: item.subtitlePath,
+              outputPath: item.outputPath,
+              codec: videoCodec,
+              onPercent: (pct) => {
+                onProgress?.(i + 1, toMerge.length, item.label, pct)
+              }
+            })
+            if (outcome === 'held') {
+              this.heldRequest = true
+              result.failed.push(heldScanMessage(toMerge.length - i))
+              break
+            }
+
+            // Delete source files
             try {
-              fs.unlinkSync(item.subtitlePath)
+              fs.unlinkSync(item.videoPath)
             } catch {
               /* ignore */
             }
-          }
+            if (item.subtitlePath) {
+              try {
+                fs.unlinkSync(item.subtitlePath)
+              } catch {
+                /* ignore */
+              }
+            }
 
-          result.merged++
-          console.log(`[scan-merge] Merged: ${item.label}`)
-        } catch (err) {
-          // Quit (#516): `destroy()` killed this merge and unlinked its output;
-          // the source stays, so the next scan picks the file up again.
-          if (this.destroyed) break
-          const msg = err instanceof Error ? err.message : 'Unknown error'
-          result.failed.push(`${item.label}: ${msg}`)
-          console.error(`[scan-merge] Failed: ${item.label} - ${msg}`)
+            result.merged++
+            console.log(`[scan-merge] Merged: ${item.label}`)
+          } catch (err) {
+            // Quit (#516): `destroy()` killed this merge and unlinked its output;
+            // the source stays, so the next scan picks the file up again.
+            if (this.destroyed) break
+            const msg = err instanceof Error ? err.message : 'Unknown error'
+            result.failed.push(`${item.label}: ${msg}`)
+            console.error(`[scan-merge] Failed: ${item.label} - ${msg}`)
+          }
+        } finally {
+          this.activeMergeOwner = null
+          release()
         }
       }
     } finally {
@@ -1715,6 +1794,58 @@ export class DownloadManager {
     }
 
     return result
+  }
+
+  /**
+   * Merges a Shared Library export's `.mp4` + `.ass` into `outputPath` on the
+   * target (#576), through the same `runFfmpeg` as the queue: the hold, the low
+   * priority, `destroy()`'s kill-and-unlink and the driver seam all apply.
+   *
+   * It waits for the ffmpeg mutex (FIFO, per merge), so it runs after at most
+   * the one queue merge or scan file holding it. After the acquire, quit and
+   * the hold are checked before the probe, so no ffprobe runs while the player
+   * is open. It never touches queue state (`mergeStatuses`, `queue.json`),
+   * never sets `merging`, and never unlinks the sources or a failed output:
+   * the caller decides about the temp file (#575's run-time size rule).
+   */
+  async mergeForExport(opts: ExportMergeOptions): Promise<ExportMergeOutcome> {
+    const { jobId } = opts
+    if (this.destroyed) throw new MergeQuitError()
+    if (this.ffmpegMutex.isLocked()) opts.onWaiting?.()
+    this.exportMergesWaiting.add(jobId)
+    const release = await this.ffmpegMutex.acquire()
+    this.exportMergesWaiting.delete(jobId)
+    try {
+      if (this.exportMergesCancelled.delete(jobId)) throw mergeAbortError()
+      if (this.destroyed) throw new MergeQuitError()
+      if (this.isMergeHeld()) return 'held'
+      if (!fs.existsSync(opts.videoPath)) return 'gone'
+      this.activeMergeOwner = 'export'
+      this.activeExportJobId = jobId
+      opts.onAcquired?.()
+      try {
+        return await this.runFfmpeg({
+          ffmpegPath: opts.ffmpegPath,
+          ffprobePath: opts.ffprobePath,
+          videoPath: opts.videoPath,
+          subtitlePath: opts.subtitlePath,
+          outputPath: opts.outputPath,
+          codec: opts.codec,
+          subMeta: opts.subMeta,
+          onPercent: opts.onPercent,
+          stopped: () => this.exportMergesCancelled.has(jobId)
+        })
+      } catch (err) {
+        // Quit: `destroy()` killed it and unlinked the output.
+        if (this.destroyed) throw new MergeQuitError()
+        throw err
+      }
+    } finally {
+      this.exportMergesCancelled.delete(jobId)
+      this.activeMergeOwner = null
+      this.activeExportJobId = null
+      release()
+    }
   }
 
   private processQueue(): void {

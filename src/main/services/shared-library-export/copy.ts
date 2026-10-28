@@ -10,6 +10,8 @@ import * as path from 'path'
 import type { Readable } from 'stream'
 
 export const TMP_SUFFIX = '.anime-dl-tmp'
+/** An export merge's output (#576): ffmpeg picks the muxer from the extension. */
+export const MERGE_TMP_SUFFIX = `${TMP_SUFFIX}.mkv`
 /** Above this, verify by size only, to keep USB 2 bearable. */
 export const HASH_VERIFY_LIMIT = 2 * 1024 * 1024 * 1024
 
@@ -191,7 +193,45 @@ export async function copyVerified(
     throw err
   }
   await fh.close()
-  const sha256 = hash.digest('hex')
+  return placeVerified(xfs, tmp, dest, size, hash.digest('hex'), opts)
+}
+
+/**
+ * Takes a finished temp file someone else wrote (S6c #576: ffmpeg's merge
+ * output) the rest of the way: fsync, hash, then the same rename and verify
+ * as a copy. The temp file is deleted when that fails.
+ */
+export async function adoptVerified(
+  xfs: ExportFs,
+  tmp: string,
+  dest: string,
+  opts: { signal?: AbortSignal; hashLimit?: number } = {}
+): Promise<{ size: number; sha256: string }> {
+  try {
+    const fh = await xfs.open(tmp, 'r+')
+    try {
+      await fh.sync()
+    } finally {
+      await fh.close()
+    }
+    const size = (await xfs.stat(tmp)).size
+    const sha256 = await hashFile(xfs, tmp, opts.signal)
+    return await placeVerified(xfs, tmp, dest, size, sha256, opts)
+  } catch (err) {
+    await unlinkQuiet(xfs, tmp).catch(() => {})
+    throw err
+  }
+}
+
+/** Renames `tmp` (`size` bytes hashing to `sha256`) to `dest`, then verifies `dest`. */
+async function placeVerified(
+  xfs: ExportFs,
+  tmp: string,
+  dest: string,
+  size: number,
+  sha256: string,
+  opts: { signal?: AbortSignal; hashLimit?: number }
+): Promise<{ size: number; sha256: string }> {
   // Never rename onto an existing file (FAT32/exFAT, antivirus).
   await unlinkQuiet(xfs, dest)
   await xfs.rename(tmp, dest)

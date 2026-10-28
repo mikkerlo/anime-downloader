@@ -54,12 +54,15 @@ src/renderer/src/
     shared-library/            Shared Library export (#574)
       ExportDialog.vue          props { animeIds: number[] | null, preselect? }; the tree, folder picker, library
                                 name, target line, mode (Videos only; With metadata "Coming soon") and the
-                                size-vs-free bar. Mounted by LibraryView ("Export N titles…" in Select mode),
+                                size-vs-free bar; for unmerged pairs, Copy as-is / Merge into MKV and the
+                                re-encode codec (`@shared/video-codecs`, as MergingTab; #576). Mounted by
+                                LibraryView ("Export N titles…" in Select mode),
                                 AnimeDetailView ("Export…") and StorageTab ("Export to a Shared Library…")
       ExportTree.vue            Title → translation → episode tree, tri-state checkboxes, per-node sizes;
                                 missing and busy episodes greyed out
       ExportJobCard.vue         One export job in DownloadsView: progress, Pause/Resume/Cancel, "Paused while
-                                the player is open", "Waiting for drive '<name>'" with Locate…, Dismiss
+                                the player is open", "Waiting for drive '<name>'" with Locate…, Dismiss;
+                                per file "Waiting for a download merge", "Merging N%" or "Copying" (#576)
       export-selection.ts       Pure tri-state selection and size helpers for the tree
     player/                    PlayerView sub-components (controls bar)
       PlayerTitleBar.vue

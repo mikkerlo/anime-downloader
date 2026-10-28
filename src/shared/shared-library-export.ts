@@ -14,11 +14,30 @@ export function fitsFreeSpace(bytes: number, free: number | null): boolean {
   return free === null || requiredBytes(bytes) <= free
 }
 
+/**
+ * A re-encode's output size isn't known up front (#576), so its free-space
+ * need is its source's plus this margin.
+ */
+export const REENCODE_MARGIN = 0.1
+
+/** The bytes an unmerged pair of `size` bytes needs when merged: the sum, plus 10% for a re-encode. */
+export function mergedBytes(size: number, reencode: boolean): number {
+  return reencode ? size + Math.ceil(size * REENCODE_MARGIN) : size
+}
+
+/** How unmerged pairs are exported (#576): merged or not, and whether the video is re-encoded. */
+export interface ExportMergeChoice {
+  merge: boolean
+  reencode: boolean
+}
+
 export interface ExportEstimate {
   /** Bytes to copy: selected ready items the target doesn't already have. */
   bytes: number
   /** Selected ready items to copy. */
   items: number
+  /** Of those, unmerged `.mp4` + `.ass` pairs (#576). */
+  unmerged: number
   /** Selected items the target already has (same key, same size). */
   alreadyThere: number
   /** Selected items that are missing or busy, so not copied. */
@@ -29,10 +48,11 @@ export interface ExportEstimate {
 export function exportEstimate(
   titles: readonly ExportTreeTitle[],
   selected: ReadonlySet<string>,
-  present: readonly string[]
+  present: readonly string[],
+  choice: ExportMergeChoice = { merge: false, reencode: false }
 ): ExportEstimate {
   const there = new Set(present)
-  const out: ExportEstimate = { bytes: 0, items: 0, alreadyThere: 0, skipped: 0 }
+  const out: ExportEstimate = { bytes: 0, items: 0, unmerged: 0, alreadyThere: 0, skipped: 0 }
   for (const t of titles) {
     for (const tr of t.translations) {
       for (const ep of tr.episodes) {
@@ -41,7 +61,8 @@ export function exportEstimate(
         else if (there.has(ep.key)) out.alreadyThere++
         else {
           out.items++
-          out.bytes += ep.size
+          if (ep.unmerged) out.unmerged++
+          out.bytes += ep.unmerged && choice.merge ? mergedBytes(ep.size, choice.reencode) : ep.size
         }
       }
     }

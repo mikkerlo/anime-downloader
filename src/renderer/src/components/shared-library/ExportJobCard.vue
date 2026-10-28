@@ -43,6 +43,15 @@ const waiting = computed(() => {
   }
 });
 
+// What the current file is at (#576): an export merge waits for the download
+// queue's ffmpeg, then merges, and a copy just copies.
+const step = computed(() => {
+  const m = props.job.merge;
+  if (m?.phase === 'waiting') return 'Waiting for a download merge';
+  if (m?.phase === 'merging') return `Merging ${m.percent}%`;
+  return 'Copying';
+});
+
 const percent = computed(() =>
   props.job.bytesTotal > 0 ? Math.min(100, (props.job.bytesDone / props.job.bytesTotal) * 100) : 0
 );
@@ -81,8 +90,12 @@ const percent = computed(() =>
     </div>
     <div class="bar"><div class="fill" :style="{ width: `${percent}%` }"></div></div>
     <div v-if="waiting" class="waiting">{{ waiting }}</div>
-    <div v-else-if="job.current && job.status === 'running'" class="current">
-      {{ job.current }}
+    <div
+      v-else-if="job.current && job.status === 'running'"
+      class="current"
+      data-testid="export-job-step"
+    >
+      {{ step }}: {{ job.current }}
     </div>
     <div v-if="exportStore.locateErrors[job.jobId]" class="error">
       {{ exportStore.locateErrors[job.jobId] }}

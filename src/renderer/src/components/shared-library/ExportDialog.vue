@@ -1,9 +1,19 @@
 <script setup lang="ts">
 // "Export to a Shared Library" (#574). The tree comes from main once; the size
 // estimate and the free-space bar refresh live as the selection changes, and
-// the target is re-planned when the folder or the library name changes.
+// the target is re-planned when the folder or the library name changes. The
+// preflight (#575) comes with each plan and is narrowed to the selection here.
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { exportEstimate, fitsFreeSpace, requiredBytes } from '@shared/shared-library-export';
+import {
+  exportEstimate,
+  fitsFreeSpace,
+  mayBeSkippedWarning,
+  overflowWarning,
+  preflightForSelection,
+  renamedWarning,
+  requiredBytes,
+  skippedWarning
+} from '@shared/shared-library-export';
 import { formatBytes } from '../../utils';
 import { useExportStore } from '../../stores/export';
 import ExportTree from './ExportTree.vue';
@@ -23,6 +33,7 @@ const exportStore = useExportStore();
 const titles = ref<ExportTreeTitle[]>([]);
 const selected = ref(new Set<string>());
 const target = ref<ExportTarget | null>(null);
+const planPreflight = ref<ExportPreflight | null>(null);
 const dir = ref<string | null>(null);
 const name = ref('Anime Library');
 const loading = ref(true);
@@ -30,9 +41,33 @@ const planning = ref(false);
 const starting = ref(false);
 const error = ref('');
 let nameTimer: ReturnType<typeof setTimeout> | null = null;
+// Main probes each folder once while this dialog is open.
+const session = crypto.randomUUID();
+
+const preflight = computed(() =>
+  planPreflight.value ? preflightForSelection(planPreflight.value, selected.value) : null
+);
+const itemLabels = computed(() => {
+  const out = new Map<string, string>();
+  for (const t of titles.value) {
+    for (const tr of t.translations) {
+      for (const ep of tr.episodes) out.set(ep.key, `${t.name} — ${ep.label} (${tr.author})`);
+    }
+  }
+  return out;
+});
+const labelOf = (key: string): string => itemLabels.value.get(key) ?? key;
 
 const present = computed(() => target.value?.present ?? []);
-const estimate = computed(() => exportEstimate(titles.value, selected.value, present.value));
+// Files preflight skips (over 4 GB on FAT32) aren't copied, so they don't count.
+const toEstimate = computed(() => {
+  const skipped = preflight.value?.skipped ?? [];
+  if (skipped.length === 0) return selected.value;
+  const out = new Set(selected.value);
+  for (const k of skipped) out.delete(k);
+  return out;
+});
+const estimate = computed(() => exportEstimate(titles.value, toEstimate.value, present.value));
 const free = computed(() => target.value?.free ?? null);
 const fits = computed(() => fitsFreeSpace(estimate.value.bytes, free.value));
 const barPercent = computed(() => {
@@ -65,6 +100,7 @@ const blockedReason = computed(() => {
   if (!dir.value) return 'Choose a folder first.';
   if (planning.value) return 'Checking the folder…';
   if (target.value?.blocked) return target.value.blocked;
+  if (preflight.value && !preflight.value.ok) return preflight.value.blockers.join(' ');
   if (estimate.value.items === 0) return 'Nothing to copy.';
   if (!fits.value) return 'The selection doesn’t fit on the drive.';
   if (exportStore.activeJob) return 'Another export is running.';
@@ -79,9 +115,11 @@ async function replan(): Promise<void> {
     const plan = await window.api.exportPlan({
       animeIds: titles.value.map((t) => t.animeId),
       target: dir.value,
-      name: name.value
+      name: name.value,
+      session
     });
     target.value = plan.target;
+    planPreflight.value = plan.preflight ?? null;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -202,6 +240,43 @@ async function startExport(): Promise<void> {
             · {{ estimate.alreadyThere }} already on the drive</template
           >
         </div>
+      </div>
+
+      <div
+        v-if="
+          preflight &&
+          (preflight.blockers.length > 0 ||
+            preflight.driveWarnings.length > 0 ||
+            preflight.skipped.length > 0 ||
+            preflight.mayBeSkipped.length > 0 ||
+            preflight.renamed.length > 0 ||
+            preflight.overflow.length > 0)
+        "
+        class="preflight"
+        data-testid="export-preflight"
+      >
+        <div class="preflight-title">Preflight</div>
+        <div v-for="b in preflight.blockers" :key="b" class="pf-blocker">{{ b }}</div>
+        <div v-for="w in preflight.driveWarnings" :key="w" class="pf-warning">{{ w }}</div>
+        <details v-if="preflight.skipped.length > 0" class="pf-warning" data-testid="pf-skipped">
+          <summary>{{ skippedWarning(preflight.skipped.length) }}</summary>
+          <div v-for="k in preflight.skipped" :key="k" class="pf-item">{{ labelOf(k) }}</div>
+        </details>
+        <details v-if="preflight.mayBeSkipped.length > 0" class="pf-warning">
+          <summary>{{ mayBeSkippedWarning(preflight.mayBeSkipped.length) }}</summary>
+          <div v-for="k in preflight.mayBeSkipped" :key="k" class="pf-item">{{ labelOf(k) }}</div>
+        </details>
+        <details v-if="preflight.renamed.length > 0" class="pf-warning" data-testid="pf-renamed">
+          <summary>{{ renamedWarning(preflight.renamed.length) }}</summary>
+          <div v-for="k in preflight.renamed" :key="k" class="pf-item">
+            {{ preflight.renames[k]?.from ?? labelOf(k) }} →
+            {{ preflight.renames[k]?.to ?? '' }}
+          </div>
+        </details>
+        <details v-if="preflight.overflow.length > 0" class="pf-warning" data-testid="pf-overflow">
+          <summary>{{ overflowWarning(preflight.overflow.length) }}</summary>
+          <div v-for="k in preflight.overflow" :key="k" class="pf-item">{{ labelOf(k) }}</div>
+        </details>
       </div>
 
       <p v-if="error" class="error">{{ error }}</p>
@@ -331,6 +406,35 @@ async function startExport(): Promise<void> {
   margin-top: 4px;
   font-size: 0.78rem;
   color: var(--text-3);
+}
+
+.preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  padding: 8px 10px;
+  font-size: 0.8rem;
+}
+
+.preflight-title {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.pf-blocker {
+  color: var(--st-red);
+}
+
+.pf-warning {
+  color: var(--st-orange);
+}
+
+.pf-item {
+  margin-left: 14px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
 }
 
 .error {

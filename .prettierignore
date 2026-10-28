@@ -17,3 +17,5 @@ src/renderer/public/
 
 # Shared Library golden files (#573): byte-compared against the writer's output.
 test/fixtures/shared-library/v1/
+# Command outputs the export preflight parses (#575), kept as the tools print them.
+test/fixtures/fs-type-probe/

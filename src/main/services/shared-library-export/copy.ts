@@ -67,11 +67,56 @@ export class VerifyError extends Error {
   }
 }
 
+/** FAT32's largest file: 4 GiB − 1 bytes. */
+export const FAT32_MAX_FILE_SIZE = 4_294_967_295
+/**
+ * A temp file this large has hit FAT32's limit: within one 1 MiB read chunk of
+ * it, since Windows' fastfat may refuse the whole write that would cross it.
+ */
+export const FAT32_TEMP_THRESHOLD = FAT32_MAX_FILE_SIZE - 1024 * 1024
+
+export const TOO_LARGE_REASON = 'too-large-for-filesystem'
+
+/** A write the target's filesystem can't hold: the item is skipped, not failed (#575). */
+export class TooLargeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TooLargeError'
+  }
+}
+
+/**
+ * The run-time size rule (#575), for outputs whose size preflight couldn't
+ * know (S6c #576 re-encodes, a filesystem the probe called `unknown`): a write
+ * failure is "too large for the filesystem" when it is `EFBIG` or ffmpeg's
+ * "File too large", or when, on `fat32` or `unknown`, the partial temp file had
+ * reached the FAT32 limit (`FAT32_TEMP_THRESHOLD`) without passing it: past
+ * 4 GiB − 1 bytes the drive isn't FAT32, and that is a real disk-full. Windows
+ * reports the limit as a full disk (`ENOSPC`), and a probe that timed out there
+ * gives `unknown`.
+ * S6c's merge step reuses it.
+ */
+export function isTooLargeForFilesystem(
+  err: unknown,
+  fsType: ExportFsType,
+  partialBytes: number | null
+): boolean {
+  if (errnoOf(err) === 'EFBIG') return true
+  const message = err instanceof Error ? err.message : String(err)
+  if (/file too large/i.test(message)) return true
+  return (
+    (fsType === 'fat32' || fsType === 'unknown') &&
+    partialBytes !== null &&
+    partialBytes >= FAT32_TEMP_THRESHOLD &&
+    partialBytes <= FAT32_MAX_FILE_SIZE
+  )
+}
+
 export function errnoOf(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException | null)?.code
 }
 
-export async function unlinkQuiet(xfs: ExportFs, p: string): Promise<void> {
+export async function unlinkQuiet(xfs: Pick<ExportFs, 'unlink'>, p: string): Promise<void> {
   try {
     await xfs.unlink(p)
   } catch (err) {
@@ -102,7 +147,13 @@ export async function copyVerified(
   xfs: ExportFs,
   src: string,
   dest: string,
-  opts: { signal?: AbortSignal; onBytes?: (n: number) => void; hashLimit?: number } = {}
+  opts: {
+    signal?: AbortSignal
+    onBytes?: (n: number) => void
+    hashLimit?: number
+    /** The target's filesystem, for the run-time size rule. */
+    fsType?: ExportFsType
+  } = {}
 ): Promise<{ size: number; sha256: string }> {
   const tmp = `${dest}${TMP_SUFFIX}`
   try {
@@ -126,7 +177,17 @@ export async function copyVerified(
     await fh.sync()
   } catch (err) {
     await fh.close().catch(() => {})
+    const aborted = (err as Error | null)?.name === 'AbortError'
+    const partial = aborted
+      ? null
+      : await xfs.stat(tmp).then(
+          (s) => s.size,
+          () => null
+        )
     await unlinkQuiet(xfs, tmp).catch(() => {})
+    if (!aborted && isTooLargeForFilesystem(err, opts.fsType ?? 'unknown', partial)) {
+      throw new TooLargeError(err instanceof Error ? err.message : String(err))
+    }
     throw err
   }
   await fh.close()

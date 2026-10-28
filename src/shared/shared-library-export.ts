@@ -48,3 +48,47 @@ export function exportEstimate(
   }
   return out
 }
+
+const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many)
+
+// The preflight's item warnings (#575), shared so the dialog's selection view
+// and main's start say the same.
+export const skippedWarning = (n: number): string =>
+  `This drive is FAT32: ${n} ${plural(n, 'file', 'files')} over 4 GB will be skipped.`
+export const mayBeSkippedWarning = (n: number): string =>
+  `${n} re-encoded ${plural(n, 'file', 'files')} may be skipped if ${plural(n, 'it’s', 'they’re')} still over 4 GB.`
+export const renamedWarning = (n: number): string =>
+  `${n} ${plural(n, 'name', 'names')} will be changed to fit this drive and Windows. An index.html will help find them without the app.`
+export const overflowWarning = (n: number): string =>
+  `${n} ${plural(n, 'file', 'files')} will have paths too long for some Windows apps. Choose a shorter folder.`
+
+export function preflightItemWarnings(p: {
+  skipped: readonly string[]
+  mayBeSkipped: readonly string[]
+  renamed: readonly string[]
+  overflow: readonly string[]
+}): string[] {
+  const out: string[] = []
+  if (p.skipped.length > 0) out.push(skippedWarning(p.skipped.length))
+  if (p.mayBeSkipped.length > 0) out.push(mayBeSkippedWarning(p.mayBeSkipped.length))
+  if (p.renamed.length > 0) out.push(renamedWarning(p.renamed.length))
+  if (p.overflow.length > 0) out.push(overflowWarning(p.overflow.length))
+  return out
+}
+
+/** A plan-time preflight narrowed to the selected item keys. */
+export function preflightForSelection(
+  p: ExportPreflight,
+  selected: ReadonlySet<string>
+): ExportPreflight {
+  const pick = (keys: readonly string[]): string[] => keys.filter((k) => selected.has(k))
+  const out = {
+    ...p,
+    skipped: pick(p.skipped),
+    mayBeSkipped: pick(p.mayBeSkipped),
+    renamed: pick(p.renamed),
+    overflow: pick(p.overflow)
+  }
+  out.warnings = [...p.driveWarnings, ...preflightItemWarnings(out)]
+  return out
+}

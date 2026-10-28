@@ -18,6 +18,7 @@ function job(id: string, status: ExportJobStatus = 'running'): ExportJobView {
     bytesTotal: 40,
     current: null,
     failed: [],
+    skipped: [],
     missing: 0,
     note: null,
     error: null,

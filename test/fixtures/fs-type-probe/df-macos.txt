@@ -1,0 +1,2 @@
+Filesystem 512-blocks     Used Available Capacity  Mounted on
+/dev/disk4s1  250011648 18874368 231137280     8%    /Volumes/MY STICK

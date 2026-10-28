@@ -125,6 +125,8 @@ export function makeExportEnv(
       actor: () => actor,
       broadcast: (job) => updates.push(job),
       candidates: async () => [],
+      // The host's own filesystem type never decides a test (#575).
+      fsTypeProbe: async () => ({ fsType: 'unknown', mountPoint: null }),
       throttleMs: 0,
       checkpointEvery: 2,
       ...overrides,

@@ -10,6 +10,7 @@ import { absoluteOverflow } from '../../src/main/lib/shared-library/paths'
 import { readLibrary } from '../../src/main/lib/shared-library/read'
 import {
   FAT32_MAX_FILE_SIZE,
+  FAT32_TEMP_THRESHOLD,
   TooLargeError,
   copyVerified,
   isTooLargeForFilesystem,
@@ -391,6 +392,26 @@ describe('the dialog probes once per folder; start probes again', () => {
     await svc.plan({ animeIds: [7], target: other, name: 'Lib', session: 's1' })
     expect(writeProbe.mock.calls).toEqual([[env.drive], [other]])
   })
+
+  it('a blocker is not cached: the lock switch flipped, the same folder re-picked probes again (#575 review)', async () => {
+    env = makeExportEnv({ fsTypeProbe: fsType('exfat') })
+    env.addEpisode({ animeId: 7, title: 'Show', episodeInt: '1', translationId: 11 })
+    let locked = true
+    const writeProbe = vi.fn(async () => {
+      if (locked) throw errno('EROFS')
+    })
+    const svc = env.restart({ writeProbe })
+    const first = await svc.plan({ animeIds: [7], target: env.drive, name: 'Lib', session: 's1' })
+    expect(first.preflight?.ok).toBe(false)
+    locked = false
+    const second = await svc.plan({ animeIds: [7], target: env.drive, name: 'Lib', session: 's1' })
+    expect(second.preflight?.ok).toBe(true)
+    expect(second.preflight?.blockers).toEqual([])
+    expect(writeProbe).toHaveBeenCalledTimes(2)
+    // A clean result is cached again.
+    await svc.plan({ animeIds: [7], target: env.drive, name: 'Lib 2', session: 's1' })
+    expect(writeProbe).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('stale probe files', () => {
@@ -426,9 +447,27 @@ describe('the run-time size rule', () => {
     ).toBe(true)
     const enospc = errno('ENOSPC', 'ENOSPC: no space left on device, write')
     expect(isTooLargeForFilesystem(enospc, 'fat32', FAT32_MAX_FILE_SIZE)).toBe(true)
-    expect(isTooLargeForFilesystem(enospc, 'fat32', FAT32_MAX_FILE_SIZE - 1)).toBe(false)
     expect(isTooLargeForFilesystem(enospc, 'exfat', FAT32_MAX_FILE_SIZE)).toBe(false)
     expect(isTooLargeForFilesystem(errno('EIO'), 'fat32', 10)).toBe(false)
+  })
+
+  it('Windows reports the FAT32 limit as ENOSPC: on fat32 or unknown, a temp file within one 1 MiB chunk of it is too large (#575 review)', () => {
+    const enospc = errno('ENOSPC', 'ENOSPC: no space left on device, write')
+    // The PowerShell probe timed out: `unknown`, which is still protected.
+    expect(isTooLargeForFilesystem(enospc, 'unknown', FAT32_MAX_FILE_SIZE)).toBe(true)
+    // fastfat may refuse the whole 1 MiB write that would cross the limit.
+    expect(FAT32_TEMP_THRESHOLD).toBe(FAT32_MAX_FILE_SIZE - 1024 * 1024)
+    for (const t of ['fat32', 'unknown'] as const) {
+      expect(isTooLargeForFilesystem(enospc, t, 4096 * 1024 * 1024 - 1024 * 1024)).toBe(true)
+      expect(isTooLargeForFilesystem(enospc, t, FAT32_TEMP_THRESHOLD)).toBe(true)
+      expect(isTooLargeForFilesystem(enospc, t, FAT32_TEMP_THRESHOLD - 1)).toBe(false)
+    }
+    // A real disk-full well short of 4 GiB stays a failure.
+    expect(isTooLargeForFilesystem(enospc, 'unknown', 100)).toBe(false)
+    expect(isTooLargeForFilesystem(enospc, 'unknown', null)).toBe(false)
+    // A known filesystem other than FAT32 never takes the size branch.
+    expect(isTooLargeForFilesystem(enospc, 'exfat', FAT32_MAX_FILE_SIZE)).toBe(false)
+    expect(isTooLargeForFilesystem(enospc, 'ntfs', FAT32_MAX_FILE_SIZE)).toBe(false)
   })
 
   it('copyVerified: a FAT32 temp file at the limit becomes a TooLargeError, and the temp file is deleted', async () => {
@@ -456,17 +495,27 @@ describe('the run-time size rule', () => {
       TooLargeError
     )
     expect(fs.readdirSync(path.join(root, 'out'))).toEqual([])
+    await expect(copyVerified(xfs, src, dest, { fsType: 'unknown' })).rejects.toBeInstanceOf(
+      TooLargeError
+    )
+    expect(fs.readdirSync(path.join(root, 'out'))).toEqual([])
     await expect(copyVerified(xfs, src, dest, { fsType: 'exfat' })).rejects.toMatchObject({
       code: 'ENOSPC'
     })
   })
 
-  /** A job on fake FAT32 whose third file's write throws `err`. */
-  async function jobWithThirdWriteFailing(err: () => Error): Promise<{
+  /**
+   * A job (on fake FAT32 by default) whose third file's write throws `err`;
+   * `tmpSize` is the size a `stat` of a temp file reports.
+   */
+  async function jobWithThirdWriteFailing(
+    err: () => Error,
+    opts: { fsType?: ExportFsType; tmpSize?: number } = {}
+  ): Promise<{
     keys: string[]
     job: ExportJobView
   }> {
-    env = makeExportEnv({ fsTypeProbe: fsType('fat32') })
+    env = makeExportEnv({ fsTypeProbe: fsType(opts.fsType ?? 'fat32') })
     const keys = [1, 2, 3, 4].map(
       (n) =>
         env!.addEpisode({ animeId: 7, title: 'Show', episodeInt: String(n), translationId: 10 + n })
@@ -475,6 +524,10 @@ describe('the run-time size rule', () => {
     let opened = 0
     const svc = env.restart({
       xfs: {
+        stat: async (p) =>
+          opts.tmpSize !== undefined && p.endsWith('.anime-dl-tmp')
+            ? { size: opts.tmpSize, dev: 0, ino: 0, mtimeMs: 0 }
+            : nodeFs.stat(p),
         open: async (p, flags) => {
           const h = await nodeFs.open(p, flags)
           if (!p.endsWith('.anime-dl-tmp') || !p.includes(' - ')) return h
@@ -531,6 +584,32 @@ describe('the run-time size rule', () => {
       ).toEqual([keys[0], keys[1], keys[3]])
     }
   )
+
+  it('an unknown filesystem that is FAT32 on Windows: ENOSPC at the 4 GiB boundary skips the item (#575 review)', async () => {
+    const { keys, job } = await jobWithThirdWriteFailing(
+      () => errno('ENOSPC', 'ENOSPC: no space left on device, write'),
+      { fsType: 'unknown', tmpSize: 4096 * 1024 * 1024 - 1024 * 1024 }
+    )
+    expect(job.status).toBe('completed')
+    expect(job.skipped).toEqual([
+      { key: keys[2], label: 'Show — Episode 3', reason: 'too-large-for-filesystem' }
+    ])
+    expect(job.failed).toEqual([])
+    expect(tmpFiles(env!.drive)).toEqual([])
+  })
+
+  it('a real disk-full (ENOSPC well short of 4 GiB) on an unknown filesystem is still a failure', async () => {
+    const { keys, job } = await jobWithThirdWriteFailing(
+      () => errno('ENOSPC', 'ENOSPC: no space left on device, write'),
+      { fsType: 'unknown' }
+    )
+    expect(job.status).toBe('completed')
+    expect(job.skipped).toEqual([])
+    expect(job.failed).toEqual([
+      { key: keys[2], label: 'Show — Episode 3', reason: 'ENOSPC: no space left on device, write' }
+    ])
+    expect(tmpFiles(env!.drive)).toEqual([])
+  })
 
   it('a plain EIO is still a failure, not a skip', async () => {
     const { keys, job } = await jobWithThirdWriteFailing(() =>
@@ -643,6 +722,11 @@ describe('MAX_PATH: S5’s absoluteOverflow, not a copy of it', () => {
     expect(windowsStyleRoot('/Volumes/S/a/b', '/Volumes/S')).toBe('E:\\a\\b')
     expect(windowsStyleRoot('/Volumes/S/a', null)).toBeNull()
     expect(windowsStyleRoot('/elsewhere/a', '/Volumes/S')).toBeNull()
+    expect(windowsStyleRoot('/Volumes/S/../a', '/Volumes/S')).toBeNull()
+    // A folder whose name starts with two dots is inside the mount (#575 review).
+    expect(windowsStyleRoot('/media/u/STICK/..hidden/Lib', '/media/u/STICK')).toBe(
+      'E:\\..hidden\\Lib'
+    )
   })
 })
 

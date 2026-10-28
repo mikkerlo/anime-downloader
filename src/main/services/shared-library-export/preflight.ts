@@ -187,7 +187,7 @@ export function windowsStyleRoot(root: string, mountPoint: string | null): strin
   if (WINDOWS_ROOT.test(root)) return root
   if (mountPoint === null) return null
   const rel = path.posix.relative(mountPoint, root)
-  if (rel.startsWith('..') || path.posix.isAbsolute(rel)) return null
+  if (rel === '..' || rel.startsWith('../') || path.posix.isAbsolute(rel)) return null
   return `E:\\${rel.split('/').filter(Boolean).join('\\')}`
 }
 
@@ -203,6 +203,8 @@ export async function preflight(
     deps.probeCache?.set(ancestor, probe)
   }
   const { fsType, mountPoint, blockers, driveWarnings } = await probe
+  // A blocker may be fixed while the dialog is open (a lock switch, chmod): probe again next plan.
+  if (blockers.length > 0) deps.probeCache?.delete(ancestor)
 
   const skipped: string[] = []
   const mayBeSkipped: string[] = []

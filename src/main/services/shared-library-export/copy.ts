@@ -69,6 +69,11 @@ export class VerifyError extends Error {
 
 /** FAT32's largest file: 4 GiB − 1 bytes. */
 export const FAT32_MAX_FILE_SIZE = 4_294_967_295
+/**
+ * A temp file this large has hit FAT32's limit: within one 1 MiB read chunk of
+ * it, since Windows' fastfat may refuse the whole write that would cross it.
+ */
+export const FAT32_TEMP_THRESHOLD = FAT32_MAX_FILE_SIZE - 1024 * 1024
 
 export const TOO_LARGE_REASON = 'too-large-for-filesystem'
 
@@ -84,9 +89,10 @@ export class TooLargeError extends Error {
  * The run-time size rule (#575), for outputs whose size preflight couldn't
  * know (S6c #576 re-encodes, a filesystem the probe called `unknown`): a write
  * failure is "too large for the filesystem" when it is `EFBIG` or ffmpeg's
- * "File too large", or when, on FAT32, the partial temp file had reached
- * 4 GiB − 1 bytes (Windows reports that as a full disk). S6c's merge step
- * reuses it.
+ * "File too large", or when, on `fat32` or `unknown`, the partial temp file had
+ * reached the FAT32 limit (`FAT32_TEMP_THRESHOLD`). Windows reports that limit
+ * as a full disk (`ENOSPC`), and a probe that timed out there gives `unknown`.
+ * S6c's merge step reuses it.
  */
 export function isTooLargeForFilesystem(
   err: unknown,
@@ -96,7 +102,11 @@ export function isTooLargeForFilesystem(
   if (errnoOf(err) === 'EFBIG') return true
   const message = err instanceof Error ? err.message : String(err)
   if (/file too large/i.test(message)) return true
-  return fsType === 'fat32' && partialBytes !== null && partialBytes >= FAT32_MAX_FILE_SIZE
+  return (
+    (fsType === 'fat32' || fsType === 'unknown') &&
+    partialBytes !== null &&
+    partialBytes >= FAT32_TEMP_THRESHOLD
+  )
 }
 
 export function errnoOf(err: unknown): string | undefined {

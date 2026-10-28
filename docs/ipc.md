@@ -33,7 +33,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `validate-token` | invoke | Validate API token against smotret-anime.ru |
 | `search-anime` | invoke | Search anime by query |
 | `get-anime` | invoke | Fetch anime details by ID. Offline (#568) it returns the cache entry as `{ data, source: 'cache' }` without calling the API, and throws `OfflineError` with no entry |
-| `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint: `AnimeCacheResult` `{ data, cachedAt, stale }`, or null if missing. Online an entry older than 24h is null; offline (#568) it is returned with `stale: true` |
+| `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint: `AnimeCacheResult` `{ data, cachedAt, stale }`, or null if missing. An entry older than 24h is returned with `stale: true` offline (#568) and, online, for a cachable title (starred, downloaded or watched in the last 90 days, #570); online any other title's is null |
 | `get-episode` | invoke | Fetch episode translations (single episode) |
 | `get-episodes-batch` | invoke | Bulk-fetch translations for a page of episodes in one request (collapses the per-episode cold-load waterfall, #155); caches each result, falls back to cached episodes on failure (via the shared `readCachedEpisodes` helper) |
 | `get-episodes-batch-cached` | invoke | Cache-first read (#196): returns the already-cached translations for a page of episodes with no network, so the episode list paints instantly for previously-viewed anime; the renderer then background-refreshes via `get-episodes-batch` and patches. Shares `readCachedEpisodes` with the network-first fallback. Always `source: 'cache'`; empty `data` means nothing was cached |
@@ -109,6 +109,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `update:install` | invoke | Quit and install downloaded update |
 | `update:status` | send | Update check/download progress and status |
 | `cache-get-poster` | invoke | Get base64-encoded cached poster for offline anime |
+| `cache:get-poster-ids` | invoke | `number[]`: the anime ids with a poster in `userData/poster-cache/` (#570). The renderer loads the set once per view load and points those posters at `anime-poster://<id>` |
 | `file:check-episodes` | invoke | Check which episodes exist on disk (session-cached, triggers background rescan on cache hit). Async first scan (#196): the first per-anime scan uses `fsPromises.readdir` off the main loop, deduped so concurrent misses share one scan; backed by `lib/episode-file-scan.ts` |
 | `file:episodes-changed` | send | Background rescan detected file changes, pushes updated results to renderer |
 | `file:open` | invoke | Open file with default app (verifies existence, returns error + invalidates cache if missing) |
@@ -122,7 +123,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
 | `shikimori:get-profile` | invoke | Returns the cached `ShikimoriProfile` dashboard payload instantly (if available) + triggers a background refresh; first call fetches `/api/users/:id` stats and assembles it. `null` when logged out. Powers the ShikimoriView dashboard (#178) |
 | `shikimori:profile-refreshed` | send | Profile dashboard payload re-assembled in background; ShikimoriView replaces its `profile` state |
-| `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
+| `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID. Offline, or on a network / `ShikiAuthError` failure, answers from the cached `shikimoriUserRates` list as `ShikiUserRateResult` with `stale: true`, `null` when the title is not on a non-empty list (#570; see `shikimori.md`) |
 | `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score, rewatches); updates cached rates and broadcasts change |
 | `shikimori:mark-episode-watched` | invoke | The player's auto-mark (`malId`, `epNum`): computes the next rate (completed → rewatching with `rewatches + 1`, else `watching` when `epNum` is past `episodes`) from the live rate, and on a network error or `ShikiAuthError` from the cached one, then sends or queues it. Queues even when the title has no cached rate (`rateId: null`, empty `planned` `before`). `null` when signed out or nothing changes (#565) |
 | `shikimori:get-anime-rates` | invoke | Returns cached anime rates instantly (if available), triggers background API refresh; first call fetches from API |

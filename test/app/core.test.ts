@@ -26,4 +26,16 @@ describe('App scheme registration', () => {
       corsEnabled: true
     })
   })
+
+  // #570: cached posters for <img>. Nothing reads them cross-origin, so CORS
+  // stays off and a remote page could never read one.
+  it('registers anime-poster:// without corsEnabled', () => {
+    new App()
+
+    const schemes = vi.mocked(protocol.registerSchemesAsPrivileged).mock.calls[0][0]
+    const animePoster = schemes.find((s) => s.scheme === 'anime-poster')
+    expect(animePoster).toBeDefined()
+    expect(animePoster?.privileges?.corsEnabled).toBeFalsy()
+    expect(animePoster?.privileges?.supportFetchAPI).toBeFalsy()
+  })
 })

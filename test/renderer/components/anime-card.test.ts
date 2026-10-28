@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import AnimeCard from '../../../src/renderer/src/components/shared/AnimeCard.vue'
+import { useLibraryStore } from '../../../src/renderer/src/stores/library'
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
 
 const anime: AnimeSearchResult = {
   id: 1,
@@ -66,5 +72,36 @@ describe('AnimeCard', () => {
     expect(flag.classes()).not.toContain('active')
     await flag.trigger('click')
     expect(wrapper.emitted('togglePriority')).toBeTruthy()
+  })
+})
+
+// #570: a card keeps its poster offline by loading it from main's disk cache.
+describe('AnimeCard — poster source (#570)', () => {
+  it('uses anime-poster://<id> when the id is in the cached set', () => {
+    useLibraryStore().posterIds = new Set([1])
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    expect(wrapper.find('img.poster').attributes('src')).toBe('anime-poster://1')
+  })
+
+  it('uses the remote posterUrlSmall when it is not — today', () => {
+    useLibraryStore().posterIds = new Set([2])
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    expect(wrapper.find('img.poster').attributes('src')).toBe('poster.jpg')
+  })
+
+  it('switches to the cached poster once the id set loads', async () => {
+    const store = useLibraryStore()
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    expect(wrapper.find('img.poster').attributes('src')).toBe('poster.jpg')
+    store.posterIds = new Set([1])
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('img.poster').attributes('src')).toBe('anime-poster://1')
+  })
+
+  it('a cached poster that fails to load falls back to the remote URL', async () => {
+    useLibraryStore().posterIds = new Set([1])
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    await wrapper.find('img.poster').trigger('error')
+    expect(wrapper.find('img.poster').attributes('src')).toBe('poster.jpg')
   })
 })

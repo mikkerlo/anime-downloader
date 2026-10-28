@@ -7,7 +7,7 @@ import type { AppDeps } from './index'
 // The smallest position move a `'playback'` save counts as a real change.
 const POSITION_CHANGE_SEC = 5
 
-export function register({ store }: AppDeps): void {
+export function register({ store, recentWatch }: AppDeps): void {
   ipcMain.handle(
     CHANNELS.WATCH_PROGRESS_SAVE,
     (
@@ -53,6 +53,7 @@ export function register({ store }: AppDeps): void {
         sync
       }
       store.set('watchProgress', all)
+      recentWatch?.touch(animeId)
     }
   )
 

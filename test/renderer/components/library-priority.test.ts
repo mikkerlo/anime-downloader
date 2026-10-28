@@ -192,3 +192,24 @@ describe('LibraryView — Priority tab', () => {
     expect(wrapper.find('.pill-tabs').exists()).toBe(false)
   })
 })
+
+// #570 review: the library list and the cached-poster ids are read in
+// parallel, and the cards still wait for the ids, so a cached poster is their
+// very first src (never a remote request that the id set then replaces).
+describe('LibraryView — poster ids (#570)', () => {
+  it('reads both at once, and the first card src is anime-poster://', async () => {
+    let resolveIds!: (ids: number[]) => void
+    const libraryGet = vi.fn().mockResolvedValue([anime(1)])
+    const getCachedPosterIds = vi.fn(() => new Promise<number[]>((r) => (resolveIds = r)))
+    const wrapper = mountLibrary([], { libraryGet, getCachedPosterIds })
+    await flushPromises()
+
+    expect(getCachedPosterIds).toHaveBeenCalledTimes(1)
+    expect(libraryGet).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('img.poster').exists()).toBe(false)
+
+    resolveIds([1])
+    await flushPromises()
+    expect(wrapper.find('img.poster').attributes('src')).toBe('anime-poster://1')
+  })
+})

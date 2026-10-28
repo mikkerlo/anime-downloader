@@ -33,6 +33,8 @@ import { createOfflineService } from './services/offline'
 import { createOfflineKickoff, type OfflineKickoff } from './services/offline/kickoff'
 import { createBinaryInstalls } from './lib/binary-installs'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
+import { createAnimePosterHandler } from './streaming/anime-poster-protocol'
+import { createCacheScope } from './services/anime-cache/scope'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
@@ -214,14 +216,9 @@ function isDownloadedAnime(animeId: number): boolean {
   return !!downloaded[String(animeId)]
 }
 
-function isStarredAnime(animeId: number): boolean {
-  const lib = store.get('library') as Record<string, AnimeSearchResult>
-  return !!lib[String(animeId)]
-}
-
-function isCachableAnime(animeId: number): boolean {
-  return isDownloadedAnime(animeId) || isStarredAnime(animeId)
-}
+// Starred, downloaded, or watched in the last 90 days (#570), so
+// continue-watching titles keep their cache offline.
+const { recentWatch, isCachable: isCachableAnime } = createCacheScope(store)
 
 function getDisplayName(anime: AnimeSearchResult): string {
   return anime.titles?.romaji || anime.titles?.ru || anime.title
@@ -383,7 +380,8 @@ const shikimoriSyncService = createShikimoriSyncService({
   offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
   rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
   animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
-  isOffline
+  isOffline,
+  snapshotsPath: path.join(app.getPath('userData'), 'shikimori-snapshots.json')
 })
 // `ensureFreshToken` is where a dead refresh token is detected, but that module
 // only knows about the store. Give it a way to push the transition out so the
@@ -620,7 +618,8 @@ function registerIpcHandlers(): void {
     mp4StatsService,
     playerLockService,
     playerPresenceService,
-    offlineService
+    offlineService,
+    recentWatch
   })
 }
 
@@ -684,6 +683,10 @@ async function bootstrap(): Promise<void> {
     createAnimeVideoHandler({
       getActiveDownload: (fp) => downloadManager?.getActiveDownloadByPath(fp) ?? null
     })
+  )
+  protocol.handle(
+    'anime-poster',
+    createAnimePosterHandler({ posterDir: animeCacheService.getPosterCacheDir() })
   )
 
   animeCacheService.cleanupStale()

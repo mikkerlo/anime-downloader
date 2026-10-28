@@ -29,6 +29,11 @@ export class App {
         // corsEnabled: the player's crossorigin <video> loads from a file:// page,
         // which Electron >= 41.4 blocks as a cross-origin read without it.
         privileges: { stream: true, bypassCSP: true, supportFetchAPI: true, corsEnabled: true }
+      },
+      {
+        // Cached posters for <img> (#570). No corsEnabled: nothing reads them cross-origin.
+        scheme: 'anime-poster',
+        privileges: { secure: true, bypassCSP: true }
       }
     ])
 

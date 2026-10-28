@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useLibraryStore } from '../../src/renderer/src/stores/library'
 
@@ -75,5 +75,43 @@ describe('useLibraryStore', () => {
     expect(store.activeAnimeId).toBe(null)
     store.openAnime(99) // no-op on a non-stacked view
     expect(store.animeByView.home).toBe(3)
+  })
+})
+
+// #570: one request per view load for the ids with a cached poster.
+describe('useLibraryStore — poster ids', () => {
+  function stubApi(getCachedPosterIds: () => Promise<number[]>): void {
+    ;(globalThis as { window?: unknown }).window = { api: { getCachedPosterIds } }
+  }
+
+  it('loads the id set from main', async () => {
+    stubApi(vi.fn().mockResolvedValue([3, 5]))
+    const store = useLibraryStore()
+    expect(store.posterIds.size).toBe(0)
+    await store.loadPosterIds()
+    expect([...store.posterIds]).toEqual([3, 5])
+  })
+
+  it('shares one request between concurrent loads, and re-requests on the next load', async () => {
+    const get = vi.fn().mockResolvedValue([1])
+    stubApi(get)
+    const store = useLibraryStore()
+    await Promise.all([store.loadPosterIds(), store.loadPosterIds()])
+    expect(get).toHaveBeenCalledTimes(1)
+    get.mockResolvedValue([1, 2])
+    await store.loadPosterIds()
+    expect(get).toHaveBeenCalledTimes(2)
+    expect([...store.posterIds]).toEqual([1, 2])
+  })
+
+  it('a failed load keeps the last set and never rejects', async () => {
+    const get = vi.fn().mockResolvedValueOnce([9]).mockRejectedValueOnce(new Error('boom'))
+    stubApi(get)
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const store = useLibraryStore()
+    await store.loadPosterIds()
+    await expect(store.loadPosterIds()).resolves.toBeUndefined()
+    expect([...store.posterIds]).toEqual([9])
+    err.mockRestore()
   })
 })

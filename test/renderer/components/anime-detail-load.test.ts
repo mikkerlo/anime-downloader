@@ -244,6 +244,44 @@ describe('AnimeDetailView — offline (#568)', () => {
     wrapper.unmount()
   })
 
+  // #570: online, main now returns a cachable title's expired entry. The page
+  // paints it at once with a neutral "Saved <date>" (no offline wording, no
+  // OFFLINE chip) while the background refresh runs, and the stamp goes away
+  // when the refresh lands.
+  it('online: a stale cache paint shows "Saved <date>" until the refresh lands', async () => {
+    let resolveAnime!: (v: unknown) => void
+    installApi({
+      getAnimeCache: staleCache(),
+      getAnime: vi.fn(() => new Promise((r) => (resolveAnime = r)))
+    })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('h1').text()).toBe('Tesuto')
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').text()).toBe(
+      savedLabel.replace(/, offline$/, '')
+    )
+    expect(wrapper.find('.chip.offline').exists()).toBe(false)
+
+    resolveAnime({ source: 'api', data: detail() })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('online: a fresh cache paint shows no stamp — today', async () => {
+    installApi({
+      getAnimeCache: vi
+        .fn()
+        .mockResolvedValue({ data: detail(), cachedAt: Date.now(), stale: false }),
+      getAnime: vi.fn(() => new Promise(() => {}))
+    })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('going offline disables the download buttons without a reload', async () => {
     const offline = offlineApi()
     installApi({ offline })

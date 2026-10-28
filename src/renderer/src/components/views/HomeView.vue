@@ -3,6 +3,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
 import AnimeCard from '../shared/AnimeCard.vue';
+import { getPosterSrc, POSTER_SCHEME } from '../../utils';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
@@ -120,12 +121,29 @@ function entryKey(e: ContinueWatchingEntry): string {
   return `${e.kind}:${e.animeId}:${e.episodeInt}`;
 }
 
+// The cached poster first (#570); one that fails falls back to the remote URL.
+const failedLocalPosters = ref(new Set<string>());
+
+function posterSrc(e: ContinueWatchingEntry): string {
+  if (failedLocalPosters.value.has(entryKey(e))) return e.posterUrl;
+  return getPosterSrc(e.animeId, e.posterUrl, libraryStore.posterIds);
+}
+
 function showPoster(e: ContinueWatchingEntry): boolean {
-  return !!e.posterUrl && !failedPosters.value.has(entryKey(e));
+  return !!posterSrc(e) && !failedPosters.value.has(entryKey(e));
+}
+
+function markPosterFailed(e: ContinueWatchingEntry): void {
+  const key = entryKey(e);
+  if (posterSrc(e).startsWith(POSTER_SCHEME)) {
+    failedLocalPosters.value = new Set(failedLocalPosters.value).add(key);
+  } else {
+    failedPosters.value = new Set(failedPosters.value).add(key);
+  }
 }
 
 function onPosterError(e: ContinueWatchingEntry): void {
-  failedPosters.value = new Set(failedPosters.value).add(entryKey(e));
+  markPosterFailed(e);
 }
 
 function onPosterLoad(e: ContinueWatchingEntry, evt: Event): void {
@@ -135,14 +153,20 @@ function onPosterLoad(e: ContinueWatchingEntry, evt: Event): void {
   // decoded dimensions and treat as failed.
   const img = evt.target as HTMLImageElement;
   if (img.naturalWidth === 0 || img.naturalHeight === 0) {
-    failedPosters.value = new Set(failedPosters.value).add(entryKey(e));
+    markPosterFailed(e);
   }
 }
 
 async function refresh(): Promise<void> {
   try {
-    entries.value = await window.api.homeGetContinueWatching();
+    // The poster ids land before the cards, so a cached poster is the first src.
+    const [list] = await Promise.all([
+      window.api.homeGetContinueWatching(),
+      libraryStore.loadPosterIds()
+    ]);
+    entries.value = list;
     failedPosters.value = new Set();
+    failedLocalPosters.value = new Set();
     await pruneDismissed();
   } catch (err) {
     console.error('Failed to load continue-watching list:', err);
@@ -253,7 +277,7 @@ onUnmounted(() => {
               <div class="cw-poster">
                 <img
                   v-if="showPoster(e)"
-                  :src="e.posterUrl"
+                  :src="posterSrc(e)"
                   :alt="e.animeName"
                   @error="onPosterError(e)"
                   @load="onPosterLoad(e, $event)"

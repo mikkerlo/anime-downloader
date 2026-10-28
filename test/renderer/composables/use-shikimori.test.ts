@@ -190,6 +190,36 @@ describe('useShikimori — loadShikimoriData', () => {
     expect(s.shikiDetails.value).toEqual(details)
     expect(s.shikiLoading.value).toBe(false)
     expect(s.friendsLoading.value).toBe(false)
+    expect(s.shikiRateStale.value).toBe(false)
+  })
+
+  // #570: main answers get-rate from its cached list offline, flagged stale.
+  it('fills the form from a cached rate and reports it stale; a save clears it', async () => {
+    const cached = {
+      id: 10,
+      status: 'completed',
+      episodes: 12,
+      score: 8,
+      rewatches: 1,
+      target_id: 99,
+      target_type: 'Anime',
+      stale: true
+    } as ShikiUserRateResult
+    setApi({
+      shikimoriGetUser: vi.fn().mockResolvedValue({ id: 1 } as ShikiUser),
+      shikimoriGetRate: vi.fn().mockResolvedValue(cached),
+      shikimoriGetFriendsRates: vi.fn().mockResolvedValue([]),
+      shikimoriGetAnimeDetails: vi.fn().mockResolvedValue(null),
+      shikimoriUpdateRate: vi.fn().mockResolvedValue({ ...cached, stale: undefined })
+    })
+    const s = useShikimori(makeDeps({ anime: mkAnime({ malId: 99 }) }))
+    await s.loadShikimoriData(vi.fn().mockResolvedValue(undefined))
+    expect(s.shikiRateStale.value).toBe(true)
+    expect(s.shikiStatus.value).toBe('completed')
+    expect(s.shikiEpisodes.value).toBe(12)
+
+    await s.shikiSave()
+    expect(s.shikiRateStale.value).toBe(false)
   })
 
   it('clears shikiUserChecked even when getUser throws', async () => {

@@ -334,3 +334,19 @@ describe('field clocks are monotonic', () => {
     expect(row().sync?.watched).toEqual(local(AHEAD + 1))
   })
 })
+
+// #570: a title watched just now joins the anime-cache scope at once, without
+// waiting for the 90-day index to rebuild.
+describe('watch-progress:save — the recent-watch index', () => {
+  it('touches the saved anime id', async () => {
+    const store = new InMemoryStorage({ installId: INSTALL, watchProgress: {} })
+    const touch = vi.fn()
+    ;(ipcMain.handle as Mock).mockClear()
+    register({ store, recentWatch: { touch, has: vi.fn() } } as unknown as AppDeps)
+    const handler = (ipcMain.handle as Mock).mock.calls.find(
+      ([channel]) => channel === CHANNELS.WATCH_PROGRESS_SAVE
+    )![1]
+    await handler({}, 5, '3', 120, 1420, false, undefined, 'playback')
+    expect(touch).toHaveBeenCalledWith(5)
+  })
+})

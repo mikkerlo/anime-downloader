@@ -38,7 +38,8 @@ export function register({
       }
     }
 
-    animeCacheService.deleteEntry(animeId)
+    // Starred or recently watched titles keep their cache (#570).
+    if (!animeCacheService.isCachable(animeId)) animeCacheService.deleteEntry(animeId)
     skipAnalysisService.pruneCacheForAnime(animeId)
     skipAnalysisService.dropDetectionsForAnime(animeId)
   })

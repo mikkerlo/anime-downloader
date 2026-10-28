@@ -51,7 +51,9 @@ export function register({ store, animeCacheService }: AppDeps): void {
           stampPriorityOrder(meta, clock)
         }
       })
-      if (!readDownloaded()[String(anime.id)]) animeCacheService.deleteEntry(anime.id)
+      // `library` no longer has the key, so this keeps downloaded and recently
+      // watched titles (#570).
+      if (!animeCacheService.isCachable(anime.id)) animeCacheService.deleteEntry(anime.id)
       return false
     } else {
       lib[key] = anime

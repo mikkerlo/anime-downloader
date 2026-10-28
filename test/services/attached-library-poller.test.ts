@@ -1,5 +1,6 @@
 // The availability poller (#581): known roots by `libraryId`, mount candidates
-// one level deep, the found-on-a-drive event once per mount, the async budget
+// one level deep, the relative-path probe for an unavailable library in a
+// subfolder (#620), the found-on-a-drive event once per mount, the async budget
 // with its in-flight set and 2-call cap, network mounts dropped, and no sync fs.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
@@ -17,7 +18,8 @@ import {
 } from '../../src/main/services/attached-library'
 import {
   createClassifyMounts,
-  createMountCandidates
+  createMountCandidates,
+  mountParents
 } from '../../src/main/lib/shared-library/mount-candidates'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { cleanup, tempRoot } from '../helpers/shared-library'
@@ -68,7 +70,7 @@ function world(known: Record<string, { root: string; available: boolean }>) {
     ),
     discover: vi.fn(async (dir: string) =>
       [...drive.keys()].filter(
-        (r) => r === dir || (r.startsWith(sep(dir)) && !r.slice(sep(dir).length).includes('/'))
+        (r) => r === dir || (r.startsWith(sep(dir)) && !/[\\/]/.test(r.slice(sep(dir).length)))
       )
     )
   }
@@ -84,6 +86,7 @@ function poller(
   const p = createAvailabilityPoller({
     target: w.target,
     candidates: async () => mounts(),
+    mountParents: mountParents({ platform: 'linux', user: 'u' }),
     onFound,
     ...w.deps,
     log: { warn: vi.fn() },
@@ -229,6 +232,159 @@ describe('unknown libraries on a newly mounted drive', () => {
   it('volume labels: a drive letter, or the mount folder', () => {
     expect(volumeLabel('f:\\')).toBe('F:')
     expect(volumeLabel('/run/media/u/KINGSTON')).toBe('KINGSTON')
+  })
+})
+
+describe('the relative-path probe for a library in a subfolder (#620)', () => {
+  const WIN = mountParents({ platform: 'win32' })
+  const statted = (w: ReturnType<typeof world>): string[] =>
+    w.deps.statManifest.mock.calls.map(([r]) => r)
+
+  it('Windows paths: D:\\Anime\\Lib, unplugged and re-plugged as K:, is found at K:\\Anime\\Lib', async () => {
+    const w = world({ [L]: { root: 'D:\\Anime\\Lib', available: true } })
+    w.drive.set('D:\\Anime\\Lib', L)
+    let mounts = ['D:\\']
+    const { p } = poller(w, () => mounts, { mountParents: WIN })
+    await p.tick()
+    w.drive.delete('D:\\Anime\\Lib')
+    mounts = []
+    await p.tick()
+    expect(w.state[L]).toEqual({ root: 'D:\\Anime\\Lib', available: false })
+
+    w.drive.set('K:\\Anime\\Lib', L)
+    mounts = ['K:\\']
+    await p.tick()
+    expect(w.deps.discover).toHaveBeenCalledWith('K:\\')
+    expect(w.target.reopenAt).toHaveBeenCalledWith(L, 'K:\\Anime\\Lib')
+    expect(w.state[L]).toEqual({ root: 'K:\\Anime\\Lib', available: true })
+  })
+
+  it('Linux paths: /media/u/STICK/Anime/Lib, re-plugged as STICK2, is found at /media/u/STICK2/Anime/Lib', async () => {
+    const w = world({ [L]: { root: '/media/u/STICK/Anime/Lib', available: true } })
+    w.drive.set('/media/u/STICK/Anime/Lib', L)
+    let mounts = ['/media/u/STICK']
+    const { p } = poller(w, () => mounts)
+    await p.tick()
+    w.drive.delete('/media/u/STICK/Anime/Lib')
+    mounts = []
+    await p.tick()
+    expect(w.state[L].available).toBe(false)
+
+    w.drive.set('/media/u/STICK2/Anime/Lib', L)
+    mounts = ['/media/u/STICK2']
+    await p.tick()
+    expect(w.target.reopenAt).toHaveBeenCalledWith(L, '/media/u/STICK2/Anime/Lib')
+    expect(w.state[L]).toEqual({ root: '/media/u/STICK2/Anime/Lib', available: true })
+  })
+
+  it('a different library at the same relative path is refused: identified once while unchanged, never re-opened there', async () => {
+    const w = world({ [L]: { root: 'D:\\Anime\\Lib', available: false } })
+    w.drive.set('K:\\Anime\\Lib', U)
+    const { p, onFound } = poller(w, () => ['K:\\'], { mountParents: WIN })
+    await p.tick()
+    await p.tick()
+    expect(vi.mocked(w.target.identify).mock.calls).toEqual([['K:\\Anime\\Lib']])
+    expect(w.target.reopenAt).not.toHaveBeenCalled()
+    expect(w.state[L]).toEqual({ root: 'D:\\Anime\\Lib', available: false })
+    expect(onFound).not.toHaveBeenCalled()
+
+    // Its manifest changes to this library's: identified again, and re-found.
+    w.drive.set('K:\\Anime\\Lib', L)
+    await p.tick()
+    expect(w.target.identify).toHaveBeenCalledTimes(2)
+    expect(w.state[L]).toEqual({ root: 'K:\\Anime\\Lib', available: true })
+  })
+
+  it('two mounts holding it at that path in one tick: re-opened once, at the first', async () => {
+    const w = world({ [L]: { root: '/media/u/OLD/Anime/Lib', available: false } })
+    w.drive.set('/media/u/A/Anime/Lib', L)
+    w.drive.set('/media/u/B/Anime/Lib', L)
+    const { p } = poller(w, () => ['/media/u/A', '/media/u/B'])
+    await p.tick()
+    expect(w.target.reopenAt).toHaveBeenCalledTimes(1)
+    expect(w.state[L]).toEqual({ root: '/media/u/A/Anime/Lib', available: true })
+  })
+
+  it('no probe for an available library', async () => {
+    const w = world({
+      [L]: { root: '/media/u/STICK/Anime/Lib', available: true },
+      // Unavailable but one level below its mount, so every mount is scanned on every tick.
+      [U]: { root: '/mnt/gone/Anime', available: false }
+    })
+    w.drive.set('/media/u/STICK/Anime/Lib', L)
+    w.drive.set('/media/u/OTHER/Anime/Lib', L)
+    const { p } = poller(w, () => ['/media/u/STICK', '/media/u/OTHER'])
+    await p.tick()
+    await p.tick()
+    expect(w.deps.discover).toHaveBeenCalledTimes(4)
+    expect(new Set(statted(w))).toEqual(new Set(['/media/u/STICK/Anime/Lib', '/mnt/gone/Anime']))
+    expect(w.state[L]).toEqual({ root: '/media/u/STICK/Anime/Lib', available: true })
+  })
+
+  it.each([
+    ['a root under no candidate parent', '/home/u/Anime/Lib', 'linux', ['/media/u/STICK']],
+    ['a C: root', 'C:\\Users\\u\\Anime\\Lib', 'win32', ['K:\\']],
+    ['a UNC root', '\\\\server\\share\\Anime\\Lib', 'win32', ['K:\\']]
+  ] as const)('no probe for %s', async (_, root, platform, mounts) => {
+    const w = world({ [L]: { root, available: false } })
+    const { p } = poller(w, () => [...mounts], {
+      mountParents: mountParents({ platform, user: 'u' })
+    })
+    await p.tick()
+    await p.tick()
+    expect(w.deps.discover).toHaveBeenCalledTimes(2)
+    expect(statted(w)).toEqual([root, root])
+  })
+
+  it('no probe at the old root itself: the known-root check covers it', async () => {
+    const w = world({ [L]: { root: '/media/u/STICK/Anime/Lib', available: false } })
+    const { p } = poller(w, () => ['/media/u/STICK'])
+    await p.tick()
+    await p.tick()
+    expect(statted(w)).toEqual(['/media/u/STICK/Anime/Lib', '/media/u/STICK/Anime/Lib'])
+  })
+
+  it("a probe whose stat hangs holds only its own candidate's slot: the others go on, and its offer comes on the tick after it settles", async () => {
+    vi.useFakeTimers()
+    const w = world({ [L]: { root: '/media/u/OLD/Anime/Lib', available: false } })
+    w.drive.set('/media/u/NEW/A', U)
+    w.drive.set('/media/u/B/X', U2)
+    w.drive.set('/media/u/C/Anime/Lib', L)
+    const real = w.deps.statManifest.getMockImplementation()!
+    const hung: { release?: (sig: string | null) => void } = {}
+    w.deps.statManifest.mockImplementation((root: string) =>
+      root === '/media/u/NEW/Anime/Lib' && !hung.release
+        ? new Promise<string | null>((resolve) => (hung.release = resolve))
+        : real(root)
+    )
+    const { p, onFound } = poller(w, () => ['/media/u/NEW', '/media/u/B', '/media/u/C'])
+    const ticked = async (): Promise<void> => {
+      const t = p.tick()
+      await vi.advanceTimersByTimeAsync(1000)
+      await t
+    }
+
+    await ticked()
+    expect(hung.release).toBeDefined()
+    // B is offered and C re-finds the library, past the hung probe on NEW.
+    expect(onFound.mock.calls.map(([f]) => f.dir)).toEqual(['/media/u/B'])
+    expect(w.state[L]).toEqual({ root: '/media/u/C/Anime/Lib', available: true })
+
+    // Still pending: NEW stays in flight and isn't asked again.
+    await ticked()
+    expect(w.deps.discover.mock.calls.filter(([d]) => d === '/media/u/NEW')).toHaveLength(1)
+    expect(onFound).toHaveBeenCalledTimes(1)
+
+    // Settled: the abandoned job does nothing more; the next tick offers NEW.
+    hung.release!(null)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onFound).toHaveBeenCalledTimes(1)
+    await ticked()
+    expect(onFound).toHaveBeenCalledTimes(2)
+    expect(onFound.mock.calls[1][0]).toMatchObject({
+      dir: '/media/u/NEW',
+      candidates: [{ libraryId: U }]
+    })
   })
 })
 
@@ -425,6 +581,45 @@ describe('with the real service (the behaviour difference)', () => {
     expect(
       (store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>)[FIXTURE_LIBRARY_ID]
         .root
+    ).toBe(moved)
+  })
+
+  it('a library in a subfolder of a mount, re-plugged under another mount name, is found again (createMountCandidates and mountParents from one override)', async () => {
+    const m = make()
+    const mounts = path.join(tempRoot(), 'mounts')
+    const old = path.join(mounts, 'STICK', 'Anime', 'Fixture library')
+    fs.mkdirSync(path.dirname(old), { recursive: true })
+    fs.cpSync(copyFixtureLibrary(), old, { recursive: true })
+    const [c] = await m.svc.discover(old)
+    const res = await m.svc.attach(c.libraryId!, 'videos')
+    if (!res.ok) throw new Error(res.error)
+
+    // As index.ts builds them from ANIME_DL_MOUNT_PARENTS.
+    const overrides = { parents: [mounts] }
+    const p = createAvailabilityPoller({
+      target: m.svc,
+      candidates: createMountCandidates({ ...overrides, classifyMounts: async () => new Map() }),
+      mountParents: mountParents(overrides),
+      onFound: vi.fn()
+    })
+    await p.tick()
+    expect(m.svc.get(FIXTURE_LIBRARY_ID)!.available).toBe(true)
+
+    const away = path.join(tempRoot(), 'unplugged')
+    fs.renameSync(path.join(mounts, 'STICK'), away)
+    await p.tick()
+    expect(m.svc.get(FIXTURE_LIBRARY_ID)!.available).toBe(false)
+
+    fs.renameSync(away, path.join(mounts, 'STICK2'))
+    await p.tick()
+    const moved = path.join(mounts, 'STICK2', 'Anime', 'Fixture library')
+    const info = m.svc.get(FIXTURE_LIBRARY_ID)!
+    expect(info.available).toBe(true)
+    expect(info.root).toBe(moved)
+    expect(
+      (m.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>)[
+        FIXTURE_LIBRARY_ID
+      ].root
     ).toBe(moved)
   })
 

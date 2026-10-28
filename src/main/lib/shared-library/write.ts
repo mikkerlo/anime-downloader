@@ -548,6 +548,12 @@ export async function writeState(
     'manifest'
   )
   if (insp.result.status === 'ok' && insp.result.torn) await repairTornPair(insp)
+  if (m.stateGeneration === null) {
+    // Orphans are replaced, not rotated: as `state.prev.json` a newer-major or
+    // over-cap orphan would stop being ignored and open the library read-only.
+    await unlinkQuiet(path.join(insp.dir, STATE_PREV))
+    await unlinkQuiet(path.join(insp.dir, STATE))
+  }
   await atomicWrite(insp.dir, STATE, STATE_PREV, state.text)
   await atomicWrite(insp.dir, MANIFEST, MANIFEST_PREV, manifest.text)
   return { generation, stateGeneration }

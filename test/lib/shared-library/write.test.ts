@@ -660,3 +660,99 @@ describe('writeManifest', () => {
     })
   })
 })
+
+describe('orphan state files are replaced by the next writeState, never rotated into .prev', () => {
+  type Orphan = 'v2' | 'over-cap'
+  /** A With-metadata manifest with empty state, next to orphans the reader must ignore. */
+  function withOrphans(orphans: Partial<Record<'state.json' | 'state.prev.json', Orphan>>): string {
+    const files: Record<string, unknown> = { 'manifest.json': manifest(3, null) }
+    for (const [file, kind] of Object.entries(orphans)) {
+      if (kind === 'v2') files[file] = { ...state(5, 8), stateVersion: 2 }
+    }
+    const root = tree(files)
+    for (const [file, kind] of Object.entries(orphans)) {
+      if (kind === 'over-cap') sparse(root, file, CAPS.stateBytes + 1024 * 1024)
+    }
+    return root
+  }
+
+  const cases: [string, Partial<Record<'state.json' | 'state.prev.json', Orphan>>][] = [
+    ['a v2 state.json', { 'state.json': 'v2' }],
+    ['a 33 MB sparse state.json', { 'state.json': 'over-cap' }],
+    ['a v2 state.prev.json', { 'state.prev.json': 'v2' }],
+    ['a 33 MB sparse state.prev.json', { 'state.prev.json': 'over-cap' }],
+    ['both, v2 and over-cap', { 'state.json': 'v2', 'state.prev.json': 'over-cap' }]
+  ]
+
+  it.each(cases)(
+    '%s: ok before, writeState succeeds, ok after with no state.prev.json',
+    async (_, orphans) => {
+      const root = withOrphans(orphans)
+      expect((await ok(root)).stateInitialized).toBe(false)
+      const { stateGeneration } = await writeState(root, EMPTY_DOC, OWNER, null)
+      const after = await ok(root)
+      expect(after).toMatchObject({
+        torn: false,
+        pair: { manifest: 'manifest.json', state: 'state.json' }
+      })
+      expect(exists(root, 'state.prev.json')).toBe(false)
+      if (orphans['state.json'] === 'v2') expect(stateGeneration).toBeGreaterThan(5)
+    }
+  )
+
+  it.each(cases)(
+    '%s: a kill after every step still reads ok, and a re-run ends ok',
+    { timeout: 60_000 },
+    async (_, orphans) => {
+      let completed = false
+      for (let n = 1; !completed; n++) {
+        const root = withOrphans(orphans)
+        const crash = crashAt(n)
+        try {
+          await writeState(root, EMPTY_DOC, OWNER, null)
+          completed = true
+        } catch (err) {
+          if (!(err instanceof CrashError)) throw err
+        } finally {
+          crash.restore()
+        }
+        const mid = await readLibrary(root)
+        expect(mid.status, `crash at call ${n}: ${JSON.stringify(mid).slice(0, 120)}`).toBe('ok')
+        const r = mid as Ok
+        if (r.manifest.stateGeneration === null) {
+          await writeState(root, EMPTY_DOC, OWNER, null)
+        }
+        const final = await ok(root)
+        expect(final.torn, `re-run after call ${n}`).toBe(false)
+        expect(final.stateInitialized).toBe(true)
+        expect(exists(root, 'state.prev.json'), `re-run after call ${n}`).toBe(false)
+        expect(n).toBeLessThan(30)
+      }
+    }
+  )
+
+  it('takeover and the step-4 null manifest.prev keep orphans ignored until writeState replaces them', async () => {
+    const takeover = tree({
+      'manifest.json': manifest(3, null, { mode: 'videos' }),
+      'state.json': { ...state(5, 8), stateVersion: 2 }
+    })
+    const v = (await ok(takeover)).manifest
+    const owner = { shikimoriId: OWNER_ID, nickname: 'owner' }
+    await writeManifest(takeover, { ...v, mode: 'metadata', owner }, OWNER, 3, { takeover: true })
+    expect((await ok(takeover)).state).toBeNull()
+    await writeState(takeover, EMPTY_DOC, OWNER, null)
+    expect((await ok(takeover)).stateInitialized).toBe(true)
+    expect(exists(takeover, 'state.prev.json')).toBe(false)
+
+    // Step 4's null manifest.prev: the repair restores it, and the invalid state.json
+    // it leaves as an orphan is replaced, not rotated.
+    const step4 = fixture('step4-null-prev')
+    await writeState(step4, EMPTY_DOC, OWNER, null)
+    const r = await ok(step4)
+    expect(r).toMatchObject({
+      torn: false,
+      pair: { manifest: 'manifest.json', state: 'state.json' }
+    })
+    expect(exists(step4, 'state.prev.json')).toBe(false)
+  })
+})

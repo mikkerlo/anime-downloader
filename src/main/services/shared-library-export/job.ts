@@ -78,6 +78,8 @@ export interface JobRecord {
   note: string | null
   /** The note a drive-gone note replaced (the foreign-sibling one), restored when the drive is back. */
   noteBeforeDriveGone?: string | null
+  /** The "Found at" / "Resumed at" line last appended to the note, so the next one replaces exactly it. */
+  noteWhere?: string
   error: string | null
 }
 
@@ -102,14 +104,6 @@ class DriveGoneError extends Error {}
 
 /** The note a lost drive leaves on the job; cleared once a run finds the library again. */
 const DRIVE_GONE_NOTE = 'The drive went away: '
-
-const WHERE_NOTE = / ?(?:Found|Resumed) at .*$/s
-
-/** `line` after `before`, dropping an earlier "Found at" / "Resumed at" so re-plugs don't stack. */
-function withNote(before: string | null, line: string): string {
-  const base = before?.replace(WHERE_NOTE, '') ?? ''
-  return base ? `${base} ${line}` : line
-}
 
 const isTerminal = (s: ExportJobStatus): boolean =>
   s === 'completed' || s === 'cancelled' || s === 'failed'
@@ -201,8 +195,22 @@ export class ExportJob {
     const before = this.rec.note?.startsWith(DRIVE_GONE_NOTE)
       ? this.takeNoteBeforeDriveGone()
       : this.rec.note
-    this.rec.note = withNote(before, `Found at ${root}`)
+    this.rec.note = this.withWhere(before, `Found at ${root}`)
     await this.deps.persist(this.rec)
+  }
+
+  /**
+   * `line` after `before`. An earlier "Found at" / "Resumed at" line is
+   * dropped first, so re-plugs don't stack, but only the exact line this job
+   * appended (`noteWhere`): text inside the base note, such as a foreign
+   * owner's nickname, is never matched.
+   */
+  private withWhere(before: string | null, line: string): string {
+    const last = this.rec.noteWhere
+    let base = before ?? ''
+    if (last !== undefined && base.endsWith(last)) base = base.slice(0, -last.length).trimEnd()
+    this.rec.noteWhere = line
+    return base ? `${base} ${line}` : line
   }
 
   /** The note a drive-gone note replaced, now taken off the record. */
@@ -461,7 +469,7 @@ export class ExportJob {
       if (this.rec.note?.startsWith(DRIVE_GONE_NOTE)) this.rec.note = this.takeNoteBeforeDriveGone()
       if (found.moved) {
         this.rec.root = found.root
-        this.rec.note = withNote(
+        this.rec.note = this.withWhere(
           this.rec.note,
           `Resumed at ${found.root}` +
             (found.duplicates.length > 0

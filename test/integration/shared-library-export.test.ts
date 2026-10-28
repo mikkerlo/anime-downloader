@@ -774,6 +774,95 @@ describe('Shared Library export (#574) — integration', () => {
       expect(done.note).toBe(SIBLING_NOTE)
       expect(manifestOf(root).items.map(itemKey).sort()).toEqual([...keys].sort())
     })
+
+    /**
+     * Exports next to a foreign library owned by `nickname`. The drive is
+     * pulled as episode 2 is copied and comes back at `loc1`; with `twice`, it
+     * is pulled again as the unmerged pair is copied and comes back at `loc2`.
+     * Each time the job finds it through Locate…. Returns each note seen.
+     */
+    async function locateAfterPulls(
+      e: ExportEnv,
+      nickname: string,
+      twice: boolean
+    ): Promise<{
+      notes: (string | null)[]
+      roots: string[]
+      final: ExportJobView
+      keys: string[]
+    }> {
+      const { a1, a2, b1 } = seedPc(e)
+      await seedLibrary(path.join(e.drive, 'Trip'), {
+        libraryId: OTHER_LIB,
+        name: 'Trip',
+        owner: { shikimoriId: 777, nickname }
+      })
+      const loc1 = path.join(e.dir, 'loc1')
+      const loc2 = path.join(e.dir, 'loc2')
+      fs.mkdirSync(loc1)
+      fs.mkdirSync(loc2)
+      const roots = [
+        path.join(e.drive, 'Trip (2)'),
+        path.join(loc1, 'Trip (2)'),
+        path.join(loc2, 'Trip (2)')
+      ]
+      const pulls: [RegExp, number][] = [[/Alpha Show - 02 .*\.anime-dl-tmp$/, 0]]
+      if (twice) pulls.push([/Beta Show - 01 .*\.mp4\.anime-dl-tmp$/, 1])
+      const svc = e.restart({
+        setTimer: () => 0,
+        clearTimer: () => {},
+        xfs: {
+          open: async (p, flags) => {
+            const h = await nodeFs.open(p, flags)
+            const i = pulls.findIndex(([re]) => re.test(p))
+            if (i < 0) return h
+            const [, from] = pulls.splice(i, 1)[0]
+            return {
+              ...h,
+              write: async (buf) => {
+                // The drive goes as this file starts, and comes back elsewhere.
+                fs.renameSync(roots[from], roots[from + 1])
+                await h.write(buf)
+              }
+            }
+          }
+        }
+      })
+      const r = await svc.start({ selection: sel(a1, a2, b1), target: e.drive, name: 'Trip' })
+      if (!r.ok) throw new Error(r.reason)
+      const notes: (string | null)[] = [r.job.note]
+      await svc.settled(r.job.jobId)
+      for (const dir of twice ? [loc1, loc2] : [loc1]) {
+        expect(svc.list()[0].status).toBe('waiting-drive')
+        notes.push(svc.list()[0].note)
+        expect(await svc.locate(r.job.jobId, dir)).toEqual({ ok: true })
+        await svc.settled(r.job.jobId)
+      }
+      const final = svc.list()[0]
+      expect(final.status).toBe('completed')
+      notes.push(final.note)
+      return { notes, roots, final, keys: [a1, a2, b1] }
+    }
+
+    it('Locate… after a pull: the note before the pull plus one "Found at", replaced (not stacked) by a second Locate…', async () => {
+      const { notes, roots, final, keys } = await locateAfterPulls(env, 'friend', true)
+      expect(notes[0]).toBe(SIBLING_NOTE)
+      expect(notes[1]).toMatch(/^The drive went away: /)
+      expect(notes[2]).toMatch(/^The drive went away: /)
+      expect(final.note).toBe(`${SIBLING_NOTE} Found at ${roots[2]}`)
+      expect(final.root).toBe(roots[2])
+      expect(manifestOf(roots[2]).items.map(itemKey).sort()).toEqual([...keys].sort())
+    })
+
+    it('a foreign nickname that looks like a "Found at" line is left alone', async () => {
+      const nick = 'Found at home'
+      // Two Locate…s: the second replaces the first one's line over a note
+      // that carries the nickname.
+      const { notes, roots, final } = await locateAfterPulls(env, nick, true)
+      const sibling = `This drive has ${nick}'s library; this export went into a new library next to it.`
+      expect(notes[0]).toBe(sibling)
+      expect(final.note).toBe(`${sibling} Found at ${roots[2]}`)
+    })
   })
 
   it('a re-export next to a foreign library adds to the sibling the first export made (#614 review)', async () => {

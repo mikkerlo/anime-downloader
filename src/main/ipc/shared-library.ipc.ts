@@ -1,5 +1,7 @@
-// Shared Library IPC (#574): export jobs. The work lives in
-// `services/shared-library-export`; this router adds the folder pickers.
+// Shared Library IPC: opening a library (#578) and export jobs (#574). The
+// work lives in `services/attached-library` and `services/shared-library-export`;
+// this router adds the folder pickers. `SHARED_LIBRARIES_CHANGED` is broadcast
+// by the attached-library service's `onChanged` hook, wired in `src/main/index.ts`.
 
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
@@ -17,9 +19,46 @@ async function pickFolder(sender: Electron.WebContents, title: string): Promise<
   return result.filePaths[0]
 }
 
-export function register(deps: AppDeps): void {
-  const svc = deps.sharedLibraryExport
+export function register({ attachedLibraryService, sharedLibraryExport }: AppDeps): void {
+  // --- Open a Shared Library (#578)
+  ipcMain.handle(
+    CHANNELS.SHARED_LIBRARY_PICK_AND_DISCOVER,
+    async (event): Promise<SharedLibraryDiscovery> => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const opts: Electron.OpenDialogOptions = {
+        properties: ['openDirectory'],
+        title: 'Open Shared Library'
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, opts)
+        : await dialog.showOpenDialog(opts)
+      if (result.canceled || result.filePaths.length === 0) return { dir: null, candidates: [] }
+      const dir = result.filePaths[0]
+      return { dir, candidates: await attachedLibraryService.discover(dir) }
+    }
+  )
 
+  ipcMain.handle(
+    CHANNELS.SHARED_LIBRARY_ATTACH,
+    (_event, libraryId: string, choice?: SharedLibraryAttachChoice) => {
+      if (typeof libraryId !== 'string') return { ok: false, error: 'No library given.' }
+      const c = choice === 'claim' || choice === 'videos' ? choice : undefined
+      return attachedLibraryService.attach(libraryId, c)
+    }
+  )
+
+  ipcMain.handle(CHANNELS.SHARED_LIBRARY_LIST, (): AttachedLibraryInfo[] =>
+    attachedLibraryService.list()
+  )
+
+  ipcMain.handle(CHANNELS.SHARED_LIBRARY_GET_TITLE, (_event, libraryId: string, animeId: number) =>
+    typeof libraryId === 'string' && Number.isSafeInteger(animeId)
+      ? attachedLibraryService.getTitle(libraryId, animeId)
+      : null
+  )
+
+  // --- Export to a Shared Library (#574)
+  const svc = sharedLibraryExport
   ipcMain.handle(CHANNELS.EXPORT_PLAN, (_e, req: ExportPlanRequest) => svc.plan(req))
   ipcMain.handle(CHANNELS.EXPORT_START, (_e, req: ExportStartRequest) => svc.start(req))
   ipcMain.handle(CHANNELS.EXPORT_PAUSE, (_e, jobId: string) => svc.pause(jobId))

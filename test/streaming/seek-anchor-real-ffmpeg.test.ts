@@ -447,7 +447,8 @@ describe.skipIf(!hasFfmpeg)('probeSeekAnchor vs the live mux (real ffmpeg, synth
         // An empty ffprobe path skips the embedded-subtitle extraction, so
         // nothing is written to the shared remux tmpdir.
         getFfmpegPath: () => 'ffmpeg',
-        getFfprobePath: () => ''
+        getFfprobePath: () => '',
+        attachedLibraryService: { spawnPathFor: (p: string) => p }
       } as unknown as AppDeps
       ;(ipcMain.handle as unknown as ReturnType<typeof vi.fn>).mockClear()
       register(deps)

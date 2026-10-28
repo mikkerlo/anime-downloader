@@ -63,7 +63,8 @@ export const PERSISTED_STORE_KEYS = [
   'priorityAnimeIds',
   'installId',
   'syncMeta',
-  'workOffline'
+  'workOffline',
+  'attachedLibraries'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

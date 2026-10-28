@@ -1,0 +1,55 @@
+{
+  "layoutVersion": 1,
+  "layoutMinor": 0,
+  "libraryId": "5d7c1f3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f",
+  "name": "Fixture library",
+  "owner": {
+    "shikimoriId": 4242,
+    "nickname": "owner"
+  },
+  "mode": "metadata",
+  "generation": 1,
+  "stateGeneration": null,
+  "lastWriter": {
+    "installId": "pc-owner",
+    "appVersion": "5.0.25",
+    "at": 1761600000000
+  },
+  "titles": [
+    {
+      "animeId": 101,
+      "name": "Frieren"
+    },
+    {
+      "animeId": 202,
+      "name": "Dungeon Meshi"
+    }
+  ],
+  "items": [
+    {
+      "animeId": 101,
+      "episodeInt": "1",
+      "translationId": 9001,
+      "translationType": "subRu",
+      "author": "Crunchyroll",
+      "quality": 1080,
+      "path": "Frieren~3f2a1c/Frieren~3f2a1c - 01 [Crunchyroll].mp4",
+      "subtitlePath": "Frieren~3f2a1c/Frieren~3f2a1c - 01 [Crunchyroll].ass",
+      "size": 2075
+    },
+    {
+      "animeId": 202,
+      "episodeInt": "1",
+      "translationId": 9101,
+      "translationType": "voiceRu",
+      "author": "AniLibria",
+      "quality": 720,
+      "path": "Dungeon Meshi/Dungeon Meshi - 01 [AniLibria].mkv",
+      "size": 19727
+    }
+  ],
+  "naming": {
+    "rule": "v1",
+    "renamed": ["101:1:9001"]
+  }
+}

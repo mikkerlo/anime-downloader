@@ -15,6 +15,7 @@ import type { PlayerLockService } from '../services/player-lock'
 import type { PlayerPresenceService } from '../services/player-presence'
 import type { OfflineService } from '../services/offline'
 import type { RecentWatchIndex } from '../lib/recent-watch'
+import type { AttachedLibraryService } from '../services/attached-library'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -120,6 +121,11 @@ export interface AppDeps {
   offlineService: OfflineService
   /** Titles watched in the last 90 days, part of the anime-cache scope (#570). */
   recentWatch: RecentWatchIndex
+  /**
+   * Attached Shared Libraries (#578): the only holder of their roots, which are
+   * never storage roots. `player.ipc.ts` asks it after the local resolution.
+   */
+  attachedLibraryService: AttachedLibraryService
   /** Export to a Shared Library: plan, jobs, re-plug (#574). */
   sharedLibraryExport: SharedLibraryExportService
 }

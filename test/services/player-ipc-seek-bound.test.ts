@@ -80,7 +80,8 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
       // Empty ffprobe path skips the fluent-ffmpeg subtitle probe, keeping the
       // test hermetic; ffmpeg must be non-empty to pass the availability gate.
       getFfmpegPath: () => '/bin/ffmpeg',
-      getFfprobePath: () => ''
+      getFfprobePath: () => '',
+      attachedLibraryService: { spawnPathFor: (p: string) => p }
     } as unknown as AppDeps
     ;(ipcMain.handle as unknown as ReturnType<typeof vi.fn>).mockClear()
     register(deps)
@@ -299,7 +300,8 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
       coldStorageService: {},
       mp4StatsService: {},
       getFfmpegPath: () => '/bin/ffmpeg',
-      getFfprobePath: () => ''
+      getFfprobePath: () => '',
+      attachedLibraryService: { spawnPathFor: (p: string) => p }
     } as unknown as AppDeps)
     const h = new Map(
       (ipcMain.handle as unknown as { mock: { calls: [string, Handler][] } }).mock.calls

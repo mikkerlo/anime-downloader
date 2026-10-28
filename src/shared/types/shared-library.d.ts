@@ -152,6 +152,133 @@ interface SharedLibraryActor {
 /** `resolveItem` / `resolveWriteTarget`: an absolute path, or why there is none. */
 type SharedLibraryResolved = string | 'missing' | 'escapes'
 
+// --- Attached libraries: the open flow (S7a #578) ---------------------------------
+
+/**
+ * How this PC uses an attached library: `owner` (logged in as its owner, or
+ * the session expired), `claim` (no account, claimed locally), `foreign`
+ * (logged in as someone else: used as videos, its state ignored), or `videos`.
+ */
+type AttachedLibraryRole = 'videos' | 'owner' | 'claim' | 'foreign'
+
+type AttachedLibraryAccessReason = SharedLibraryReadOnlyReason | 'mount'
+
+/** One `attachedLibraries` entry, keyed by `libraryId`. */
+interface AttachedLibraryRecord {
+  root: string
+  name: string
+  mode: SharedLibraryMode
+  owner: SharedLibraryOwner | null
+  access: 'read-write' | 'read-only'
+  accessReason?: AttachedLibraryAccessReason
+  claim?: { ownerId: number; at: number }
+  lastSeenAt: number
+  lastSyncAt: number | null
+}
+
+/** What the open flow found in one library root, before attaching it. */
+interface SharedLibraryCandidate {
+  root: string
+  // null when there is nothing to attach: `manifest.json` is newer or over a cap.
+  libraryId: string | null
+  name: string
+  ownerNickname: string | null
+  mode: SharedLibraryMode | null
+  titleCount: number
+  // `choose`: a With-metadata library on a PC with no Shikimori account.
+  identity: 'videos' | 'owner' | 'foreign' | 'choose'
+  readOnly?: { reason: SharedLibraryReadOnlyReason; message: string }
+}
+
+/** `shared-library:pick-and-discover`: `dir` is null when the dialog was cancelled. */
+interface SharedLibraryDiscovery {
+  dir: string | null
+  candidates: SharedLibraryCandidate[]
+}
+
+/** The no-account choice: videos only, or a local claim as the owner. */
+type SharedLibraryAttachChoice = 'videos' | 'claim'
+
+/** One episode file a title's Play from drive can start. */
+interface AttachedPlayTarget {
+  episodeInt: string
+  translationId: number
+  container: 'mkv' | 'mp4'
+}
+
+interface AttachedLibraryTitle {
+  animeId: number
+  name: string
+  // From the metadata snapshot, for `AnimeCard`.
+  anime: AnimeSearchResult
+  hasPoster: boolean
+  // Also in `downloadedAnime` on this PC.
+  onThisPc: boolean
+  itemCount: number
+  mkvCount: number
+  // The first episode in order, and the first that plays without ffmpeg.
+  play: { any: AttachedPlayTarget | null; withoutFfmpeg: AttachedPlayTarget | null }
+}
+
+interface AttachedLibraryInfo {
+  libraryId: string
+  root: string
+  name: string
+  mode: SharedLibraryMode
+  ownerNickname: string | null
+  role: AttachedLibraryRole
+  access: 'read-write' | 'read-only'
+  accessReason?: AttachedLibraryAccessReason
+  // S5's read-only message (`version`, `size`, `interrupted`).
+  message?: string
+  // Read on this run: false when the root couldn't be read at startup.
+  available: boolean
+  // Items past Windows' MAX_PATH at this root (`absoluteOverflow`).
+  pathOverflow: number
+  mkvCount: number
+  titles: AttachedLibraryTitle[]
+}
+
+type SharedLibraryAttachResult =
+  | { ok: true; library: AttachedLibraryInfo; ffmpegMissing?: { mkvCount: number } }
+  | { ok: false; error: string }
+
+interface AttachedTitleItem {
+  translationId: number
+  translationType: string
+  author: string
+  quality: number
+  container: 'mkv' | 'mp4'
+  hasSubtitle: boolean
+}
+
+interface AttachedTitleEpisode {
+  episodeInt: string
+  episodeFull: string
+  items: AttachedTitleItem[]
+}
+
+/** `shared-library:get-title`: one title as the drive has it. */
+interface AttachedTitleDetail {
+  libraryId: string
+  libraryName: string
+  animeId: number
+  anime: AnimeSearchResult
+  meta: SharedLibraryMeta | null
+  hasPoster: boolean
+  episodes: AttachedTitleEpisode[]
+}
+
+/** `resolveItem` on the service: a played file and its sidecar, both checked at play time. */
+interface AttachedResolvedItem {
+  libraryId: string
+  path: string
+  subtitlePath?: string
+}
+
+/** `checkItem` (S12 #592's integrity step). */
+type AttachedItemCheck = 'ok' | 'missing' | 'wrong-size' | 'escapes'
+
 // --- Export (S6a #574) -------------------------------------------------------------
 
 /** One episode of one translation picked for export. */

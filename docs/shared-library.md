@@ -203,6 +203,46 @@ The manifest is written through `writeManifest` every 10 items and at the end (a
 
 **Jobs reach the renderer** through `export:job-updated` ([IPC](./ipc.md)), into `useExportStore`, and a job card in Downloads: "Exporting to <library> — 12 / 40 files, 8.1 / 23 GB", with Pause, Resume and Cancel, the two waiting states, and Dismiss once it's finished.
 
+## Opening a library (#578)
+
+`AttachedLibraryService` (`src/main/services/attached-library/`) owns every attached library. It persists `attachedLibraries` (`libraryId → { root, name, mode, owner, access, accessReason?, claim?, lastSeenAt, lastSyncAt }`, see `docs/settings.md`), keeps each manifest and its `meta/` snapshots in memory, and re-reads every persisted root at startup. **Its roots are never storage roots:** they are not in `ROOT_KEYS`, never handed to `coldStorageService`, never scanned by `episode-file-scan.ts` or the usage scan, and never added to the player's `dirsToCheck`, so cleanup and cold-storage moves can't touch a drive. The service is the only thing that knows these paths.
+
+**Nothing writes to a library before S9 (#584).** Opening, the writability check and playing read only; a test snapshots the tree and spies on every write-capable `fs.promises` call under the root.
+
+### The open flow
+
+1. **Pick a folder** ("Open Shared Library…" in Settings → Storage and in the Library header): `shared-library:pick-and-discover`.
+2. **Discover** with `discoverLibraries`. With more than one library, the user picks from a list showing name, owner nickname, mode and title count.
+3. **Read** with `readLibrary`. A missing `name` falls back to the root's folder name.
+
+   | Reader result | Open result |
+   |---|---|
+   | `ok`, `torn: true` | Opens on the pair the reader chose, `access` unchanged; a log line. The next S9 write repairs it |
+   | read-only `'version'` (a newer state) | `access: 'read-only'`, `accessReason: 'version'`; still plays |
+   | read-only `'interrupted'` | `access: 'read-only'`, `accessReason: 'interrupted'`, with S5's message; still plays |
+   | read-only `'size'`, state file over its cap | `access: 'read-only'`, `accessReason: 'size'`, with S5's message; still plays |
+   | read-only, `manifest.json` itself newer or over its size or item cap | The reader lists no manifest: the open flow shows the message and there is nothing to attach or play |
+
+   **Path length:** when `absoluteOverflow(root, items)` flags items, a non-blocking warning: "N files are past Windows' 260-character path limit at this location. They play in the app, but other players may not open them. Move the library to a shorter folder to fix this."
+4. **Writability, without writing.** `checkWritable(root)` (`writable.ts`) is the one read-only check, shared with S8 (#582): `fs.promises.access(<root>/.anime-dl, W_OK)`. `EROFS`, `EACCES` and `EPERM` give `access: 'read-only'`, `accessReason: 'mount'`. On attach `access` starts as `read-write` (unless the reader made it read-only), and this check can only demote it; any other error leaves it and is logged. Where `access` can't see the truth (Windows write-protected media), S8 demotes on the first failed write.
+5. **Identity**, against `store.get('shikimoriUser')?.id`, never the credentials (session expiry clears only `shikimoriCredentials`):
+
+   | Library | This PC | Role |
+   |---|---|---|
+   | Videos only | any | `videos` |
+   | With metadata, owner = `shikimoriUser.id` | logged in, or the session expired | `owner` |
+   | With metadata, owner ≠ `shikimoriUser.id` | logged in as someone else | `foreign`, after a warning: used as videos, its state ignored, never written. "To keep your own progress on this drive, create your own Shared Library next to it." |
+   | With metadata | no account (`shikimoriUser` null), online or not | A choice: "Use as videos only" (`videos`), or "Use this library as <nickname>" after "Only do this if you are <nickname>", a **local claim** `claim: { ownerId, at }` (`claim`) |
+
+   The role is derived again on every read. A claim lasts while the PC has no account: a login as the same id makes it plain ownership, as a different id the library turns foreign; either way the claim is dropped (S9 keeps the library base and merges later). A claim never pushes to Shikimori. **Until S9**, `owner` and `claim` libraries are read-only for state: titles show and play, nothing merges or writes, and the library header says "Sync arrives in a later update".
+6. **ffmpeg.** ffmpeg isn't bundled (owner decision 1): every PC that uses a Shared Library downloads ffmpeg, ffprobe and fpcalc once while online, or through Prepare for offline (S12 #592). After attaching, `checkFfmpeg()` runs; with ffmpeg missing and `.mkv` items, the result carries `ffmpegMissing: { mkvCount }` and the open flow and the library's section show "ffmpeg isn't installed on this PC, so N MKV episodes can't play. MP4 episodes with .ass subtitles still play. Connect to the internet once to download it, or use Prepare for offline." `.mkv` needs ffmpeg (the MSE remux); `.mp4` + `.ass` doesn't.
+
+### Play from drive
+
+Titles render from the snapshot (`meta/<animeId>.json`, `posters/<animeId>.jpg` through `anime-poster://`, which falls back to the drive after the local poster cache; a drive poster is capped at 2 MB, checked when the library is opened and again each time it is served, and read through one handle that stops past the cap). Library → Shared Libraries shows each library's titles; the detail page's attached form lists the drive's episodes and translations with no network and no `animeCache` entry, and a title that is also downloaded keeps its normal page with an "On <library>" group for the episodes only the drive has. `player:find-local-file` with the anime id resolves local first, then the drive's `items[].path`, `realpath`-checked on every call through `paths.ts` `resolveItem`; see `docs/player.md`. `checkItem(libraryId, item)` (ok / missing / wrong size / outside the root) is the same check for S12's integrity step.
+
+**Long paths when spawning ffmpeg.** Node's `fs` calls already use `\\?\` on Windows, but a spawned ffmpeg or ffprobe gets a plain argument. `spawnPathFor(abs)` (`spawn-path.ts`) returns `path.toNamespacedPath(abs)` for a path under an attached root and every other path unchanged; the player's remux / transcode sessions and legacy remux take their file argument through it. A no-op off Windows. S8 uses the same helper.
+
 ## Tests
 
 `test/lib/shared-library/`: the golden and edge-case trees under `test/fixtures/shared-library/v1/` (byte-compared, so excluded from Prettier), the schema fingerprint `test/fixtures/shared-library/schema-v1.json`, and over-cap trees built at test time with sparse files. `write.test.ts` injects a crash at every mutating `fs.promises` call of every write and checks the tree reads as a matching pair after each one.

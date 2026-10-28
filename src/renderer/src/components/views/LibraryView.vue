@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import AnimeCard from '../shared/AnimeCard.vue';
 import ExportDialog from '../shared-library/ExportDialog.vue';
+import SharedLibrariesTab from '../shared-library/SharedLibrariesTab.vue';
+import OpenLibraryDialog from '../shared-library/OpenLibraryDialog.vue';
 import { getAnimeName } from '../../utils';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { useSharedLibrariesStore } from '../../stores/shared-libraries';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
 const { rates } = storeToRefs(shikimoriStore);
+const sharedStore = useSharedLibrariesStore();
+const { attachedCount, librariesByAnimeId, focusTab } = storeToRefs(sharedStore);
+const openDialog = ref(false);
 
 const library = ref<AnimeSearchResult[]>([]);
 const starredIds = ref(new Set<number>());
@@ -45,8 +51,9 @@ const statusFilter = ref('all');
 
 // Built dynamically: "All" always, "Priority" whenever the list is non-empty
 // *or* the user is standing on it (so demoting the last entry cannot strand
-// `statusFilter` on a tab that just vanished), and the three Shikimori status
-// pills only when a library entry actually resolved to a status.
+// `statusFilter` on a tab that just vanished), the three Shikimori status
+// pills only when a library entry actually resolved to a status, and "Shared
+// Libraries" (#578) while one is attached or the user is standing on it.
 const statusTabs = computed<{ id: string; label: string }[]>(() => {
   const tabs = [{ id: 'all', label: 'All' }];
   if (hasPriority.value || statusFilter.value === 'priority') {
@@ -59,13 +66,44 @@ const statusTabs = computed<{ id: string; label: string }[]>(() => {
       { id: 'completed', label: 'Completed' }
     );
   }
+  if (attachedCount.value > 0 || statusFilter.value === 'shared') {
+    tabs.push({ id: 'shared', label: 'Shared Libraries' });
+  }
   return tabs;
 });
 
 // Derived from the tab list rather than restated, so the strip can never be
 // hidden while `statusFilter` still points at one of its tabs: an "All"-only
-// strip is noise, anything more is a real choice.
-const showFilterRow = computed(() => statusTabs.value.length > 1 && library.value.length > 0);
+// strip is noise, anything more is a real choice. An attached library counts
+// as content: on a fresh PC the local library is empty. So does standing on
+// the Shared Libraries tab, or detaching the last library would hide the only
+// way off it.
+const showFilterRow = computed(
+  () =>
+    statusTabs.value.length > 1 &&
+    (library.value.length > 0 || attachedCount.value > 0 || statusFilter.value === 'shared')
+);
+
+/** "Also on <library>": a downloaded title an attached library holds too. */
+function alsoOn(animeId: number): string | null {
+  if (!downloadedIds.value.has(animeId)) return null;
+  return librariesByAnimeId.value.get(animeId)?.[0]?.name ?? null;
+}
+
+watch(
+  focusTab,
+  (focus) => {
+    if (!focus) return;
+    statusFilter.value = 'shared';
+    focusTab.value = false;
+  },
+  { immediate: true }
+);
+
+function showShared(): void {
+  openDialog.value = false;
+  statusFilter.value = 'shared';
+}
 
 function matchesFilter(anime: AnimeSearchResult): boolean {
   if (statusFilter.value === 'all') return true;
@@ -177,7 +215,9 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
     <header class="topbar">
       <h2>Library</h2>
       <span v-if="library.length > 0" class="sub">· {{ library.length }} shows</span>
-      <div v-if="library.length > 0" class="topbar-actions">
+      <div class="grow"></div>
+      <!-- Select / Export act on this PC's grid, not on the Shared Libraries tab (#574). -->
+      <div v-if="library.length > 0 && statusFilter !== 'shared'" class="topbar-actions">
         <button
           v-if="selectMode"
           class="btn btn-primary btn-sm"
@@ -196,8 +236,12 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
           {{ selectMode ? 'Done' : 'Select' }}
         </button>
       </div>
+      <button class="open-shared-btn" data-testid="open-shared-library" @click="openDialog = true">
+        Open Shared Library…
+      </button>
     </header>
     <ExportDialog v-if="exportIds" :anime-ids="exportIds" preselect @close="closeExport" />
+    <OpenLibraryDialog v-if="openDialog" @close="openDialog = false" @show="showShared" />
     <div class="body">
       <div v-if="showFilterRow" class="filter-row">
         <div class="pill-tabs">
@@ -213,7 +257,14 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
         </div>
       </div>
 
-      <div v-if="filteredLibrary.length > 0" class="poster-grid">
+      <!-- Ahead of every empty-library branch: on a fresh PC the local library is
+           empty and the drive's titles are the whole point (#578). -->
+      <SharedLibrariesTab
+        v-if="statusFilter === 'shared'"
+        :starred-ids="starredIds"
+        @toggle-star="toggleStar"
+      />
+      <div v-else-if="filteredLibrary.length > 0" class="poster-grid">
         <div v-for="anime in filteredLibrary" :key="anime.id" class="card-wrap">
           <AnimeCard
             :anime="anime"
@@ -230,6 +281,9 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
             v-if="!selectMode && statusFilter === 'priority' && priorityRank.has(anime.id)"
             class="rank-badge"
             >{{ priorityRank.get(anime.id) }}</span
+          >
+          <span v-if="alsoOn(anime.id)" class="drive-badge" data-testid="also-on"
+            >Also on {{ alsoOn(anime.id) }}</span
           >
           <button
             v-if="downloadedIds.has(anime.id)"
@@ -348,6 +402,38 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
   display: grid;
   place-items: center;
   pointer-events: none;
+}
+
+.grow {
+  flex: 1;
+}
+
+.open-shared-btn {
+  padding: 7px 13px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.open-shared-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.drive-badge {
+  margin-top: 6px;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: var(--radius-chip);
+  border: 1px solid var(--border-strong);
+  color: var(--text-2);
+  font-size: 0.7rem;
+  font-weight: 600;
 }
 
 .delete-folder-btn {

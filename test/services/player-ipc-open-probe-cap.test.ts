@@ -81,7 +81,8 @@ describe('player.ipc — the open at T = 0 waits a capped time for its offset pr
       mp4StatsService: {},
       getFfmpegPath: () => ffmpeg,
       // Empty skips the handler's own subtitle ffprobe.
-      getFfprobePath: () => ''
+      getFfprobePath: () => '',
+      attachedLibraryService: { spawnPathFor: (p: string) => p }
     } as unknown as AppDeps)
     handlers = new Map(
       (ipcMain.handle as unknown as { mock: { calls: [string, Handler][] } }).mock.calls

@@ -1,14 +1,16 @@
 // anime-poster:// (#570): serves `poster-cache/<animeId>.jpg` so cards keep
 // their poster offline. The id is the whole input and must be a positive
 // integer, so no request can reach a path outside the poster dir.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
+  ATTACHED_POSTER_MAX_BYTES,
   createAnimePosterHandler,
   parsePosterId
 } from '../../src/main/streaming/anime-poster-protocol'
+import { POSTER_MAX_BYTES } from '../../src/main/services/attached-library'
 
 let root: string
 let posterDir: string
@@ -63,6 +65,71 @@ describe('anime-poster:// handler', () => {
     const res = await get(url)
     expect(res.status).toBe(400)
     expect(await res.text()).not.toContain('secret')
+  })
+})
+
+describe('an attached library poster (#578)', () => {
+  const MAX = ATTACHED_POSTER_MAX_BYTES
+
+  /** `attachedPoster` the way `posterFor` behaves: size-checked, then the drive swaps the file. */
+  function swappedAfterCheck(finalSize: number): (id: number) => Promise<string | null> {
+    return async () => {
+      const file = path.join(root, 'drive-poster.jpg')
+      fs.writeFileSync(file, 'small')
+      if (fs.statSync(file).size > MAX) return null
+      fs.truncateSync(file, finalSize)
+      return file
+    }
+  }
+
+  const serve = (attachedPoster: (id: number) => Promise<string | null>): Promise<Response> =>
+    createAnimePosterHandler({ posterDir, attachedPoster })({ url: 'anime-poster://7' } as Request)
+
+  it('falls back to the attached poster on a cache miss', async () => {
+    const res = await serve(swappedAfterCheck(1000))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Length')).toBe('1000')
+  })
+
+  it('a file swapped past the cap between the check and the read is not served', async () => {
+    const res = await serve(swappedAfterCheck(MAX + 1))
+    expect(res.status).toBe(404)
+  })
+
+  it('exactly the cap is served in full', async () => {
+    const res = await serve(swappedAfterCheck(MAX))
+    expect(res.status).toBe(200)
+    expect((await res.arrayBuffer()).byteLength).toBe(MAX)
+  })
+
+  it('reads through one handle, never the whole file', async () => {
+    const readFile = vi.spyOn(fs.promises, 'readFile')
+    await serve(swappedAfterCheck(MAX + 1))
+    expect(readFile.mock.calls.map((c) => path.basename(String(c[0])))).toEqual(['7.jpg'])
+    readFile.mockRestore()
+  })
+
+  it('a small poster allocates about its own size, not the cap', async () => {
+    const alloc = vi.spyOn(Buffer, 'alloc')
+    const res = await serve(swappedAfterCheck(1000))
+    expect(res.status).toBe(200)
+    const sizes = alloc.mock.calls.map((c) => Number(c[0]))
+    alloc.mockRestore()
+    expect(sizes).toContain(1001)
+    expect(Math.max(...sizes)).toBeLessThan(MAX)
+  })
+
+  it('a huge file never allocates past the cap + 1', async () => {
+    const alloc = vi.spyOn(Buffer, 'alloc')
+    const res = await serve(swappedAfterCheck(3 * MAX))
+    const sizes = alloc.mock.calls.map((c) => Number(c[0]))
+    alloc.mockRestore()
+    expect(res.status).toBe(404)
+    expect(Math.max(...sizes)).toBe(MAX + 1)
+  })
+
+  it('is the cap the service enforces', () => {
+    expect(MAX).toBe(POSTER_MAX_BYTES)
   })
 })
 

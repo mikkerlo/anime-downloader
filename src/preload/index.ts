@@ -303,14 +303,16 @@ const api = {
     animeName: string,
     episodeInt: string,
     translationId: number,
-    episodeLabel: string
+    episodeLabel: string,
+    animeId?: number
   ) =>
     ipcRenderer.invoke(
       CHANNELS.PLAYER_FIND_LOCAL_FILE,
       animeName,
       episodeInt,
       translationId,
-      episodeLabel
+      episodeLabel,
+      animeId
     ) as Promise<PlayerLocalFileResult | null>,
   playerOpened: (filePath: string) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_OPENED, filePath) as Promise<void>,
@@ -528,6 +530,27 @@ const api = {
       reason: string | null
     }>,
   onExportJobUpdated: subscribe<ExportJobView>(EVENT_CHANNELS.EXPORT_JOB_UPDATED),
+
+  // Shared Library (#578)
+  sharedLibraryPickAndDiscover: () =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_PICK_AND_DISCOVER
+    ) as Promise<SharedLibraryDiscovery>,
+  sharedLibraryAttach: (libraryId: string, choice?: SharedLibraryAttachChoice) =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_ATTACH,
+      libraryId,
+      choice
+    ) as Promise<SharedLibraryAttachResult>,
+  sharedLibraryList: () =>
+    ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_LIST) as Promise<AttachedLibraryInfo[]>,
+  sharedLibraryGetTitle: (libraryId: string, animeId: number) =>
+    ipcRenderer.invoke(
+      CHANNELS.SHARED_LIBRARY_GET_TITLE,
+      libraryId,
+      animeId
+    ) as Promise<AttachedTitleDetail | null>,
+  onSharedLibrariesChanged: subscribe<void>(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>

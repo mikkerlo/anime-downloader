@@ -522,6 +522,9 @@ export class ExportJob {
       const tmp = `${dest}${MERGE_TMP_SUFFIX}`
       await unlinkQuiet(this.deps.xfs, tmp)
 
+      // The awaits above are a window a Pause or Cancel can land in before
+      // `copyAbort` exists: checked again here, synchronously up to the merger's wait.
+      if (this.stop) throw stoppedError()
       const abort = new AbortController()
       this.copyAbort = abort
       const onAbort = (): void => merger.cancel(this.rec.jobId)

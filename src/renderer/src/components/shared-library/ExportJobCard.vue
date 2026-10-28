@@ -96,6 +96,10 @@ const percent = computed(() =>
       <summary>{{ job.failed.length }} failed</summary>
       <div v-for="f in job.failed" :key="f.key">{{ f.label }}: {{ f.reason }}</div>
     </details>
+    <details v-if="job.skipped.length > 0" class="failed" data-testid="export-job-skipped">
+      <summary>{{ job.skipped.length }} skipped: too large for this drive</summary>
+      <div v-for="s in job.skipped" :key="s.key">{{ s.label }}</div>
+    </details>
   </div>
 </template>
 

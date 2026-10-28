@@ -26,6 +26,8 @@ import {
 import type { PlayerPresenceService } from '../player-presence'
 import {
   TMP_SUFFIX,
+  TOO_LARGE_REASON,
+  TooLargeError,
   VerifyError,
   copyVerified,
   errnoOf,
@@ -70,6 +72,10 @@ export interface JobRecord {
   /** Item keys whose files are all done; these are the ones in the manifest. */
   done: string[]
   failed: Record<string, string>
+  /** Items too large for the drive (#575): by preflight (not in `items`) or at run time. */
+  skipped?: Record<string, { animeId: number; label: string; reason: string }>
+  /** The target's filesystem at start (#575), for the run-time size rule. */
+  fsType?: ExportFsType
   /** The file being copied, so a resume deletes its `.anime-dl-tmp`. */
   current: { key: string; rel: string } | null
   missing: number
@@ -436,6 +442,7 @@ export class ExportJob {
       this.inFlight = 0
       const result = await copyVerified(this.deps.xfs, f.src, dest, {
         signal: this.copyAbort.signal,
+        fsType: this.rec.fsType,
         onBytes: (n) => {
           this.inFlight += n
           this.deps.update(this.rec, this.bytesDone())
@@ -495,7 +502,8 @@ export class ExportJob {
 
       const done = new Set(this.rec.done)
       for (const item of this.rec.items) {
-        if (done.has(item.key) || this.rec.failed[item.key]) continue
+        if (done.has(item.key) || this.rec.failed[item.key] || this.rec.skipped?.[item.key])
+          continue
         await this.holdWhilePlayerOpen()
         if (this.stop) break
         if (this.rec.status !== 'running') await this.setStatus('running')
@@ -518,6 +526,15 @@ export class ExportJob {
           if (err instanceof EscapeError) {
             console.warn(`[export] skipped ${item.key}: ${err.message}`)
             this.rec.failed[item.key] = err.message
+            continue
+          }
+          if (err instanceof TooLargeError) {
+            console.warn(`[export] skipped ${item.key}, too large for the drive: ${err.message}`)
+            this.rec.skipped = {
+              ...this.rec.skipped,
+              [item.key]: { animeId: item.animeId, label: item.label, reason: TOO_LARGE_REASON }
+            }
+            this.rec.current = null
             continue
           }
           if (!(await this.identityOk())) throw new DriveGoneError((err as Error).message)

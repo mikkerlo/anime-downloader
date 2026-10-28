@@ -57,11 +57,12 @@ function target(over: Partial<ExportTarget>): ExportTarget {
 
 let api: Record<string, unknown>
 
-function stubApi(t: ExportTarget): void {
+function stubApi(t: ExportTarget, pf: ExportPreflight | null = null): void {
   api = {
     exportPlan: vi.fn(async (req: ExportPlanRequest) => ({
       titles: TITLES,
-      target: req.target ? t : null
+      target: req.target ? t : null,
+      preflight: req.target ? pf : null
     })),
     exportPickTarget: vi.fn(async () => '/drive'),
     exportStart: vi.fn(async () => ({ ok: false, reason: 'refused by main' })),
@@ -71,8 +72,8 @@ function stubApi(t: ExportTarget): void {
   ;(window as unknown as { api: unknown }).api = api
 }
 
-async function open(t: ExportTarget, preselect = true) {
-  stubApi(t)
+async function open(t: ExportTarget, preselect = true, pf: ExportPreflight | null = null) {
+  stubApi(t, pf)
   const w = mount(ExportDialog, { props: { animeIds: [1], preselect } })
   await flushPromises()
   await w.find('[data-testid="export-pick"]').trigger('click')
@@ -165,5 +166,93 @@ describe('ExportDialog (#574)', () => {
       name: 'Anime Library'
     })
     expect(w.text()).toContain('refused by main')
+  })
+})
+
+function preflight(over: Partial<ExportPreflight>): ExportPreflight {
+  return {
+    ok: true,
+    fsType: 'fat32',
+    blockers: [],
+    warnings: [],
+    driveWarnings: [],
+    skipped: [],
+    mayBeSkipped: [],
+    renamed: [],
+    renames: {},
+    overflow: [],
+    ...over
+  }
+}
+
+describe('ExportDialog preflight panel (#575)', () => {
+  it('shows the plan’s preflight narrowed to the selection, and skipped files leave the estimate', async () => {
+    const w = await open(
+      target({}),
+      true,
+      preflight({
+        skipped: ['1:2:11'],
+        renamed: ['1:1:11'],
+        renames: { '1:1:11': { from: 'CON/CON - 01 [A].mkv', to: 'CON_/CON - 01 [A].mkv' } },
+        overflow: ['1:1:11']
+      })
+    )
+    const panel = w.find('[data-testid="export-preflight"]')
+    expect(panel.find('[data-testid="pf-skipped"] summary').text()).toBe(
+      'This drive is FAT32: 1 file over 4 GB will be skipped.'
+    )
+    expect(panel.find('[data-testid="pf-skipped"]').text()).toContain('Alpha — E2 (A)')
+    expect(panel.find('[data-testid="pf-renamed"]').text()).toContain(
+      'CON/CON - 01 [A].mkv → CON_/CON - 01 [A].mkv'
+    )
+    expect(panel.find('[data-testid="pf-overflow"] summary').text()).toBe(
+      '1 file will have paths too long for some Windows apps. Choose a shorter folder.'
+    )
+    // Only E1 (1000 bytes) is copied.
+    expect(w.text()).toContain('to copy (1 episodes)')
+    expect(startButton(w).disabled).toBe(false)
+
+    // E1 deselected: its rename and overflow lines go, E2's skip stays.
+    await w.find('[data-testid="tree-episode-1:1:11"]').trigger('change')
+    expect(w.find('[data-testid="pf-renamed"]').exists()).toBe(false)
+    expect(w.find('[data-testid="pf-overflow"]').exists()).toBe(false)
+    expect(w.find('[data-testid="pf-skipped"]').exists()).toBe(true)
+    expect(startButton(w).disabled).toBe(true)
+  })
+
+  it('a blocker disables Export and says why', async () => {
+    const msg = 'This drive is read-only on this computer (NTFS on macOS).'
+    const w = await open(
+      target({}),
+      true,
+      preflight({ ok: false, fsType: 'ntfs', blockers: [msg] })
+    )
+    expect(w.find('[data-testid="export-preflight"]').text()).toContain(msg)
+    expect(startButton(w).disabled).toBe(true)
+    expect(w.find('.why').text()).toBe(msg)
+  })
+
+  it('no panel when there is nothing to say', async () => {
+    const w = await open(target({}), true, preflight({ fsType: 'exfat' }))
+    expect(w.find('[data-testid="export-preflight"]').exists()).toBe(false)
+  })
+
+  it('every plan of one dialog carries the same session, so main probes each folder once', async () => {
+    vi.useFakeTimers()
+    try {
+      const w = await open(target({}))
+      await w.find('[data-testid="export-name"]').setValue('Other')
+      await vi.advanceTimersByTimeAsync(400)
+      await flushPromises()
+      const calls = (api.exportPlan as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => c[0] as ExportPlanRequest
+      )
+      const withTarget = calls.filter((c) => c.target !== null)
+      expect(withTarget.map((c) => c.name)).toEqual(['Anime Library', 'Other'])
+      expect(typeof withTarget[0].session).toBe('string')
+      expect(withTarget[1].session).toBe(withTarget[0].session)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

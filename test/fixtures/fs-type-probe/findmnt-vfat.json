@@ -1,0 +1,8 @@
+{
+   "filesystems": [
+      {
+         "fstype": "vfat",
+         "target": "/media/user/MY STICK"
+      }
+   ]
+}

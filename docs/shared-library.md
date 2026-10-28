@@ -193,7 +193,7 @@ The size estimate counts only items the library doesn't already have with the sa
 3. verify: the size, plus a re-read sha256 for files under 2 GB (size only above that). A mismatch deletes the file and marks the item failed; it stays out of the manifest;
 4. the item joins the manifest at the next checkpoint.
 
-The manifest is written through `writeManifest` every 10 items and at the end (and on pause and cancel), so a cancelled or crashed job leaves a valid library holding whatever finished. Items keep their `sha256`. A title joins `titles[]` with its first finished item; its `meta` and poster are written just before its first file. Names come from the v1 rule, with the library's existing items passed to `nameItems` as the earlier items they are; renamed keys go to `naming.renamed`, and `index.html` is rewritten at each checkpoint when that list is non-empty. Filesystem-specific checks (FAT32, writability, path length) are S6b (#575).
+The manifest is written through `writeManifest` every 10 items and at the end (and on pause and cancel), so a cancelled or crashed job leaves a valid library holding whatever finished. Items keep their `sha256`. A title joins `titles[]` with its first finished item; its `meta` and poster are written just before its first file. Names come from the v1 rule, with the library's existing items passed to `nameItems` as the earlier items they are; renamed keys go to `naming.renamed`, and `index.html` is rewritten at each checkpoint when that list is non-empty. Filesystem-specific checks (FAT32, writability, path length) are the [preflight](#export-preflight-575).
 
 **The `meta` re-export.** A `meta/<animeId>.json` that reads at a known major gets the local snapshot's known fields merged over it, and `carryUnknown` carries the existing file's unknown fields at every record level (the file, `titles`, `searchResult` and its `titles`, each `genres` and `episodes` entry by key), so a re-export keeps a newer minor's fields. A file over its 1 MB cap is left alone; an invalid one is replaced. The local snapshot passes the v1 schema check first, so nothing a reader would drop is written, and only allow-listed fields leave this PC.
 
@@ -202,6 +202,40 @@ The manifest is written through `writeManifest` every 10 items and at the end (a
 **Playback hold, per file.** Before each file the job checks `playerPresenceService.isOpen()`, the merge hold's signal (`docs/ffmpeg.md`, #516). A file already copying when the player opens finishes; the next one waits, shown as "Paused while the player is open", for an `onRelease` listener the job adds when it starts and removes (the returned unsubscribe) when it ends, is cancelled or is paused. Episodes are at most about 700 MB, roughly 25 s on USB 2; a movie in flight can take longer, an accepted risk.
 
 **Jobs reach the renderer** through `export:job-updated` ([IPC](./ipc.md)), into `useExportStore`, and a job card in Downloads: "Exporting to <library> — 12 / 40 files, 8.1 / 23 GB", with Pause, Resume and Cancel, the two waiting states, and Dismiss once it's finished.
+
+### Export preflight (#575)
+
+`services/shared-library-export/preflight.ts` says what will happen on the target before a byte is copied. It runs when the plan is built (`export:plan` returns it as `preflight`) and again at start, and its outcome is `{ ok, fsType, blockers, warnings, skipped, renamed, overflow }` (plus `mayBeSkipped`, `driveWarnings` and `renames`, the old → new names the dialog shows). Blockers refuse the export; warnings never block. The plan's preflight covers every ready tree item the target doesn't already have, and the dialog narrows it to the selection with `preflightForSelection` (`src/shared/shared-library-export.ts`), whose warning texts main's start uses too. A blocked target (`own-metadata`, `read-only`) gets no preflight.
+
+**Where it probes.** A new library's folder doesn't exist yet, so both probes run in the root's **nearest existing ancestor**, found with `stat` alone (walking up to the filesystem root), and preflight never creates a folder. For a new library that is the picked folder (or above it); for a sibling next to a foreign library it is the picked folder, never the foreign root; for `add` it is the library's own root, never its `.anime-dl/`.
+
+**Filesystem type.** `fs-type-probe.ts` asks the OS: PowerShell `(Get-Volume -FilePath $env:ANIME_DL_PROBE_PATH).FileSystem` on Windows (the path goes in through the environment, so no quoting can break the command), `df -P` and then `diskutil info -plist <mount>` (`FilesystemType`, `MountPoint`) on macOS, and `findmnt -J -o FSTYPE,TARGET --target <dir>` on Linux. The result is `fat32 | exfat | ntfs | apfs | hfs | ext | other | unknown` (Linux's `fuseblk`, which ntfs-3g and exfat-fuse share, is `unknown`). Each probe has a 3 s budget; a timeout, a failed command or unreadable output gives `unknown`, which raises no type-based warning. The type alone never decides read-only: macOS with a third-party NTFS driver is writable.
+
+**Writable.** `.anime-dl-probe-<random>` is created with `wx` in that folder, 1 byte is written, and the file is removed in a `finally`. `EROFS` is a blocker ("This drive is read-only on this computer (NTFS on macOS)."), and so are `EACCES` and `EPERM` ("This folder is read-only for you on this computer…"); any other error is a drive warning, and the copy's own errors still apply. While the dialog is open the type and write probes run **once per folder** (the plan request's `session`; a new library name re-plans without a new probe). Start **always probes again** and never reads the dialog's result, so a stick swapped or write-protected after the plan is refused, with the dialog's message. Before probing, `.anime-dl-probe-*` files in that folder older than an hour are removed (left by a killed app); a fresher one may belong to another open dialog and is left alone.
+
+**FAT32's 4 GiB − 1 bytes.** On `fat32`, an item whose largest file is **over** 4 294 967 295 bytes is skipped on its own (a file of exactly that size fits); the rest of the export goes ahead. Skipped items are listed in the dialog and on the job card, and don't count toward the size estimate or the free-space check. Start refuses a selection whose every item is skipped. An S6c (#576) re-encode whose *source* is over the limit is only warned about ("may be skipped if it's still over 4 GB"); a `copy`-codec merge is checked up front by the sum of its inputs.
+
+**The run-time size rule** (`isTooLargeForFilesystem` in `copy.ts`, which S6c's merge step reuses) covers outputs whose size isn't known up front, and a filesystem the probe called `unknown`. A write failure is `skipped: too-large-for-filesystem` when the error is `EFBIG` or ffmpeg's "File too large", or when, on `fat32`, the partial temp file had reached 4 GiB − 1 bytes (Windows reports that as a full disk). The temp file is deleted, the item joins the preflight skips on the job card, and the job goes on. Any other error, `EIO` included, is still a failure.
+
+**Names.** Every planned path goes through S5's v1 rule (`nameItems`, [above](#the-naming-rule-namingrule--v1)) on every target, because the drive will be opened on Windows later; preflight doesn't extend it. The keys it changed, shortened or made Windows-safe, are `renamed`: the same keys S5 records in `naming.renamed`, which makes it write `index.html`. There is no separate `shortened` list. Start uses preflight's names for the job, so the two can't differ. Names apply only to new items; existing items keep their recorded `path`.
+
+**Path length.** The overflow check is S5's `absoluteOverflow(root, items)`, not a copy of it, run on every OS. On macOS and Linux the root is first written as Windows would see it: its path below the mount point the type probe reported, under a drive letter (`/media/u/STICK/Anime Library` → `E:\Anime Library`); with no known mount point it is skipped there. A non-empty result is a warning naming those items: "N files will have paths too long for some Windows apps. Choose a shorter folder." The relative paths are within the 200-unit budget, so it is always the root that is too deep.
+
+**The dialog** shows a Preflight panel above Export: the blockers, the drive warnings, and one expandable line each for the skipped files, the re-encodes at risk, the renamed items (old → new) and the paths too long, all counted over the current selection.
+
+#### Per-filesystem limits
+
+S11 (#587) finalizes this table.
+
+| Filesystem | Largest file | Name length | Notes |
+|---|---|---|---|
+| FAT32 | 4 GiB − 1 bytes | 255 UTF-16 units | Larger files are skipped (preflight and run time). Case-insensitive |
+| exFAT | 16 EiB | 255 UTF-16 units | Case-insensitive. Some Linux setups mount it read-only |
+| NTFS | 16 TiB and up | 255 UTF-16 units | Read-only on macOS without a third-party driver (the write probe decides) |
+| APFS | 8 EiB | 255 UTF-8 bytes | Usually case-insensitive |
+| HFS+ | 8 EiB | 255 UTF-16 units | Usually case-insensitive |
+| ext4 | 16 TiB | 255 bytes | Case-sensitive |
+| Windows paths | — | MAX_PATH 259 UTF-16 units for the whole path | Reported, not prevented (`absoluteOverflow`) |
 
 ## Opening a library (#578)
 
@@ -246,3 +280,5 @@ Titles render from the snapshot (`meta/<animeId>.json`, `posters/<animeId>.jpg` 
 ## Tests
 
 `test/lib/shared-library/`: the golden and edge-case trees under `test/fixtures/shared-library/v1/` (byte-compared, so excluded from Prettier), the schema fingerprint `test/fixtures/shared-library/schema-v1.json`, and over-cap trees built at test time with sparse files. `write.test.ts` injects a crash at every mutating `fs.promises` call of every write and checks the tree reads as a matching pair after each one.
+
+`test/services/shared-library-export-preflight.test.ts` (#575): CI can't make FAT32 or NTFS filesystems, so the type probe is injected, and the write probe where a test needs it to turn read-only between plan and start; the read-only parent is a real `chmod 0555` (skipped on Windows and as root). The probe parsers read the samples under `test/fixtures/fs-type-probe/` (excluded from Prettier). `get-volume-ntfs.txt`, `get-volume-no-volume.txt`, `findmnt-ext4.json` and `findmnt-9p.json` are captured from real machines; the FAT32 and exFAT `Get-Volume` lines, `findmnt-vfat.json`, and the macOS `df` and `diskutil` samples are written by hand in those tools' formats, since no such volume was at hand.

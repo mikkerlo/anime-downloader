@@ -1,0 +1,8 @@
+{
+   "filesystems": [
+      {
+         "fstype": "ext4",
+         "target": "/"
+      }
+   ]
+}

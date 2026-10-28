@@ -14,11 +14,19 @@ import {
   createMountCandidates,
   type MountCandidates
 } from '../../lib/shared-library/mount-candidates'
-import { nameItems } from '../../lib/shared-library/naming'
+import type { absoluteOverflow } from '../../lib/shared-library/paths'
 import { createLibrary } from '../../lib/shared-library/write'
 import type { PlayerPresenceService } from '../player-presence'
-import { nodeFs, type ExportFs } from './copy'
+import { TOO_LARGE_REASON, nodeFs, type ExportFs } from './copy'
+import { createFsTypeProbe, type FsTypeProbe } from './fs-type-probe'
 import { ExportJob, jobFiles, type JobItem, type JobRecord } from './job'
+import {
+  createWriteProbe,
+  preflight,
+  type FolderProbe,
+  type PreflightDeps,
+  type PreflightResult
+} from './preflight'
 import { rootsWithId } from './locate'
 import {
   buildTree,
@@ -26,7 +34,8 @@ import {
   createResolver,
   displayName,
   presentKeys,
-  type PlanSource
+  type PlanSource,
+  type ResolvedItem
 } from './plan'
 import { buildMeta } from './snapshot'
 
@@ -50,6 +59,15 @@ export interface SharedLibraryExportDeps {
   onLibraryWritten?: (libraryId: string, root: string) => void | Promise<void>
   candidates?: MountCandidates
   xfs?: Partial<ExportFs>
+  /** The target's filesystem type (#575); the per-OS commands by default. */
+  fsTypeProbe?: FsTypeProbe
+  /** The preflight's write probe (#575); a `wx` probe file by default. */
+  writeProbe?: (dir: string) => Promise<void>
+  /** Whether a path is an existing folder (preflight's nearest existing ancestor). */
+  isDirectory?: (p: string) => Promise<boolean>
+  /** S5's `absoluteOverflow`; injectable so a test can spy on the call. */
+  overflow?: typeof absoluteOverflow
+  platform?: NodeJS.Platform
   checkpointEvery?: number
   retryMs?: number
   throttleMs?: number
@@ -118,6 +136,68 @@ export function createSharedLibraryExportService(
   const userId = (): number | null =>
     get<{ id?: number } | null>('shikimoriUser')?.id ?? deps.actor().shikimoriUserId
 
+  const preflightDeps: PreflightDeps = {
+    xfs,
+    isDirectory:
+      deps.isDirectory ??
+      (async (p) => {
+        try {
+          return (await fsp.stat(p)).isDirectory()
+        } catch {
+          return false
+        }
+      }),
+    fsTypeProbe: deps.fsTypeProbe ?? createFsTypeProbe({ platform: deps.platform }),
+    writeProbe: deps.writeProbe ?? createWriteProbe(xfs),
+    platform: deps.platform ?? process.platform,
+    now,
+    ...(deps.overflow ? { overflow: deps.overflow } : {})
+  }
+  // The dialog's probes, one per folder while it is open (its `session`). Start never reads it.
+  let probes: { session: string; cache: Map<string, Promise<FolderProbe>> } | null = null
+  const probeCache = (
+    session: string | undefined
+  ): Map<string, Promise<FolderProbe>> | undefined => {
+    if (session === undefined) return undefined
+    if (probes?.session !== session) probes = { session, cache: new Map() }
+    return probes.cache
+  }
+
+  /** The preflight of copying `items` into `root`, where `existing` are the library's other items. */
+  function runPreflight(
+    items: readonly ResolvedItem[],
+    root: string,
+    existing: readonly Pick<SharedLibraryItem, 'path' | 'subtitlePath'>[],
+    cache?: Map<string, Promise<FolderProbe>>
+  ): Promise<PreflightResult> {
+    return preflight(
+      {
+        items: items.map((r) => ({
+          key: r.key,
+          size: Math.max(r.videoSize, r.subtitleSize),
+          naming: {
+            animeId: r.animeId,
+            episodeInt: r.episodeInt,
+            translationId: r.translationId,
+            title: r.title,
+            author: r.author,
+            ext: r.ext,
+            subtitle: r.subtitlePath !== null
+          }
+        })),
+        existing
+      },
+      { root },
+      cache ? { ...preflightDeps, probeCache: cache } : preflightDeps
+    )
+  }
+
+  function publicPreflight(p: PreflightResult): ExportPreflight {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { named, ...rest } = p
+    return rest
+  }
+
   async function freeBytes(dir: string): Promise<number | null> {
     try {
       const s = await xfs.statfs(dir)
@@ -166,6 +246,11 @@ export function createSharedLibraryExportService(
         key,
         label: label(key),
         reason
+      })),
+      skipped: Object.entries(rec.skipped ?? {}).map(([key, s]) => ({
+        key,
+        label: `${titleName.get(s.animeId) ?? s.animeId} — ${s.label}`,
+        reason: s.reason
       })),
       missing: rec.missing,
       note: rec.note,
@@ -242,10 +327,23 @@ export function createSharedLibraryExportService(
 
   async function plan(req: ExportPlanRequest): Promise<ExportPlan> {
     const { titles, resolved } = await buildTree(source, req.animeIds)
-    if (!req.target) return { titles, target: null }
+    if (!req.target) return { titles, target: null, preflight: null }
     const t = await classifyTarget(req.target, req.name, userId(), pathExists)
+    const present = presentKeys(t.manifest, resolved)
+    let pf: ExportPreflight | null = null
+    if (!t.blocked) {
+      // Every ready item the target doesn't have; the dialog narrows it to the selection.
+      const there = new Set(present)
+      const candidates = [...resolved.values()].filter((r) => !there.has(r.key))
+      const keys = new Set(candidates.map((r) => r.key))
+      const existing = (t.manifest?.items ?? []).filter((i) => !keys.has(itemKey(i)))
+      pf = publicPreflight(
+        await runPreflight(candidates, t.root, existing, probeCache(req.session))
+      )
+    }
     return {
       titles,
+      preflight: pf,
       target: {
         dir: req.target,
         root: t.root,
@@ -254,7 +352,7 @@ export function createSharedLibraryExportService(
         ...(t.ownerNickname !== undefined ? { ownerNickname: t.ownerNickname } : {}),
         blocked: t.blocked,
         free: await freeBytes(req.target),
-        present: presentKeys(t.manifest, resolved)
+        present
       }
     }
   }
@@ -271,9 +369,25 @@ export function createSharedLibraryExportService(
     const keys = [...new Set(req.selection.map((s) => itemKey(s)))]
     const ready = keys.map((k) => resolved.get(k)).filter((r) => r !== undefined)
     const missing = keys.length - ready.length
-    const toCopy = ready.filter((r) => !present.has(r.key))
-    if (toCopy.length === 0) {
+    const notThere = ready.filter((r) => !present.has(r.key))
+    if (notThere.length === 0) {
       return { ok: false, reason: 'Nothing to copy: the library already has every selected item.' }
+    }
+    const notThereKeys = new Set(notThere.map((r) => r.key))
+    const existing = (t.manifest?.items ?? []).filter((i) => !notThereKeys.has(itemKey(i)))
+
+    // Probed again here, never from the dialog's cache: the stick may have
+    // been swapped or write-protected since the plan.
+    const pf = await runPreflight(notThere, t.root, existing)
+    if (!pf.ok) return { ok: false, reason: pf.blockers.join(' ') }
+    const skippedKeys = new Set(pf.skipped)
+    const toCopy = notThere.filter((r) => !skippedKeys.has(r.key))
+    if (toCopy.length === 0) {
+      return {
+        ok: false,
+        reason:
+          'Nothing to copy: every selected file is over 4 GB, which this FAT32 drive can’t hold.'
+      }
     }
     const bytes = toCopy.reduce((n, r) => n + r.videoSize + r.subtitleSize, 0)
     const free = await freeBytes(req.target)
@@ -283,24 +397,12 @@ export function createSharedLibraryExportService(
         reason: `Not enough free space: the export needs ${requiredBytes(bytes)} bytes, the drive has ${free}.`
       }
     }
-    const copyKeys = new Set(toCopy.map((r) => r.key))
-    const existing = (t.manifest?.items ?? []).filter((i) => !copyKeys.has(itemKey(i)))
     if (existing.length + toCopy.length > CAPS.items) {
       return { ok: false, reason: `A library holds at most ${CAPS.items} items.` }
     }
 
-    const named = nameItems(
-      toCopy.map((r) => ({
-        animeId: r.animeId,
-        episodeInt: r.episodeInt,
-        translationId: r.translationId,
-        title: r.title,
-        author: r.author,
-        ext: r.ext,
-        subtitle: r.subtitlePath !== null
-      })),
-      existing
-    )
+    // Preflight named the items it kept, by S5's rule, in this order.
+    const named = pf.named
     const actor = deps.actor()
     let libraryId: string
     if (t.kind === 'add') {
@@ -350,6 +452,12 @@ export function createSharedLibraryExportService(
       doneFiles: {},
       done: [],
       failed: {},
+      skipped: Object.fromEntries(
+        notThere
+          .filter((r) => skippedKeys.has(r.key))
+          .map((r) => [r.key, { animeId: r.animeId, label: r.label, reason: TOO_LARGE_REASON }])
+      ),
+      fsType: pf.fsType,
       current: null,
       missing,
       snapshotted: [],

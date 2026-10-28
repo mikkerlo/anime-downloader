@@ -1,0 +1,8 @@
+{
+   "filesystems": [
+      {
+         "fstype": "9p",
+         "target": "/mnt/c"
+      }
+   ]
+}

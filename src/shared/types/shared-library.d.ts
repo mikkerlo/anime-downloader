@@ -359,11 +359,45 @@ interface ExportPlanRequest {
   target: string | null
   /** The library name for a new library. */
   name: string
+  /** The dialog's id: the target's filesystem and write probes run once per folder within it (#575). */
+  session?: string
+}
+
+/** The target's filesystem type, as the per-OS probe reports it (#575). */
+type ExportFsType = 'fat32' | 'exfat' | 'ntfs' | 'apfs' | 'hfs' | 'ext' | 'other' | 'unknown'
+
+/**
+ * The export preflight (#575). Item lists are keys. At plan time they cover
+ * every ready tree item the target doesn't already have, and the dialog
+ * narrows them to the selection; at start they cover the selection.
+ */
+interface ExportPreflight {
+  /** No blockers. */
+  ok: boolean
+  fsType: ExportFsType
+  /** Refuse the export (a read-only target). */
+  blockers: string[]
+  /** Never block: the drive's own warnings first, then the item ones. */
+  warnings: string[]
+  /** Warnings about the drive, not about items (the write probe's unexpected errors). */
+  driveWarnings: string[]
+  /** Items with a file over FAT32's 4 GiB − 1 bytes: not copied. */
+  skipped: string[]
+  /** Re-encodes (S6c #576) whose source is over the FAT32 limit: skipped at run time if still over. */
+  mayBeSkipped: string[]
+  /** Items the naming rule changed (shortened or made Windows-safe): S5's `naming.renamed`. */
+  renamed: string[]
+  /** The download-folder name and the library name of each renamed item. */
+  renames: Record<string, { from: string; to: string }>
+  /** Items past Windows' MAX_PATH under this root (`absoluteOverflow`). */
+  overflow: string[]
 }
 
 interface ExportPlan {
   titles: ExportTreeTitle[]
   target: ExportTarget | null
+  /** Null before a folder is picked, and for a blocked target. */
+  preflight: ExportPreflight | null
 }
 
 interface ExportStartRequest {
@@ -406,6 +440,8 @@ interface ExportJobView {
   current: string | null
   /** Items that failed (verify, a source error, a path that escapes the root). */
   failed: { key: string; label: string; reason: string }[]
+  /** Items skipped as too large for the drive (`too-large-for-filesystem`), by preflight or at run time. */
+  skipped: { key: string; label: string; reason: string }[]
   /** Selected items that had no file when the job was planned. */
   missing: number
   /** A note for the user, such as which path a resume chose. */

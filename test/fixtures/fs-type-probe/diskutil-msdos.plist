@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BusProtocol</key>
+	<string>USB</string>
+	<key>DeviceIdentifier</key>
+	<string>disk4s1</string>
+	<key>FilesystemName</key>
+	<string>MS-DOS FAT32</string>
+	<key>FilesystemType</key>
+	<string>msdos</string>
+	<key>FilesystemUserVisibleName</key>
+	<string>MS-DOS (FAT32)</string>
+	<key>MountPoint</key>
+	<string>/Volumes/MY STICK</string>
+	<key>Removable</key>
+	<true/>
+	<key>VolumeName</key>
+	<string>MY STICK</string>
+	<key>WritableVolume</key>
+	<true/>
+</dict>
+</plist>

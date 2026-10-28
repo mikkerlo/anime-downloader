@@ -85,9 +85,9 @@ const filteredLibrary = computed(() => {
 });
 
 onMounted(async () => {
-  // Before the cards, so a cached poster is their first src (#570).
-  await libraryStore.loadPosterIds();
-  await loadLibrary();
+  // Both reads in flight together; the cards wait for the poster ids, so a
+  // cached poster is their first src (#570).
+  await loadLibrary(libraryStore.loadPosterIds());
   // Hydrate Shikimori rates (cache-first) so the status tabs have data.
   if (shikimoriStore.loggedIn && rates.value.length === 0) {
     shikimoriStore
@@ -96,8 +96,10 @@ onMounted(async () => {
   }
 });
 
-async function loadLibrary(): Promise<void> {
-  library.value = await window.api.libraryGet();
+async function loadLibrary(posterIdsLoaded?: Promise<void>): Promise<void> {
+  const list = await window.api.libraryGet();
+  await posterIdsLoaded;
+  library.value = list;
   const ids = library.value.map((a) => a.id);
   const [statuses, priority] = await Promise.all([
     window.api.libraryGetStatus(ids),

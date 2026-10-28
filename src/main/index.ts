@@ -34,7 +34,7 @@ import { createOfflineKickoff, type OfflineKickoff } from './services/offline/ki
 import { createBinaryInstalls } from './lib/binary-installs'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import { createAnimePosterHandler } from './streaming/anime-poster-protocol'
-import { createRecentWatchIndex } from './lib/recent-watch'
+import { createCacheScope } from './services/anime-cache/scope'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
@@ -211,24 +211,14 @@ const playerPresenceService = createPlayerPresenceService()
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
 
-// Sub-key reads: these run per cache write and per entry in `cleanupStale`,
-// and a whole-map read would clone the library each time.
 function isDownloadedAnime(animeId: number): boolean {
-  return !!store.get(`downloadedAnime.${animeId}`)
+  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+  return !!downloaded[String(animeId)]
 }
 
-function isStarredAnime(animeId: number): boolean {
-  return !!store.get(`library.${animeId}`)
-}
-
-const recentWatch = createRecentWatchIndex({
-  readWatchProgress: () => store.get('watchProgress') as Record<string, WatchProgressEntry>
-})
-
-// Continue-watching titles count too (#570), so they keep their cache offline.
-function isCachableAnime(animeId: number): boolean {
-  return isDownloadedAnime(animeId) || isStarredAnime(animeId) || recentWatch.has(animeId)
-}
+// Starred, downloaded, or watched in the last 90 days (#570), so
+// continue-watching titles keep their cache offline.
+const { recentWatch, isCachable: isCachableAnime } = createCacheScope(store)
 
 function getDisplayName(anime: AnimeSearchResult): string {
   return anime.titles?.romaji || anime.titles?.ru || anime.title

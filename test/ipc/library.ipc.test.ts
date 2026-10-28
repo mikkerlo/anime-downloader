@@ -38,7 +38,10 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     ...initial
   })
   const deleteEntry = vi.fn()
-  register({ store, animeCacheService: { deleteEntry } } as unknown as AppDeps)
+  register({
+    store,
+    animeCacheService: { deleteEntry, isCachable: () => false }
+  } as unknown as AppDeps)
 
   const handlers = new Map<string, (...args: unknown[]) => unknown>(
     (ipcMain.handle as Mock).mock.calls.map(([channel, handler]) => [channel, handler])

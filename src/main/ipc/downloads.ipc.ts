@@ -127,7 +127,10 @@ export function register(deps: AppDeps): void {
           if (key) {
             delete downloaded[key]
             store.set('downloadedAnime', downloaded)
-            animeCacheService.deleteEntry(Number(key))
+            // Starred or recently watched titles keep their cache (#570).
+            if (!animeCacheService.isCachable(Number(key))) {
+              animeCacheService.deleteEntry(Number(key))
+            }
           }
         }
       }

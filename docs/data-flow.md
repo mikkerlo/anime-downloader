@@ -108,7 +108,10 @@ cache while a background `getAnime(id)` refreshes the data; on miss, the
 spinner stays up until the API responds. A per-mount generation counter +
 `disposed` flag prevent stale background fetches from polluting state when
 the user rapidly switches anime. Cache writes are gated on the same
-`isCachable` scope; unstarring evicts the cache entry if the anime isn't downloaded.
+`isCachable` scope; unstarring, the vanished-files sweep, deleting a downloaded
+show and the completed-show cleanup evict the cache entry (and its poster) only
+if the title is no longer cachable (not starred, not downloaded, not watched in
+the last 90 days).
 
 Cache-first, non-blocking open (#196): a cache-rendered open is fully
 cache-first — episode translations paint from `get-episodes-batch-cached` (no

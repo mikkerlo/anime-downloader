@@ -63,7 +63,8 @@ describe('PERSISTED_STORE_KEYS', () => {
     'priorityAnimeIds',
     'installId',
     'syncMeta',
-    'workOffline'
+    'workOffline',
+    'attachedLibraries'
   ] as const
 
   it('matches the frozen expected key set exactly (order and content)', () => {

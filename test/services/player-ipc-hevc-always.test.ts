@@ -60,7 +60,8 @@ describe('player.ipc — hevcTranscodeOnPlay=always short-circuit', () => {
       // Empty ffprobe path skips the fluent-ffmpeg subtitle probe, keeping the
       // test hermetic; ffmpeg must be non-empty to pass the availability gate.
       getFfmpegPath: () => '/bin/ffmpeg',
-      getFfprobePath: () => ''
+      getFfprobePath: () => '',
+      attachedLibraryService: { spawnPathFor: (p: string) => p }
     } as unknown as AppDeps
     ;(ipcMain.handle as unknown as ReturnType<typeof vi.fn>).mockClear()
     register(deps)

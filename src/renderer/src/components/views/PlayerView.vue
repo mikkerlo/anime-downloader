@@ -2186,7 +2186,8 @@ async function selectTranslation(tr: {
         props.animeName,
         activeEpisodeLabel.value,
         tr.id,
-        friendlyLabel
+        friendlyLabel,
+        props.animeId
       );
       // The ladder does not stop at `prepareMkvForPlayback`'s boundary (#280).
       // `playerCleanupRemux()` below is a BLANKET kill of every registered
@@ -2593,7 +2594,8 @@ async function goToEpisode(
         props.animeName,
         targetEp.episodeInt,
         resolvedTr.id,
-        targetEp.episodeFull
+        targetEp.episodeFull,
+        props.animeId
       );
       // Guards the second blanket `playerCleanupRemux()` in this function
       // (#280), the one inside the `.mkv` branch below.

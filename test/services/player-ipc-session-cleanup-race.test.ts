@@ -155,7 +155,8 @@ describe('player.ipc — session reaping across a close (#280)', () => {
       },
       // Empty ffprobe path skips the fluent-ffmpeg subtitle probe.
       getFfmpegPath: () => '/bin/ffmpeg',
-      getFfprobePath: () => ''
+      getFfprobePath: () => '',
+      attachedLibraryService: { spawnPathFor: (p: string) => p }
     } as unknown as AppDeps
     ;(ipcMain.handle as unknown as ReturnType<typeof vi.fn>).mockClear()
     register(deps)

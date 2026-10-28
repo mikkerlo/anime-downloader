@@ -4,6 +4,8 @@ import * as path from 'path'
 export interface AnimePosterHandlerDeps {
   /** `<userData>/poster-cache`, where the anime cache writes `<animeId>.jpg`. */
   posterDir: string
+  /** An attached Shared Library's `posters/<animeId>.jpg` (#578), checked under its root. */
+  attachedPoster?: (animeId: number) => Promise<string | null>
 }
 
 const SCHEME_PREFIX = 'anime-poster://'
@@ -20,7 +22,8 @@ export function parsePosterId(url: string): number | null {
 /**
  * Serves `anime-poster://<animeId>` from the poster disk cache (#570), so cards
  * keep their poster offline. The id is the only input and must parse as a
- * positive integer, so a request can never name a path.
+ * positive integer, so a request can never name a path. A miss falls back to
+ * an attached Shared Library's snapshot poster (#578).
  */
 export function createAnimePosterHandler(
   deps: AnimePosterHandlerDeps
@@ -32,7 +35,13 @@ export function createAnimePosterHandler(
     try {
       data = await fs.promises.readFile(path.join(deps.posterDir, `${id}.jpg`))
     } catch {
-      return new Response('Poster not cached', { status: 404 })
+      const attached = await deps.attachedPoster?.(id).catch(() => null)
+      try {
+        if (!attached) throw new Error('no attached poster')
+        data = await fs.promises.readFile(attached)
+      } catch {
+        return new Response('Poster not cached', { status: 404 })
+      }
     }
     return new Response(new Uint8Array(data), {
       status: 200,

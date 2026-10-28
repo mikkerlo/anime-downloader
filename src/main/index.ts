@@ -50,6 +50,7 @@ import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
 import { createPlayerPresenceService } from './services/player-presence'
+import { createAttachedLibraryService } from './services/attached-library'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -173,7 +174,8 @@ const STORE_DEFAULTS = {
   priorityAnimeIds: [] as string[],
   installId: '',
   syncMeta: { titles: {}, rates: {} } as SyncMeta,
-  workOffline: false
+  workOffline: false,
+  attachedLibraries: {} as Record<string, AttachedLibraryRecord>
 }
 
 applyApiBaseOverrides(process.env, app.isPackaged)
@@ -208,6 +210,12 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
 const mp4StatsService = createMp4StatsService({ store })
 const playerLockService = createPlayerLockService()
 const playerPresenceService = createPlayerPresenceService()
+// Attached Shared Libraries (#578). Their roots live only in this service.
+const attachedLibraryService = createAttachedLibraryService({
+  store,
+  checkFfmpeg: () => checkFfmpeg(),
+  onChanged: () => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED)
+})
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
 
@@ -619,7 +627,8 @@ function registerIpcHandlers(): void {
     playerLockService,
     playerPresenceService,
     offlineService,
-    recentWatch
+    recentWatch,
+    attachedLibraryService
   })
 }
 
@@ -686,12 +695,21 @@ async function bootstrap(): Promise<void> {
   )
   protocol.handle(
     'anime-poster',
-    createAnimePosterHandler({ posterDir: animeCacheService.getPosterCacheDir() })
+    createAnimePosterHandler({
+      posterDir: animeCacheService.getPosterCacheDir(),
+      attachedPoster: (id) => attachedLibraryService.posterFor(id)
+    })
   )
 
   animeCacheService.cleanupStale()
   store.migrateWatchProgressV2()
   store.ensureInstallId()
+  // Re-reads the attached Shared Libraries (#578) in the background; reading
+  // never writes to a drive.
+  void attachedLibraryService
+    .init()
+    .then(() => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED))
+    .catch((err) => console.error('[shared-library] init failed:', err))
 
   // Resolved by the background ffmpeg-ensure task below. The episode-complete
   // hook awaits it, so a download finishing before ffmpeg is ready still

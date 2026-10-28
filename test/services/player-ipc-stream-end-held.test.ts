@@ -150,7 +150,8 @@ describe('player.ipc — a run end is held until stream-start has flushed the pr
       playerLockService: { open: (): void => {}, close: (): void => {} },
       // Empty ffprobe path skips the fluent-ffmpeg subtitle probe.
       getFfmpegPath: () => '/bin/ffmpeg',
-      getFfprobePath: () => ''
+      getFfprobePath: () => '',
+      attachedLibraryService: { spawnPathFor: (p: string) => p }
     } as unknown as AppDeps
     ;(ipcMain.handle as unknown as ReturnType<typeof vi.fn>).mockClear()
     register(deps)

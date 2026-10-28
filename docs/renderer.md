@@ -29,6 +29,13 @@ src/renderer/src/
                                 button that turns Work offline off (manual) or probes now (auto, "Retry")
       Sidebar.vue
       SidebarUpdateBanner.vue   Update prompt pinned above the profile chip (reads settings store updateStatus)
+    shared-library/            Opening and playing a Shared Library (#578)
+      OpenLibraryDialog.vue     "Open Shared Library…": pick, choose among several, identity check, attach
+      IdentityWarning.vue       Someone else's library, or the no-account videos-only / claim choice
+      FfmpegMissingBanner.vue   props { mkvCount }
+      SharedLibrariesTab.vue    Library → Shared Libraries: a section and title grid per attached library
+      DriveEpisodes.vue         A title's drive episodes with Play from drive (detail page)
+      shared-library.css        Imported scoped into each of them
     detail/                    AnimeDetailView sub-components + injection keys
       AnimeDetailShell.vue (= views/AnimeDetailView.vue acts as shell)
       ChronologyPanel.vue
@@ -57,7 +64,7 @@ src/renderer/src/
       WatchTogetherTab.vue
       DebugTab.vue
   composables/                 Reactive logic (16 modules — see below)
-  stores/                      Pinia stores (6 stores — see below)
+  stores/                      Pinia stores (8 stores — see below)
   assets/                      Shared CSS
     theme.css                  Global design tokens + base + shared primitives (imported once in main.ts)
     player-menus.css           Imported scoped into each component
@@ -68,7 +75,7 @@ src/renderer/src/
 
 ## Pinia stores
 
-The six stores in `src/renderer/src/stores/` own cross-view state and, where applicable, the disposable IPC subscriptions for their domain (Phase 4 ownership rule — see [IPC](./ipc.md#broadcast-subscription-contract-phase-4-slice-4a-111)).
+The stores in `src/renderer/src/stores/` own cross-view state and, where applicable, the disposable IPC subscriptions for their domain (Phase 4 ownership rule — see [IPC](./ipc.md#broadcast-subscription-contract-phase-4-slice-4a-111)).
 
 | Store | File | State | Subscriptions owned |
 |---|---|---|---|
@@ -78,6 +85,7 @@ The six stores in `src/renderer/src/stores/` own cross-view state and, where app
 | `useShikimoriStore` | `shikimori.ts` | `user`, `profile`, `friends`, `recommendations`, `loggedIn` (computed), `rates`, `animeDetails`, `syncStatus`, `offlineQueueLength` | `onShikimoriRateUpdated`, `onShikimoriRatesRefreshed`, `onShikimoriProfileRefreshed`, `onShikimoriFriendsRefreshed`, `onShikimoriRecommendationsRefreshed`, `onShikimoriAnimeDetailsUpdated`, `onShikimoriOfflineQueueChanged`, `onShikimoriSyncStatus` (lifetime-scoped) |
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
 | `useOfflineStore` | `offline.ts` | `state` (`OfflineState`), `isOffline`/`isManual` (computed), `retrying`, `setManual(on)`, `retry()` — backs the Sidebar Offline pill and the Settings › General Work offline switch (#567), `OfflineNotice`, and each view's offline state (#568, see below) | `onOfflineStateChanged` (lifetime-scoped) |
+| `useSharedLibrariesStore` | `shared-libraries.ts` | `libraries` (`AttachedLibraryInfo[]`), `attachedCount`, `librariesByAnimeId` (computed), `ffmpegAvailable` (read through `ffmpeg:check` at creation, on window focus and before each `.mkv` Play), `focusTab` (Settings' "Show in Library"), `refresh()`, `checkFfmpeg()`, `playTarget(title)` — backs Library → Shared Libraries, the "Also on <library>" badge and the detail page's attached form (#578) | `onSharedLibrariesChanged` (lifetime-scoped) |
 | `useSyncplayStore` | `syncplay.ts` | `status` (`SyncplayStatus`), `roomUsers`, `isActive` (computed), `refresh()` re-seed from `get-status`/`get-room-users` | `onSyncplayConnectionStatus`, `onSyncplayRoomUsers` (lifetime-scoped) |
 
 Stores singleton-own their broadcast subscriptions and never dispose them — they live for the app's lifetime. Component-local subscriptions (per-anime, per-player-instance) bind to `onUnmounted` instead. See [IPC](./ipc.md) for the full ownership rule and the CI gate.
@@ -113,6 +121,12 @@ Global reactive logic that doesn't belong on a Pinia store goes into `src/render
 ### App-level
 
 - **`useKeyboardShortcuts({ bindings, suppressWhen, onAction })`** — binds a window-level keydown listener against the settings store's resolved bindings and dispatches the small set of app-wide actions (`back` / `focusSearch` / `goDownloads`). App.vue invokes it once at setup; the composable owns the event-listener lifecycle. (Phase 4 slice 4e)
+
+### Shared Library (#578)
+
+- **`usePlayFromDrive()`** — `play(libraryId, animeId, { episodeInt, translationId }, detail?)`: re-checks ffmpeg before an `.mkv`, resolves through `player:find-local-file` with the anime id (a local copy still wins; main `realpath`-checks the drive file), then opens the player with the drive's episodes as `allEpisodes`, or the file in the system player when `playerMode` isn't `builtin`. Returns why it couldn't play, or null.
+
+**Library → Shared Libraries.** `LibraryView` pushes a `shared` tab into `statusTabs` while a library is attached, and keeps it while it is selected (as `priority` is kept), so detaching the last library doesn't strand the filter. `showFilterRow` counts attached libraries, and the selected tab, as content, because the local library is empty on a fresh PC. The `shared` branch renders `SharedLibrariesTab` ahead of every empty-library message. A downloaded title that an attached library also holds gets an "Also on <library>" badge in All and the status tabs, and an "On this PC" badge on the drive's card. `AnimeDetailView` renders a title that only a drive holds in its attached form (the snapshot, `DriveEpisodes`, no network, no `animeCache` entry); a downloaded title keeps the normal page, with an "On <library>" group for the episodes only the drive has.
 
 ### AnimeDetailView
 

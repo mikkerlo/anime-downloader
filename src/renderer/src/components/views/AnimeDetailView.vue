@@ -21,6 +21,8 @@ import FriendsPanel from '../detail/FriendsPanel.vue';
 import ShikimoriPanel from '../detail/ShikimoriPanel.vue';
 import SkipDetectionPanel from '../detail/SkipDetectionPanel.vue';
 import EpisodeList from '../detail/EpisodeList.vue';
+import DriveEpisodes from '../shared-library/DriveEpisodes.vue';
+import { useSharedLibrariesStore } from '../../stores/shared-libraries';
 import {
   ShikimoriKey,
   SkipDetectionKey,
@@ -44,6 +46,32 @@ const downloadsStore = useDownloadsStore();
 
 const anime = ref<AnimeDetail | null>(null);
 const loading = ref(true);
+
+// Attached Shared Libraries (#578). A title that is only on a drive renders in
+// the attached form, from the drive's snapshot, with no network and no
+// animeCache entry. A downloaded title keeps the normal page, plus an
+// "On <library>" group for the episodes only the drive has.
+const sharedStore = useSharedLibrariesStore();
+const driveTitles = ref<AttachedTitleDetail[]>([]);
+const attachedOnly = ref(false);
+const attachedAnime = computed(() => driveTitles.value[0]?.anime ?? null);
+const localEpisodeInts = computed(
+  () =>
+    new Set(
+      Object.entries(fileStatus.value)
+        .filter(([, files]) => files.length > 0)
+        .map(([episodeInt]) => episodeInt)
+    )
+);
+
+async function loadDriveTitles(): Promise<void> {
+  if (sharedStore.attachedCount === 0) await sharedStore.refresh().catch(() => {});
+  const libs = sharedStore.librariesByAnimeId.get(props.animeId) ?? [];
+  const titles = await Promise.all(
+    libs.map((l) => window.api.sharedLibraryGetTitle(l.libraryId, props.animeId).catch(() => null))
+  );
+  driveTitles.value = titles.filter((t): t is AttachedTitleDetail => !!t);
+}
 
 const prefs = useAnimeDetailPrefs();
 const { translationType, selectedAuthor } = prefs;
@@ -236,6 +264,16 @@ onMounted(async () => {
     })
     .catch(() => {});
 
+  await loadDriveTitles().catch(() => {});
+  if (
+    driveTitles.value.length > 0 &&
+    !(await window.api.libraryIsDownloaded(props.animeId).catch(() => false))
+  ) {
+    attachedOnly.value = true;
+    loading.value = false;
+    return;
+  }
+
   if (!(await loadDetail())) return;
 
   // Render the queue snapshot the store already holds, then watch for any
@@ -270,7 +308,7 @@ onMounted(async () => {
 // Back online: a cache paint refreshes once, as a reopen would; with nothing
 // painted (the offline no-cache notice) the page loads once.
 watch(appOffline, (offline) => {
-  if (offline || disposed) return;
+  if (offline || disposed || attachedOnly.value) return;
   if (anime.value) {
     if (dataSource.value === 'cache') void refreshAnimeInBackground(loadGeneration);
     return;
@@ -814,6 +852,13 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
             :poster-url="posterSrc"
           />
 
+          <DriveEpisodes
+            v-for="t in driveTitles"
+            :key="t.libraryId"
+            :title="t"
+            :exclude="localEpisodeInts"
+          />
+
           <SkipDetectionPanel :filtered-episodes="filteredEpisodes" />
         </div>
 
@@ -838,6 +883,48 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
             :related-loading="relatedLoading"
           />
         </aside>
+      </div>
+    </div>
+    <div
+      v-else-if="attachedOnly && attachedAnime"
+      class="body attached-form"
+      data-testid="attached-detail"
+    >
+      <div class="detail-hero">
+        <div class="detail-top">
+          <div class="detail-poster">
+            <img :src="attachedAnime.posterUrlSmall" :alt="attachedAnime.title" />
+          </div>
+          <div class="detail-meta">
+            <button class="btn btn-ghost btn-sm back-btn" @click="libraryStore.closeAnime()">
+              Back
+            </button>
+            <h1>{{ attachedAnime.title }}</h1>
+            <div
+              v-if="attachedAnime.titles?.romaji || attachedAnime.titles?.ja"
+              class="detail-romaji"
+            >
+              {{ attachedAnime.titles.romaji || attachedAnime.titles.ja }}
+            </div>
+            <div class="detail-tags">
+              <span class="chip neutral">On a Shared Library</span>
+              <span v-if="attachedAnime.typeTitle" class="chip neutral">{{
+                attachedAnime.typeTitle
+              }}</span>
+            </div>
+            <div class="detail-facts">
+              <div v-if="attachedAnime.year" class="fact">
+                <span class="f-label">Year</span
+                ><span class="f-value">{{ attachedAnime.year }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="detail-cols">
+        <div class="ep-section">
+          <DriveEpisodes v-for="t in driveTitles" :key="t.libraryId" :title="t" />
+        </div>
       </div>
     </div>
     <OfflineNotice v-else-if="appOffline" reason="This title needs an internet connection" />

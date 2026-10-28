@@ -158,7 +158,8 @@ export function register({
   playerLockService,
   playerPresenceService,
   getFfmpegPath,
-  getFfprobePath
+  getFfprobePath,
+  attachedLibraryService
 }: AppDeps): void {
   // Watch-while-downloading (#63): the renderer reports which local file it
   // has open so DownloadManager defers the .part rename + merge meanwhile.
@@ -232,13 +233,36 @@ export function register({
       animeName: string,
       episodeInt: string,
       translationId: number,
-      episodeLabel: string
+      episodeLabel: string,
+      animeId?: number
     ) => {
+      // An attached Shared Library's copy (#578), asked only where the local
+      // resolution below yields null, so a local file or a growing local
+      // `.part` always wins. Keyed by ids through the manifest's `items[].path`,
+      // never by a name rebuilt from `animeName`, and `realpath`-checked on
+      // every call.
+      const fromDrive = async (): Promise<PlayerLocalFileResult | null> => {
+        if (typeof animeId !== 'number' || !Number.isSafeInteger(animeId) || animeId < 1) {
+          return null
+        }
+        const hit = await attachedLibraryService.resolveItem(animeId, episodeInt, translationId)
+        if (!hit) return null
+        let subtitleContent: string | null = null
+        if (hit.subtitlePath) {
+          try {
+            subtitleContent = await fs.promises.readFile(hit.subtitlePath, 'utf-8')
+          } catch {
+            /* ignore */
+          }
+        }
+        return { filePath: hit.path, subtitleContent }
+      }
+
       // Two-way lock (#63): while ffmpeg is merging this translation, the
       // .mkv at the final path is half-written and the source .mp4 is about
       // to be unlinked — neither is safe to open. Fall back to CDN streaming;
       // _mergeAll defers merges of files the player grabs first.
-      if (downloadManager.getMergeStatus(translationId) === 'merging') return null
+      if (downloadManager.getMergeStatus(translationId) === 'merging') return fromDrive()
 
       // Watch-while-downloading (#63): a translation still in flight has no
       // downloadedEpisodes metadata and no final file — resolve the growing
@@ -286,7 +310,7 @@ export function register({
           }
         }
       }
-      if (!meta) return findPartial()
+      if (!meta) return (await findPartial()) ?? fromDrive()
 
       const animeDirName = sanitizeFilename(animeName)
       const padded = episodeInt.padStart(2, '0')
@@ -352,7 +376,7 @@ export function register({
       }
       // Meta existed (e.g. an older completed download of this translation)
       // but no file survived on disk — a fresh re-download may be in flight.
-      return findPartial()
+      return (await findPartial()) ?? fromDrive()
     }
   )
 
@@ -362,12 +386,14 @@ export function register({
     CHANNELS.PLAYER_REMUX_MKV,
     async (
       _event,
-      mkvPath: string
+      filePath: string
     ): Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }> => {
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
+      if (!fs.existsSync(filePath)) return { error: 'File not found' }
+      // ffmpeg's file argument: `\\?\` under an attached root on Windows (#578).
+      const mkvPath = attachedLibraryService.spawnPathFor(filePath)
 
       fs.mkdirSync(streamingService.tmpDir, { recursive: true })
 
@@ -416,7 +442,7 @@ export function register({
     CHANNELS.PLAYER_REMUX_MKV_STREAM,
     async (
       event,
-      mkvPath: string,
+      filePath: string,
       initialSeek?: number
     ): Promise<MseOpenResult | { requiresTranscode: true } | { error: string }> => {
       // Captured at handler *entry*, not module load: every legitimate
@@ -427,7 +453,10 @@ export function register({
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
+      if (!fs.existsSync(filePath)) return { error: 'File not found' }
+      // The session's ffmpeg / ffprobe argument, for this spawn and every
+      // respawn: `\\?\` under an attached root on Windows (#578).
+      const mkvPath = attachedLibraryService.spawnPathFor(filePath)
 
       const probe = await streamingService.probeMkvForMse(mkvPath)
       if (!probe || !probe.streamCopyMimeType) return { error: 'Codecs not supported for MSE' }
@@ -579,14 +608,15 @@ export function register({
     CHANNELS.PLAYER_REMUX_MKV_STREAM_TRANSCODE,
     async (
       event,
-      mkvPath: string,
+      filePath: string,
       initialSeek?: number
     ): Promise<MseOpenResult | { error: string }> => {
       const openedAtGeneration = cleanupGeneration
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
+      if (!fs.existsSync(filePath)) return { error: 'File not found' }
+      const mkvPath = attachedLibraryService.spawnPathFor(filePath)
 
       const probe = await streamingService.probeMkvForMse(mkvPath)
       if (!probe) return { error: 'Probe failed' }

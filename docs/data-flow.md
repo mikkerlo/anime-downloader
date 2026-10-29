@@ -390,6 +390,17 @@ the first. `onEpisodeComplete` and `onQueueComplete` stay single slots: nothing
 else subscribes to them. `playerPresenceService.onRelease` (`docs/ffmpeg.md`) is
 a list for the same reason.
 
+**Export ↔ download queue (#577).** An export that pre-fetches missing episodes
+enqueues them through `downloadManager.enqueue`, after `addDownloadedAnime`, as
+the detail page does; they are ordinary downloads from then on. While the job
+runs it adds one listener to each list, `onVideoDownloaded` and
+`onMergeComplete`, and removes both when it ends, pauses or is cancelled. The
+listeners only wake the job's next readiness evaluation
+(`evaluatePrefetchItem`, `docs/shared-library.md` "Pre-fetch"); the decision
+reads the queue rows (`getItem`), `getMergeStatus`, `isMergeCycleActive()`,
+`hasHeldMerge()` and episode completion's `isMergeExpected`, so it never
+depends on an event having fired. The job never calls `mergeCompleted`.
+
 **One error policy for all four (#428), per listener.** Every listener is
 dispatched through its own call of the manager's private `dispatchHook`, so one
 failing listener can't stop another, and a rejecting `onVideoDownloaded`

@@ -392,7 +392,52 @@ interface ExportTreeTitle {
   name: string
   translations: ExportTreeTranslation[]
   /** Episodes in the title's episode list with no download in any translation. */
-  notDownloaded: { episodeInt: string; label: string }[]
+  notDownloaded: ExportNotDownloaded[]
+}
+
+/** A translation a not-downloaded episode can be pre-fetched in (#577), from the cached episode data. */
+interface ExportPrefetchOption {
+  translationId: number
+  translationType: string
+  author: string
+  /** The download's height: the probed one, else the declared one. */
+  height: number
+  /** The estimate (shown with "~"), or null when it's unknown. */
+  sizeBytes: number | null
+}
+
+/** A not-downloaded episode: selectable for pre-fetch (#577) when it has options and the plan's gate is `ok`. */
+interface ExportNotDownloaded {
+  episodeInt: string
+  label: string
+  /** The default (the title's downloaded translation) first; empty when the cached list has none. */
+  options: ExportPrefetchOption[]
+  /** Why it can't be pre-fetched whatever the gate (a stale episode list); null otherwise. */
+  unavailable: string | null
+}
+
+/**
+ * Whether not-downloaded episodes can be pre-fetched (#577): `offline` and
+ * `no-token` keep them disabled; `unavailable` when this PC can't enqueue.
+ */
+type ExportPrefetchGate = 'ok' | 'offline' | 'no-token' | 'unavailable'
+
+/** A pre-fetched item on the job card (#577). */
+interface ExportPrefetchView {
+  key: string
+  label: string
+  state:
+    | 'waiting-download'
+    | 'downloading'
+    | 'waiting-connection'
+    | 'waiting-merge'
+    | 'copying'
+    | 'done'
+    | 'failed'
+  /** The download's progress while `downloading`. */
+  percent: number
+  /** "Subtitles failed to download", or null. */
+  warning: string | null
 }
 
 /**
@@ -430,6 +475,12 @@ interface ExportTarget {
   present: string[]
   /** Of `present`, the unmerged pairs the library has as an `.mkv` an export merged (#623). */
   presentMerged: string[]
+  /**
+   * Not-downloaded episodes the library already has (#577), as the item keys of
+   * their translations it holds: shown as on the drive, never pre-fetched.
+   * Absent means none.
+   */
+  presentMissing?: string[]
 }
 
 interface ExportPlanRequest {
@@ -502,10 +553,16 @@ interface ExportPlan {
   preflight: ExportPreflight | null
   /** Whether Merge into MKV can be offered (#576). */
   merge: ExportMergeSupport
+  /** Whether not-downloaded episodes can be pre-fetched (#577). */
+  prefetch: ExportPrefetchGate
+  /** Free bytes where pre-fetched episodes download (the hot root), or null when unknown. */
+  localFree: number | null
 }
 
 interface ExportStartRequest {
   selection: ExportSelectionItem[]
+  /** Not-downloaded episodes to download first, each in the translation picked (#577). */
+  prefetch?: ExportSelectionItem[]
   target: string
   name: string
   /** `copy-as-is` when left out; `merge` falls back to it on a PC without ffmpeg (#576). */
@@ -554,6 +611,8 @@ interface ExportJobView {
   skipped: { key: string; label: string; reason: string }[]
   /** Selected items that had no file when the job was planned. */
   missing: number
+  /** Pre-fetched items (#577), in start order; main always sends it. */
+  prefetch?: ExportPrefetchView[]
   /** A note for the user, such as which path a resume chose. */
   note: string | null
   /** The job-level error (`failed`). */

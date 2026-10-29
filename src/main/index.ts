@@ -23,7 +23,7 @@ import {
 import * as shikimori from './shikimori'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
-import { createEpisodeCompletionHandlers } from './lib/episode-completion'
+import { createEpisodeCompletionHandlers, isMergeExpected } from './lib/episode-completion'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import type { ParkedQueues } from './lib/shikimori-queue'
 import { applyApiBaseOverrides, shikimoriOrigin, smotretApiBase } from './lib/api-bases'
@@ -420,6 +420,15 @@ const shikimoriSyncService = createShikimoriSyncService({
 shikimori.setOnSessionExpired(() => shikimoriSyncService.broadcastSyncStatus())
 let downloadManager: DownloadManager
 
+// Resolved by the background ffmpeg-ensure task in `bootstrap()`. The
+// episode-complete hook awaits it, so a download finishing before ffmpeg is
+// ready still merges correctly instead of silently skipping the merge; the
+// export's pre-fetch (#577) awaits it before deciding whether a merge is coming.
+let resolveFfmpegReady!: (info: FfmpegInfo) => void
+const ffmpegReady = new Promise<FfmpegInfo>((resolve) => {
+  resolveFfmpegReady = resolve
+})
+
 // Export to a Shared Library (#574). Reads the merge status lazily, so the
 // manager can be constructed later in `bootstrap()`.
 const sharedLibraryExport = createSharedLibraryExportService({
@@ -447,6 +456,32 @@ const sharedLibraryExport = createSharedLibraryExportService({
         ffprobePath: getFfprobePath()
       }),
     cancel: (jobId) => downloadManager.cancelExportMerge(jobId)
+  },
+  // Pre-fetch (#577): missing episodes go through the ordinary download queue,
+  // and the job watches it through the listener lists (#574).
+  downloads: {
+    enqueue: (requests) => downloadManager.enqueue(requests),
+    getItem: (id) => downloadManager.getItem(id),
+    isMergeCycleActive: () => downloadManager.isMergeCycleActive(),
+    hasHeldMerge: () => downloadManager.hasHeldMerge(),
+    onVideoDownloaded: (cb) => downloadManager.onVideoDownloaded(() => cb()),
+    onMergeComplete: (cb) => downloadManager.onMergeComplete(() => cb())
+  },
+  mergeExpected: async () => {
+    const ffmpegInfo = await ffmpegReady
+    return isMergeExpected({
+      autoMerge: store.get('autoMerge') as boolean,
+      ffmpegInfo,
+      ffmpegPath: getFfmpegPath()
+    })
+  },
+  isOffline,
+  // The storage roots the episode-file scan reads, hot first.
+  downloadRoots: () => {
+    const cold = coldStorageService.isAdvanced() ? coldStorageService.getColdStorageDir() : null
+    return cold
+      ? [coldStorageService.getDownloadDir(), cold]
+      : [coldStorageService.getDownloadDir()]
   }
 })
 
@@ -767,14 +802,6 @@ async function bootstrap(): Promise<void> {
     .init()
     .then(() => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED))
     .catch((err) => console.error('[shared-library] init failed:', err))
-
-  // Resolved by the background ffmpeg-ensure task below. The episode-complete
-  // hook awaits it, so a download finishing before ffmpeg is ready still
-  // merges correctly instead of silently skipping the merge.
-  let resolveFfmpegReady!: (info: FfmpegInfo) => void
-  const ffmpegReady = new Promise<FfmpegInfo>((resolve) => {
-    resolveFfmpegReady = resolve
-  })
 
   downloadManager = new DownloadManager(
     coldStorageService.getDownloadDir(),

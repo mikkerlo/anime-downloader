@@ -17,6 +17,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import {
   createEpisodeCompletionHandlers,
+  isMergeExpected,
   type EpisodeCompletionDeps,
   type EpisodeCompletionHandlers,
   type EpisodeCompletionStore
@@ -810,6 +811,29 @@ describe('episode-completion — the wiring left in src/main/index.ts', () => {
     const release = text.indexOf('playerPresenceService.onRelease(')
     expect(release).toBeGreaterThan(-1)
     expect(text.slice(release, release + 200)).toContain('.resumeHeldMerges()')
+  })
+})
+
+describe('isMergeExpected (#577)', () => {
+  it('is autoMerge and ffmpeg available and a path, nothing less', () => {
+    const on = { autoMerge: true, ffmpegInfo: { available: true }, ffmpegPath: '/ff' }
+    expect(isMergeExpected(on)).toBe(true)
+    expect(isMergeExpected({ ...on, autoMerge: false })).toBe(false)
+    expect(isMergeExpected({ ...on, ffmpegInfo: { available: false } })).toBe(false)
+    expect(isMergeExpected({ ...on, ffmpegPath: '' })).toBe(false)
+  })
+
+  it('is what the export’s pre-fetch reads in src/main/index.ts, after ffmpegReady', () => {
+    // The two can't disagree only if the export asks the same function.
+    const text = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'),
+      'utf-8'
+    )
+    const at = text.indexOf('mergeExpected: async () => {')
+    expect(at).toBeGreaterThan(-1)
+    const body = text.slice(at, at + 300)
+    expect(body.indexOf('await ffmpegReady')).toBeGreaterThan(-1)
+    expect(body.indexOf('isMergeExpected(')).toBeGreaterThan(body.indexOf('await ffmpegReady'))
   })
 })
 

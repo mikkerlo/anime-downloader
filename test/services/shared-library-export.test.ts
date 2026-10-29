@@ -17,6 +17,7 @@ import { LIBRARY_DIR, readMeta } from '../../src/main/lib/shared-library/read'
 import { nodeFs } from '../../src/main/services/shared-library-export/copy'
 import {
   BLOCKED_OWN_METADATA,
+  STALE_EPISODE_LIST,
   classifyTarget
 } from '../../src/main/services/shared-library-export/plan'
 import {
@@ -100,7 +101,10 @@ describe('the plan: selection → files and missing items', () => {
       fs.statSync(path.join(env.cold, 'Show', 'Show - 02 [Studio].mkv')).size
     )
     expect(eps.find((e) => e.episodeInt === '1')!.label).toBe('1 серия')
-    expect(t.notDownloaded).toEqual([{ episodeInt: '7', label: '7 серия' }])
+    // No cached translations for it: it can't be pre-fetched (#577).
+    expect(t.notDownloaded).toEqual([
+      { episodeInt: '7', label: '7 серия', options: [], unavailable: STALE_EPISODE_LIST }
+    ])
 
     // A start copies only the ready ones and counts the rest as missing.
     const r = await env.svc.start({

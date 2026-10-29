@@ -725,7 +725,8 @@ describe('StreamingService exit classification (#582)', () => {
     ffmpeg: string,
     classifyExit?: Classify,
     ready = true,
-    afterEnd?: (
+    /** Called with the spawned process, to kill it at the moment a test needs. */
+    onSpawn?: (
       proc: ReturnType<typeof createStreamingService>['spawnFfmpegForSession'] extends (
         ...a: never[]
       ) => infer P
@@ -763,7 +764,7 @@ describe('StreamingService exit classification (#582)', () => {
     })
     const session = mkSession({ ready, inputPath: '/drive/show.mkv', mkvPath: '\\\\?\\X' })
     const proc = svc.spawnFfmpegForSession(session, event, 'sid', 0)
-    if (afterEnd) proc.stdout?.on('end', () => setTimeout(() => afterEnd(proc), 20))
+    onSpawn?.(proc)
     await new Promise<void>((res) => proc.on('close', () => res()))
     await new Promise((r) => setTimeout(r, 10))
     return { sent, session, inputs, hints }
@@ -848,8 +849,28 @@ describe('StreamingService exit classification (#582)', () => {
     const file = path.join(dir, 'ffmpeg-held')
     // Writes, closes stdout, then hangs until killed.
     fs.writeFileSync(file, '#!/bin/sh\nprintf x\nexec 1>&-\nexec sleep 30\n', { mode: 0o755 })
-    const { sent, session } = await run(file, unclassified, true, (proc) => proc.kill('SIGKILL'))
+    const { sent, session } = await run(file, unclassified, true, (proc) =>
+      proc.stdout?.on('end', () => setTimeout(() => proc.kill('SIGKILL'), 20))
+    )
     expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+    expect(session.done).toBe(true)
+  })
+
+  it('an outside SIGKILL whose exit comes before stdout ends also finishes the end, never "code null" (review r4408200621)', async () => {
+    const file = path.join(dir, 'ffmpeg-held-open')
+    // Writes, then hangs; a background child keeps stdout open past the kill.
+    fs.writeFileSync(file, '#!/bin/sh\nprintf x\n(sleep 0.4) &\nexec sleep 30\n', {
+      mode: 0o755
+    })
+    const order: string[] = []
+    const { sent, session } = await run(file, unclassified, true, (proc) => {
+      proc.on('exit', () => order.push('exit'))
+      proc.stdout?.on('end', () => order.push('end'))
+      proc.stdout?.once('data', () => setTimeout(() => proc.kill('SIGKILL'), 20))
+    })
+    expect(order).toEqual(['exit', 'end'])
+    expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+    expect(session.error).toBeNull()
     expect(session.done).toBe(true)
   })
 

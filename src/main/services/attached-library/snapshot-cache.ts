@@ -24,6 +24,7 @@
 import { promises as fsp } from 'fs'
 import * as path from 'path'
 import { ATTACHED_POSTER_MAX_BYTES } from '../../streaming/anime-poster-protocol'
+import { DISCONNECT_CODES } from './writable'
 
 export const SNAPSHOT_DIR = 'shared-library-cache'
 export const SNAPSHOT_POSTER_MAX_BYTES = ATTACHED_POSTER_MAX_BYTES
@@ -48,8 +49,11 @@ export interface SnapshotInput {
   metas: Map<number, SharedLibraryMeta>
   /** The poster ids to copy. */
   posters: Iterable<number>
-  /** The checked drive path of one poster, or null. */
-  posterSource: (animeId: number) => Promise<string | null>
+  /**
+   * The checked drive path of one poster; `'skip'` when it is bad for good
+   * (it leads outside the root), null when it is gone (the drive went away).
+   */
+  posterSource: (animeId: number) => Promise<string | 'skip' | null>
 }
 
 export interface SnapshotCacheEntry {
@@ -183,26 +187,33 @@ export function createSnapshotCache(deps: SnapshotCacheDeps): SnapshotCache {
       await fsp.mkdir(staging, { recursive: true })
       const posters: number[] = []
       let posterBytes = 0
-      // A poster the read listed that can't be read now: the drive went away
-      // (or changed) mid-save. Over the cap is not that, just not cached.
+      // A poster the read listed that is gone now, or whose read fails the way
+      // a removed device fails: the drive went away mid-save. A poster that is
+      // bad for good (it leads outside the root, `EACCES`, a directory, over
+      // the cap) is just not cached, and the save still completes.
       let incomplete = false
       for (const animeId of input.posters) {
         if (!Number.isSafeInteger(animeId) || animeId < 1) continue
+        let data: Buffer | null
         try {
           const src = await input.posterSource(animeId)
+          if (src === 'skip') continue
           if (!src) {
             incomplete = true
             continue
           }
           // The drive is untrusted: the cap is checked on the bytes read.
-          const data = await readCapped(src, posterMax)
-          if (!data) continue
-          await fsp.writeFile(path.join(staging, `${animeId}.jpg`), data)
-          posters.push(animeId)
-          posterBytes += data.length
-        } catch {
-          incomplete = true
+          data = await readCapped(src, posterMax)
+        } catch (err) {
+          if (DISCONNECT_CODES.has((err as NodeJS.ErrnoException | null)?.code ?? '')) {
+            incomplete = true
+          }
+          continue
         }
+        if (!data) continue
+        await fsp.writeFile(path.join(staging, `${animeId}.jpg`), data)
+        posters.push(animeId)
+        posterBytes += data.length
       }
       if (incomplete && prev && !prev.evicted) {
         // Keep the complete cache; the next fresh read saves this generation.

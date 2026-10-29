@@ -974,7 +974,9 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         endAwaitsExit = true
         return
       }
-      // The exit came first, clean (a failed one already settled the run).
+      // The exit came first: clean, or an outside SIGKILL that the exit
+      // handler left to us (a failed exit already settled the run).
+      if (proc.signalCode === 'SIGKILL') return finishEnd()
       settle(proc.exitCode, classify)
     })
 

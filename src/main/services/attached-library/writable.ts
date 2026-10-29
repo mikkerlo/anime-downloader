@@ -12,6 +12,15 @@ import { LIBRARY_DIR } from '../../lib/shared-library/read'
 /** The errors that mean "this medium refuses writes". */
 export const READ_ONLY_CODES: ReadonlySet<string> = new Set(['EROFS', 'EACCES', 'EPERM'])
 
+/** The read errors that mean "the drive went away", under an attached root (#582). */
+export const DISCONNECT_CODES: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'EIO',
+  'ENXIO',
+  'ENODEV',
+  'EBUSY'
+])
+
 export type WritableVerdict =
   | { kind: 'writable' }
   | { kind: 'read-only'; code: string }

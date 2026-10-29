@@ -354,6 +354,85 @@ describe('a drive lost while the posters are copied (review r4407995047)', () =>
   })
 })
 
+describe('a poster that is bad for good is skipped, not a lost drive (review r4408200616)', () => {
+  const chmodded: string[] = []
+  afterEach(() => {
+    for (const f of chmodded.splice(0)) fs.chmodSync(f, 0o644)
+  })
+
+  const indexAt = (dir: string): Record<string, unknown> =>
+    JSON.parse(fs.readFileSync(path.join(dir, FIXTURE_LIBRARY_ID, 'index.json'), 'utf8'))
+
+  /** The fixture with a second poster, for Dungeon Meshi (202), spoiled by `spoil`. */
+  async function withBadPoster(spoil: (poster: string) => void): Promise<void> {
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    const svc = make(newStore(), cache)
+    const root = copyFixtureLibrary()
+    const bad = path.join(root, '.anime-dl', 'posters', '202.jpg')
+    fs.writeFileSync(bad, Buffer.alloc(500, 2))
+    spoil(bad)
+    await attach(svc, root)
+    await cache.idle()
+    // The save completed, without that poster.
+    expect(indexAt(dir)).toMatchObject({ generation: 1, posters: [101] })
+    expect(indexAt(dir).evicted).toBeUndefined()
+    expect(cache.posterFile(FIXTURE_LIBRARY_ID, 202)).toBeNull()
+    // And later generations still save.
+    const file = path.join(root, '.anime-dl', 'manifest.json')
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.writeFileSync(file, JSON.stringify({ ...m, generation: 2 }))
+    await svc.refresh(FIXTURE_LIBRARY_ID, root)
+    await cache.idle()
+    expect(indexAt(dir)).toMatchObject({ generation: 2, posters: [101] })
+    expect((await cache.load(FIXTURE_LIBRARY_ID))?.manifest.generation).toBe(2)
+  }
+
+  it('a symlink that leads outside the root', async () => {
+    await withBadPoster((poster) => {
+      const outside = path.join(tempRoot(), 'elsewhere.jpg')
+      fs.writeFileSync(outside, Buffer.alloc(500, 3))
+      fs.rmSync(poster)
+      fs.symlinkSync(outside, poster)
+    })
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a chmod 000 file (EACCES)',
+    async () => {
+      await withBadPoster((poster) => {
+        fs.chmodSync(poster, 0o000)
+        chmodded.push(poster)
+      })
+    }
+  )
+
+  it('a directory named <id>.jpg (EISDIR), swapped in after the read', async () => {
+    // The read already drops a directory (`isFile()`), so the copy is handed one.
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    const drive = tempRoot()
+    fs.writeFileSync(path.join(drive, '1.jpg'), Buffer.alloc(100, 1))
+    fs.mkdirSync(path.join(drive, '2.jpg'))
+    const input = (generation: number) => ({
+      manifest: {
+        libraryId: FIXTURE_LIBRARY_ID,
+        generation,
+        titles: [],
+        items: []
+      } as unknown as SharedLibraryManifest,
+      metas: new Map<number, SharedLibraryMeta>(),
+      posters: [1, 2],
+      posterSource: async (id: number): Promise<string> => path.join(drive, `${id}.jpg`)
+    })
+    await cache.save(FIXTURE_LIBRARY_ID, input(1), () => true)
+    expect(indexAt(dir)).toMatchObject({ generation: 1, posters: [1] })
+    expect(indexAt(dir).evicted).toBeUndefined()
+    await cache.save(FIXTURE_LIBRARY_ID, input(2), () => true)
+    expect(indexAt(dir)).toMatchObject({ generation: 2, posters: [1] })
+  })
+})
+
 describe('Forget', () => {
   it("deletes the library's cache dir", async () => {
     const dir = path.join(tempRoot(), 'cache')

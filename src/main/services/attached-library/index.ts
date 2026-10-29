@@ -28,6 +28,7 @@ import { createListenerSet } from '../../lib/listener-set'
 import type { SyncBaseStore } from '../../lib/sync-state/bases'
 import {
   checkWritable as defaultCheckWritable,
+  DISCONNECT_CODES,
   READ_ONLY_CODES,
   type WritableVerdict
 } from './writable'
@@ -60,14 +61,7 @@ export interface AttachedLibraryServiceDeps {
   stat?: (p: string) => Promise<unknown>
 }
 
-/** The errors that mean "the drive went away" when the path is under an attached root (#582). */
-export const DISCONNECT_CODES: ReadonlySet<string> = new Set([
-  'ENOENT',
-  'EIO',
-  'ENXIO',
-  'ENODEV',
-  'EBUSY'
-])
+export { DISCONNECT_CODES } from './writable'
 
 /**
  * The forget-hook contract (#581). S8 (#582) and S9 (#584) register one each.
@@ -514,11 +508,14 @@ export function createAttachedLibraryService(
       manifest: o.manifest,
       metas: o.metas,
       posters: o.posters,
-      posterSource: async (animeId: number): Promise<string | null> => {
+      // `'skip'` for a poster that is bad for good (it leads outside the root);
+      // null when it is gone, which the cache reads as the drive going away.
+      posterSource: async (animeId: number): Promise<string | 'skip' | null> => {
         const rel = posterPath(animeId)
-        if (!rel) return null
+        if (!rel) return 'skip'
         const r = await resolveLibraryPath(path.join(o.root, LIBRARY_DIR), { path: rel })
-        return r.path === 'missing' || r.path === 'escapes' ? null : r.path
+        if (r.path === 'escapes') return 'skip'
+        return r.path === 'missing' ? null : r.path
       }
     }
     void cache

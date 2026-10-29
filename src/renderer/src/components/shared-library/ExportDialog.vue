@@ -4,17 +4,25 @@
 // the target is re-planned when the folder or the library name changes. The
 // preflight (#575) comes with each plan and is narrowed to the selection here.
 // Unmerged pairs (#576) are merged into MKV by default when this PC has ffmpeg.
+// With metadata (#586) needs a Shikimori account; an own With metadata target
+// switches to it, and a Videos-only one is upgraded only once confirmed.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { availableCodecs } from '@shared/video-codecs';
 import {
+  CLAIMED_TARGET,
+  LOG_IN_FOR_METADATA,
+  METADATA_HELP,
+  ROUTED_TO_METADATA,
   exportEstimate,
   fitsFreeSpace,
   mayBeSkippedWarning,
+  metadataLibraryName,
   overflowWarning,
   preflightForSelection,
   renamedWarning,
   requiredBytes,
-  skippedWarning
+  skippedWarning,
+  takeoverWarning
 } from '@shared/shared-library-export';
 import { formatBytes } from '../../utils';
 import { useExportStore } from '../../stores/export';
@@ -37,7 +45,8 @@ const selected = ref(new Set<string>());
 const target = ref<ExportTarget | null>(null);
 const planPreflight = ref<ExportPreflight | null>(null);
 const dir = ref<string | null>(null);
-const name = ref('Anime Library');
+const DEFAULT_NAME = 'Anime Library';
+const name = ref(DEFAULT_NAME);
 const loading = ref(true);
 const planning = ref(false);
 const starting = ref(false);
@@ -61,6 +70,24 @@ const choice = computed(() => ({
   merge: canMerge.value && unmerged.value === 'merge',
   reencode: codec.value !== 'copy'
 }));
+
+// With metadata (#586): offered with a Shikimori account. The target decides
+// the mode it really runs in: an own With metadata library is always With metadata.
+const mode = ref<ExportMode>('videos');
+const canExportMetadata = ref(false);
+const nickname = ref<string | null>(null);
+const confirmTakeover = ref(false);
+const effectiveMode = computed<ExportMode>(() => target.value?.mode ?? mode.value);
+// A Videos only add into an own With metadata library is routed to With metadata.
+const ownMetadata = computed(() => target.value?.kind === 'own-metadata');
+const routed = computed(() => mode.value === 'videos' && ownMetadata.value);
+// With metadata into a library that exists merges even with nothing new to copy.
+const mergesOnly = computed(
+  () =>
+    effectiveMode.value === 'metadata' &&
+    (target.value?.kind === 'upgrade' || target.value?.kind === 'own-metadata')
+);
+const ownerName = computed(() => nickname.value || 'this account');
 
 const preflight = computed(() =>
   planPreflight.value ? preflightForSelection(planPreflight.value, selected.value) : null
@@ -135,8 +162,16 @@ const targetLine = computed(() => {
       return t.ownerNickname !== undefined
         ? `This drive has ${t.ownerNickname}'s library. Your export adds to '${t.libraryName}' (Videos only) next to it.`
         : `Adds to '${t.libraryName}' (Videos only)`;
+    case 'upgrade':
+      return t.ownerNickname !== undefined
+        ? `This drive has ${t.ownerNickname}'s library. Upgrade '${t.libraryName}' next to it to With metadata`
+        : `Upgrade '${t.libraryName}' to With metadata`;
     case 'own-metadata':
-      return 'This library carries watch state. Adding to it needs With metadata.';
+      return t.ownerNickname !== undefined
+        ? `This drive has ${t.ownerNickname}'s library. Your export adds to '${t.libraryName}' (With metadata) next to it.`
+        : `Adds to '${t.libraryName}' (With metadata)`;
+    case 'claimed':
+      return CLAIMED_TARGET;
     case 'foreign':
       return `This drive has ${t.ownerNickname}'s library. Your export goes into a new library next to it.`;
     case 'read-only':
@@ -149,8 +184,14 @@ const blockedReason = computed(() => {
   if (!dir.value) return 'Choose a folder first.';
   if (planning.value) return 'Checking the folder…';
   if (target.value?.blocked) return target.value.blocked;
+  if (effectiveMode.value === 'metadata' && !canExportMetadata.value) return LOG_IN_FOR_METADATA;
+  if (target.value?.kind === 'upgrade' && !confirmTakeover.value) {
+    return 'Confirm the upgrade to With metadata first.';
+  }
   if (preflight.value && !preflight.value.ok) return preflight.value.blockers.join(' ');
-  if (estimate.value.items === 0 && pre.value.items === 0) return 'Nothing to copy.';
+  if (estimate.value.items === 0 && pre.value.items === 0 && !mergesOnly.value) {
+    return 'Nothing to copy.';
+  }
   if (!fits.value) return 'The selection doesn’t fit on the drive.';
   if (!localFits.value) return 'The episodes to download don’t fit on this PC.';
   if (exportStore.activeJob) return 'Another export is running.';
@@ -168,8 +209,11 @@ async function replan(): Promise<void> {
       name: name.value,
       session,
       unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
-      codec: codec.value
+      codec: codec.value,
+      mode: mode.value
     });
+    // Another library: its upgrade is confirmed again.
+    if (plan.target?.root !== target.value?.root) confirmTakeover.value = false;
     target.value = plan.target;
     planPreflight.value = plan.preflight ?? null;
   } catch (err) {
@@ -193,6 +237,8 @@ onMounted(async () => {
     if (props.preselect) selected.value = new Set(allKeys(plan.titles));
     if (plan.merge) mergeSupport.value = plan.merge;
     unmerged.value = mergeSupport.value.available ? 'merge' : 'copy-as-is';
+    canExportMetadata.value = plan.canExportMetadata ?? false;
+    nickname.value = plan.nickname ?? null;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -219,6 +265,15 @@ function onNameInput(): void {
 // The preflight's names (`.mkv`) and FAT32 sizes depend on the merge choice.
 watch([unmerged, codec], () => void replan());
 
+// With metadata's default name is "Anime Library (<nickname>)"; a name the
+// user typed is kept. The mode changes how the target is classified.
+watch(mode, (m) => {
+  const own = nickname.value ? metadataLibraryName(nickname.value) : null;
+  if (m === 'metadata' && own && name.value === DEFAULT_NAME) name.value = own;
+  else if (m === 'videos' && own && name.value === own) name.value = DEFAULT_NAME;
+  void replan();
+});
+
 async function startExport(): Promise<void> {
   if (blockedReason.value || !dir.value) return;
   starting.value = true;
@@ -231,7 +286,11 @@ async function startExport(): Promise<void> {
       target: dir.value,
       name: name.value,
       unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
-      codec: codec.value
+      codec: codec.value,
+      mode: effectiveMode.value,
+      ...(target.value?.kind === 'upgrade' && confirmTakeover.value
+        ? { confirmTakeover: true }
+        : {})
     });
     if (result.ok) emit('close');
     else error.value = result.reason;
@@ -289,12 +348,41 @@ async function startExport(): Promise<void> {
         {{ targetLine }}
       </div>
 
-      <div class="mode">
-        <label><input type="radio" checked /> Videos only</label>
-        <label class="disabled" title="Coming soon">
-          <input type="radio" disabled /> With metadata <span class="soon">Coming soon</span>
+      <div class="mode" data-testid="export-mode">
+        <label :class="{ disabled: ownMetadata }">
+          <input
+            type="radio"
+            data-testid="export-mode-videos"
+            :checked="effectiveMode === 'videos'"
+            :disabled="ownMetadata"
+            @change="mode = 'videos'"
+          />
+          Videos only
+        </label>
+        <label
+          :class="{ disabled: !canExportMetadata }"
+          :title="canExportMetadata ? '' : LOG_IN_FOR_METADATA"
+        >
+          <input
+            type="radio"
+            data-testid="export-mode-metadata"
+            :checked="effectiveMode === 'metadata'"
+            :disabled="!canExportMetadata"
+            @change="mode = 'metadata'"
+          />
+          With metadata
         </label>
       </div>
+      <div class="hint" data-testid="export-mode-hint">
+        {{ canExportMetadata ? METADATA_HELP : LOG_IN_FOR_METADATA }}
+      </div>
+      <div v-if="routed" class="hint" data-testid="export-mode-routed">
+        {{ ROUTED_TO_METADATA }}
+      </div>
+      <label v-if="target?.kind === 'upgrade'" class="takeover" data-testid="export-takeover">
+        <input v-model="confirmTakeover" type="checkbox" data-testid="export-takeover-confirm" />
+        <span>{{ takeoverWarning(ownerName) }}</span>
+      </label>
 
       <div
         v-if="estimate.unmerged > 0 || mergedThere > 0"
@@ -518,9 +606,12 @@ async function startExport(): Promise<void> {
   opacity: 0.5;
 }
 
-.soon {
-  font-size: 0.7rem;
-  color: var(--text-3);
+.takeover {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--st-orange);
 }
 
 .unmerged {

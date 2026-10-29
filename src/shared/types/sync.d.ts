@@ -149,7 +149,8 @@ interface SyncClampReport {
 // were parties to.
 type SyncProvenance = { libraryId: string } | { resolution: string; libraryIds: string[] }
 
-type SyncTrigger = 'attach' | 'plug' | 'online' | 'login' | 'manual' | 'prepare'
+// `export`: S6e's (#586) state step for a With metadata export.
+type SyncTrigger = 'attach' | 'plug' | 'online' | 'login' | 'manual' | 'prepare' | 'export'
 
 interface SyncLibraryResult {
   libraryId: string

@@ -360,16 +360,22 @@ export function prefetchOptions(
 /** The target classification, by the table in docs/shared-library.md. */
 export interface ClassifiedTarget {
   kind: ExportTargetKind
+  /** The mode the export runs in: an `own-metadata` target is always With metadata. */
+  mode: ExportMode
   root: string
   libraryName: string
   ownerNickname?: string
   blocked: string | null
-  /** The manifest at `root` (`add`), for the present items and the job's base. */
+  /** The manifest at `root` (`add`, `upgrade`, `own-metadata`), for the present items and the job's base. */
   manifest: SharedLibraryManifest | null
 }
 
-export const BLOCKED_OWN_METADATA =
-  'This library carries watch state. Adding videos without it would widen titles[] with no state. Adding to it needs With metadata.'
+export interface ClassifyOptions {
+  /** `videos` by default. */
+  mode?: ExportMode
+  /** Whether this PC uses `libraryId` through a local claim (S7a #578's `attachedLibraries[id].claim`). */
+  claimed?: (libraryId: string) => boolean
+}
 
 /**
  * How exporting into `dir` with library name `name` works: the library root is
@@ -379,35 +385,43 @@ export async function classifyTarget(
   dir: string,
   name: string,
   shikimoriUserId: number | null,
-  pathExists: (p: string) => Promise<boolean>
+  pathExists: (p: string) => Promise<boolean>,
+  opts: ClassifyOptions = {}
 ): Promise<ClassifiedTarget> {
+  const mode = opts.mode ?? 'videos'
   const libName = name.trim() || DEFAULT_LIBRARY_NAME
   const atDir = (await discoverLibraries(dir)).includes(dir)
   const root = atDir ? dir : path.join(dir, libraryFolderName(libName))
   const read = await readLibrary(root)
   if (read.status === 'none') {
-    return { kind: 'new', root, libraryName: libName, blocked: null, manifest: null }
+    return { kind: 'new', mode, root, libraryName: libName, blocked: null, manifest: null }
   }
   const m = read.manifest
-  const foreign =
-    m !== null &&
-    m.mode === 'metadata' &&
-    m.owner !== null &&
-    (shikimoriUserId === null || m.owner.shikimoriId !== shikimoriUserId)
-  if (foreign) {
-    // The siblings `<name>`, `<name> (2)`, … in order. The first Videos-only
-    // library among them is the one an earlier export made (anyone may add to
-    // a library with no owner), so a re-export adds to it and `present`
-    // applies. A free name ends the search with a new library; anything else
-    // (another foreign, an own With metadata or a read-only library, or a
-    // plain folder) is skipped.
-    const ownerNickname = m.owner?.nickname || 'another user'
+  const isOwn = (x: SharedLibraryManifest): boolean =>
+    x.mode === 'metadata' &&
+    x.owner !== null &&
+    shikimoriUserId !== null &&
+    x.owner.shikimoriId === shikimoriUserId
+  // A Videos-only library: added to in Videos only, taken over With metadata.
+  const videosOnly: 'add' | 'upgrade' = mode === 'metadata' ? 'upgrade' : 'add'
+  if (m !== null && m.mode === 'metadata' && m.owner !== null && !isOwn(m)) {
+    // Claimed or foreign: never written. The siblings `<name>`, `<name> (2)`,
+    // … in order. The first Videos-only library among them is the one an
+    // earlier export made (anyone may add to a library with no owner), so a
+    // re-export adds to it (With metadata: takes it over) and `present`
+    // applies; With metadata, this user's own library there is the one an
+    // earlier export made too. A free name ends the search with a new
+    // library; anything else (another claimed or foreign library, a
+    // read-only one, or a plain folder) is skipped.
+    const kind = opts.claimed?.(m.libraryId) ? 'claimed' : 'foreign'
+    const ownerNickname = m.owner.nickname || 'another user'
     const parent = atDir ? path.dirname(dir) : dir
     for (let n = 1; ; n++) {
       const sibling = path.join(parent, libraryFolderName(n === 1 ? libName : `${libName} (${n})`))
       if (!(await pathExists(sibling))) {
         return {
-          kind: 'foreign',
+          kind,
+          mode,
           root: sibling,
           libraryName: libName,
           ownerNickname,
@@ -416,22 +430,27 @@ export async function classifyTarget(
         }
       }
       const s = await readLibrary(sibling)
-      if (s.status === 'ok' && s.manifest.mode === 'videos' && s.manifest.owner === null) {
-        return {
-          kind: 'add',
-          root: sibling,
-          libraryName: s.manifest.name ?? path.basename(sibling),
-          ownerNickname,
-          blocked: null,
-          manifest: s.manifest
-        }
+      if (s.status !== 'ok') continue
+      const found = (k: ExportTargetKind): ClassifiedTarget => ({
+        kind: k,
+        mode,
+        root: sibling,
+        libraryName: s.manifest.name ?? path.basename(sibling),
+        ownerNickname,
+        blocked: null,
+        manifest: s.manifest
+      })
+      if (s.manifest.mode === 'videos' && s.manifest.owner === null) {
+        return found(videosOnly)
       }
+      if (mode === 'metadata' && isOwn(s.manifest)) return found('own-metadata')
     }
   }
   const existingName = m?.name ?? path.basename(root)
   if (read.status === 'read-only') {
     return {
       kind: 'read-only',
+      mode,
       root,
       libraryName: existingName,
       blocked: read.message,
@@ -439,15 +458,24 @@ export async function classifyTarget(
     }
   }
   if (read.manifest.mode === 'metadata') {
+    // A Videos only add is routed here: it would widen titles[] with no state.
     return {
       kind: 'own-metadata',
+      mode: 'metadata',
       root,
       libraryName: existingName,
-      blocked: BLOCKED_OWN_METADATA,
+      blocked: null,
       manifest: read.manifest
     }
   }
-  return { kind: 'add', root, libraryName: existingName, blocked: null, manifest: read.manifest }
+  return {
+    kind: videosOnly,
+    mode,
+    root,
+    libraryName: existingName,
+    blocked: null,
+    manifest: read.manifest
+  }
 }
 
 /**

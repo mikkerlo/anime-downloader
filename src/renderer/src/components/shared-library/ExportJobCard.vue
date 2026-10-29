@@ -109,7 +109,19 @@ const percent = computed(() =>
       </div>
     </div>
     <div class="bar"><div class="fill" :style="{ width: `${percent}%` }"></div></div>
-    <div v-if="waiting" class="waiting">{{ waiting }}</div>
+    <div v-if="waiting" class="waiting">
+      {{ waiting
+      }}<template v-if="job.phase === 'state'">
+        · <span data-testid="export-job-phase">Saving watch state</span></template
+      >
+    </div>
+    <div
+      v-else-if="job.phase === 'state' && job.status === 'running'"
+      class="current"
+      data-testid="export-job-phase"
+    >
+      Saving watch state
+    </div>
     <div
       v-else-if="job.current && job.status === 'running'"
       class="current"

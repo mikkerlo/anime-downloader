@@ -29,7 +29,8 @@ const TRIGGER_LABEL: Record<SyncTrigger, string> = {
   online: 'Back online',
   login: 'Signed in',
   manual: 'Sync now',
-  prepare: 'Prepare for offline'
+  prepare: 'Prepare for offline',
+  export: 'Export with watch state'
 }
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`

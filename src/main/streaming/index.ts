@@ -840,6 +840,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         `ffmpeg spawn transcode=${session.transcode} seek=${seekSeconds} args: ${args.join(' ')}`
       )
     }
+    session.stderrTail = []
     const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const procGen = session.generation
 
@@ -925,16 +926,17 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
       }
     }
 
-    // A drive gone under the open fd (#582) doesn't fail the run: ffmpeg logs
-    // "Error during demuxing: Input/output error", treats it as the end of its
-    // input and exits 0. And stdout ends before `exit` fires, even for a run
-    // that failed to open its input, so the `exit` error below never saw a
-    // respawn whose drive was gone. Either way the session just ended. With a
-    // classifier wired, an end waits for the exit code, and every run that
-    // ends is asked about: a failed one, and a clean one, with the demuxer's
-    // read error as a hint. Only a run that `classifyExit` names becomes the
-    // `drive-disconnected` error; every other run ends or errors as before.
-    let endAwaitsExit = false
+    // A run settles once, on `close` (#631). Node doesn't order a child's
+    // `exit` against its stdout `end`, which is also why `readFirstProbeLine`
+    // waits for `close` (src/main/streaming/index.ts:448), and only at `close`
+    // are the exit code and all of this run's stdout and stderr in. A drive
+    // gone under the open fd (#582) doesn't fail the run: ffmpeg logs "Error
+    // during demuxing: Input/output error", treats it as the end of its input
+    // and exits 0. So every run is asked about, with the demuxer's read error
+    // as a hint, and a run that `classifyExit` names is the
+    // `drive-disconnected` error. An unclassified non-zero exit is an error
+    // with no reason; a clean exit and an outside SIGKILL end. `stderrTail` is
+    // per run (reset at spawn), so the message and the hint are this run's own.
     const sendError = (msg: string, reason: PlayerFailureReason | null): void => {
       session.error = msg
       console.error('[remux-stream]', msg)
@@ -945,41 +947,6 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         sender.send(channels.streamError, payload)
       }
     }
-    const settle = (code: number | null, classify: NonNullable<typeof deps.classifyExit>): void => {
-      // Held from here, so a late stdout end can't slip in while classifying.
-      session.done = true
-      const endedFirst = endAwaitsExit
-      const failed = code !== 0
-      const msg = failed
-        ? `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
-        : `ffmpeg stopped reading its input: ${session.stderrTail.slice(-3).join('').trim()}`
-      void classify(session.inputPath ?? session.mkvPath, { readError: demuxReadError })
-        .catch(() => null)
-        .then((reason) => {
-          // A seek respawned meanwhile: this run is no longer the session's.
-          if (procGen !== session.generation) return
-          if (reason) sendError(msg, reason)
-          // Unclassified: a failure that exited first is an error, as it
-          // always was, and a run whose stdout ended first just ends.
-          else if (failed && !endedFirst) sendError(msg, null)
-          else finishEnd()
-        })
-    }
-    proc.stdout?.on('end', () => {
-      if (procGen !== session.generation) return
-      if (session.done) return
-      const classify = deps.classifyExit
-      if (!classify) return finishEnd()
-      if (proc.exitCode === null && proc.signalCode === null) {
-        endAwaitsExit = true
-        return
-      }
-      // The exit came first: clean, or an outside SIGKILL that the exit
-      // handler left to us (a failed exit already settled the run).
-      if (proc.signalCode === 'SIGKILL') return finishEnd()
-      settle(proc.exitCode, classify)
-    })
-
     proc.on('error', (err) => {
       if (procGen !== session.generation) return
       if (session.done) return
@@ -992,31 +959,34 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
       }
     })
 
-    proc.on('exit', (code, signal) => {
+    proc.on('close', (code, signal) => {
       if (procGen !== session.generation) return
-      if (signal === 'SIGKILL') {
-        // Our own kills set `done` (cleanup) or move the generation (a seek).
-        // Anyone else's (the OOM killer) after stdout ended must not leave the
-        // held end with neither an end nor an error.
-        if (endAwaitsExit && !session.done) finishEnd()
-        return
-      }
+      // Our own kills set `done` (cleanup) or move the generation (a seek); a
+      // spawn `error` has already reported the run.
       if (session.done) return
-      const classify = deps.classifyExit
-      if (!classify) {
-        if (code === 0) return
-        session.done = true
-        sendError(
-          `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`,
-          null
-        )
-        return
+      session.done = true
+      // Anyone else's SIGKILL (the OOM killer) ends the run.
+      if (signal === 'SIGKILL') return finishEnd()
+      const failed = code !== 0
+      const msg = failed
+        ? `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
+        : `ffmpeg stopped reading its input: ${session.stderrTail.slice(-3).join('').trim()}`
+      const decide = (reason: PlayerFailureReason | null): void => {
+        if (reason) sendError(msg, reason)
+        else if (failed) sendError(msg, null)
+        else finishEnd()
       }
-      // A clean exit before stdout ended settles from the end handler.
-      if (code === 0 && !endAwaitsExit) return
+      const classify = deps.classifyExit
+      if (!classify) return decide(null)
       // ffmpeg gives no errno: an input under an attached root that is gone
       // now is a disconnected drive. Copy and transcode both land here.
-      settle(code, classify)
+      void classify(session.inputPath ?? session.mkvPath, { readError: demuxReadError })
+        .catch(() => null)
+        .then((reason) => {
+          // A seek respawned meanwhile: this run is no longer the session's.
+          if (procGen !== session.generation) return
+          decide(reason)
+        })
     })
 
     return proc

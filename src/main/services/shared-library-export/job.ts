@@ -1065,11 +1065,22 @@ export class ExportJob {
    * The With metadata state step (S6e #586): S9's merge of this PC with the
    * library against its base, the write of the state for every title in
    * `titles[]`, then the base. Idempotent, so a resume just runs it again.
-   * False when it didn't land: the job is paused with why, and Resume retries.
+   * True when the job is to complete. Otherwise it has ended here: stopped,
+   * or paused with why the step failed (Resume retries).
+   *
+   * The step itself can't be interrupted. A Pause or Cancel that came before
+   * it starts stops the job there; one that came during it is honoured once
+   * it returns: a Cancel ends the job cancelled whether the write landed or
+   * not (what landed stays, as with a Cancel during the copy's final
+   * checkpoint), and a Pause after a landed write has nothing left to pause.
    */
   private async saveState(): Promise<boolean> {
     const write = this.deps.writeState
     if (!write) throw new Error('saving watch state isn’t available on this PC')
+    if (this.stop) {
+      await this.setStatus(this.stop === 'pause' ? 'paused' : 'cancelled')
+      return false
+    }
     this.rec.error = null
     this.deps.update(this.rec, this.bytesDone())
     const r = await write({
@@ -1077,11 +1088,15 @@ export class ExportJob {
       root: this.rec.root,
       name: this.rec.libraryName
     })
-    if (r.drive === 'ok') {
-      this.rec.phase = 'done'
-      return true
+    if (r.drive === 'ok') this.rec.phase = 'done'
+    else if (!(await this.identityOk())) {
+      throw new DriveGoneError('the library is not at its root')
     }
-    if (!(await this.identityOk())) throw new DriveGoneError('the library is not at its root')
+    if (this.stop === 'cancel') {
+      await this.setStatus('cancelled')
+      return false
+    }
+    if (r.drive === 'ok') return true
     const why = (r.driveReason && STATE_FAILED[r.driveReason]) || 'the write failed'
     this.rec.error = `Saving watch state failed: ${why}. Resume to try again.`
     await this.setStatus('paused')

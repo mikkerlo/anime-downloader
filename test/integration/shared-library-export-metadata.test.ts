@@ -372,6 +372,102 @@ describe('With metadata: the kills', () => {
   })
 })
 
+describe('With metadata: a Cancel during "Saving watch state" (#636 review)', () => {
+  /** A state step held on a gate: `land` runs S9's real leg, `fail` reports a failed write. */
+  function gated(outcome: 'land' | 'fail') {
+    let open!: () => void
+    const gate = new Promise<void>((resolve) => (open = resolve))
+    const holder: { r?: Rig } = {}
+    const r = rig({
+      deps: {
+        writeLibraryState: async (t) => {
+          await gate
+          if (outcome === 'land') return holder.r!.runner.runExport(t)
+          return {
+            libraryId: t.libraryId,
+            drive: 'error',
+            driveReason: 'io',
+            shikimori: 'skipped',
+            counts: { applied: 0, conflicts: 0, clamped: 0 },
+            waitingMalIds: [],
+            rewatchesSuperseded: 0
+          }
+        }
+      }
+    })
+    holder.r = r
+    return { r, open }
+  }
+
+  async function cancelWhileSaving(outcome: 'land' | 'fail') {
+    const { r, open } = gated(outcome)
+    const res = await r.env.svc.start({
+      selection: sel(r.a1),
+      target: r.env.drive,
+      name: 'Trip',
+      mode: 'metadata'
+    })
+    if (!res.ok) throw new Error(res.reason)
+    const jobId = res.job.jobId
+    await vi.waitFor(() => expect(jobFile(r, jobId).phase).toBe('state'))
+    // Cancel waits for the run, and the run for the state step.
+    const cancelled = r.env.svc.cancel(jobId)
+    open()
+    await cancelled
+    await r.env.svc.settled(jobId)
+    return { r, jobId, root: path.join(r.env.drive, 'Trip') }
+  }
+
+  it('the write lands: the job ends cancelled, and the state and base it wrote stay', async () => {
+    const { r, jobId, root } = await cancelWhileSaving('land')
+    expect(r.env.svc.list()[0]).toMatchObject({ status: 'cancelled', phase: 'done', error: null })
+    expect(jobFile(r, jobId)).toMatchObject({ status: 'cancelled', phase: 'done' })
+    await expectPairedWithBase(r, root)
+  })
+
+  it('the write fails: the job ends cancelled, not paused asking to resume', async () => {
+    const { r, jobId, root } = await cancelWhileSaving('fail')
+    expect(r.env.svc.list()[0]).toMatchObject({ status: 'cancelled', phase: 'state', error: null })
+    expect(jobFile(r, jobId).status).toBe('cancelled')
+    expect(await readLibrary(root)).toMatchObject({ status: 'ok', state: null })
+  })
+
+  for (const stop of ['cancel', 'pause'] as const) {
+    it(`a ${stop} before a resumed state step starts: no state is written`, async () => {
+      // Killed in `state`, restarted, resumed, and stopped at once.
+      const r = rig({ deps: { writeLibraryState: () => new Promise(() => {}) } })
+      const root = path.join(r.env.drive, 'Trip')
+      const res = await r.env.svc.start({
+        selection: sel(r.a1),
+        target: r.env.drive,
+        name: 'Trip',
+        mode: 'metadata'
+      })
+      if (!res.ok) throw new Error(res.reason)
+      const jobId = res.job.jobId
+      await vi.waitFor(() => expect(jobFile(r, jobId).phase).toBe('state'))
+      const svc = r.env.restart({ writeLibraryState: (t) => r.runner.runExport(t) })
+      await svc.init()
+      await svc.resume(jobId)
+      await (stop === 'cancel' ? svc.cancel(jobId) : svc.pause(jobId))
+      await svc.settled(jobId)
+
+      expect(svc.list()[0]).toMatchObject({
+        status: stop === 'cancel' ? 'cancelled' : 'paused',
+        phase: 'state'
+      })
+      expect(await readLibrary(root)).toMatchObject({ status: 'ok', state: null })
+      if (stop === 'pause') {
+        // Resume finishes it.
+        await svc.resume(jobId)
+        await svc.settled(jobId)
+        expect(svc.list()[0]).toMatchObject({ status: 'completed', phase: 'done' })
+        await expectPairedWithBase(r, root)
+      }
+    })
+  }
+})
+
 describe('With metadata: who and where', () => {
   it('logged out: the plan says With metadata is off, and the start refuses', async () => {
     const r = rig({ user: null })

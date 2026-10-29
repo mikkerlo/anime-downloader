@@ -38,6 +38,7 @@ import {
   classifyTarget,
   createResolver,
   displayName,
+  presence,
   presentKeys,
   type PlanSource,
   type ResolvedItem
@@ -376,11 +377,11 @@ export function createSharedLibraryExportService(
     const merge = await mergeSupport()
     if (!req.target) return { titles, target: null, preflight: null, merge }
     const t = await classifyTarget(req.target, req.name, userId(), pathExists)
-    const present = presentKeys(t.manifest, resolved)
+    const there = presence(t.manifest, resolved)
+    const present = [...there.keys()]
     let pf: ExportPreflight | null = null
     if (!t.blocked) {
       // Every ready item the target doesn't have; the dialog narrows it to the selection.
-      const there = new Set(present)
       const candidates = [...resolved.values()].filter((r) => !there.has(r.key))
       const keys = new Set(candidates.map((r) => r.key))
       const existing = (t.manifest?.items ?? []).filter((i) => !keys.has(itemKey(i)))
@@ -406,7 +407,8 @@ export function createSharedLibraryExportService(
         ...(t.ownerNickname !== undefined ? { ownerNickname: t.ownerNickname } : {}),
         blocked: t.blocked,
         free: await freeBytes(req.target),
-        present
+        present,
+        presentMerged: present.filter((k) => there.get(k) === 'merged')
       }
     }
   }

@@ -59,7 +59,7 @@ describe('golden files', () => {
       stateInitialized: true,
       pair: { manifest: 'manifest.json', state: 'state.json' }
     })
-    expect(JSON.parse(JSON.stringify(r.manifest))).toEqual(manifest(7, 4))
+    expect(JSON.parse(JSON.stringify(r.manifest))).toEqual(manifest(7, 4, { layoutMinor: 1 }))
     expect(JSON.parse(JSON.stringify(r.state))).toEqual(state(4, 7))
   })
 
@@ -78,7 +78,7 @@ describe('golden files', () => {
 describe('read-only decisions', () => {
   it('a newer minor opens read-write and keeps its unknown fields in the bag', async () => {
     const r = await ok(fixture('newer-minor-manifest'))
-    expect(r.manifest.layoutMinor).toBe(1)
+    expect(r.manifest.layoutMinor).toBe(2)
     expect(unknownFieldsOf(r.manifest)).toEqual({ checksumAlgorithm: 'sha256' })
     expect(unknownFieldsOf(r.manifest.owner!)).toEqual({ avatar: 'https://example.invalid/a.png' })
     expect(unknownFieldsOf(r.manifest.naming!)).toEqual({ normalization: 'nfc' })

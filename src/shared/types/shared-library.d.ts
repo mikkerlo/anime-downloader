@@ -42,6 +42,24 @@ interface SharedLibraryItem {
   subtitlePath?: string
   size: number
   sha256?: string
+  /** Layout minor 1 (#623): set only on an `.mkv` an export merged from an unmerged pair. */
+  source?: SharedLibraryItemSource
+}
+
+/**
+ * The `.mp4` + `.ass` pair an export merged into an item's `.mkv` (#623).
+ * Trusted only while `outputSize` equals the item's `size`: a rewrite by an
+ * older PC carries it back onto a different file by `itemKey`.
+ */
+interface SharedLibraryItemSource {
+  /** The `.mp4`'s size when it was merged. */
+  size: number
+  /** The `.ass`'s size when it was merged. */
+  subtitleSize: number
+  /** The merge's video codec: `copy` or the encoder. */
+  codec: string
+  /** The merged `.mkv`'s size when it was written. */
+  outputSize: number
 }
 
 interface SharedLibraryNaming {
@@ -405,8 +423,13 @@ interface ExportTarget {
   blocked: string | null
   /** Free bytes on the target's filesystem, or null when `statfs` failed. */
   free: number | null
-  /** Keys of tree items the library already has (same key, same size): not copied again. */
+  /**
+   * Keys of tree items the library already has: not copied again. The same key
+   * with the same size, or an unmerged pair whose `.mkv` an export merged (#623).
+   */
   present: string[]
+  /** Of `present`, the unmerged pairs the library has as an `.mkv` an export merged (#623). */
+  presentMerged: string[]
 }
 
 interface ExportPlanRequest {

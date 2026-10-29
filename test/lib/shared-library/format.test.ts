@@ -158,6 +158,27 @@ describe('the version rule, enforced by the schema fingerprint', () => {
     ).toBe(true)
   })
 
+  it('items[].source (#623) is a minor add: from minor 0 it needs LAYOUT_MINOR 1, not a major', () => {
+    const minor0 = changed((d) => {
+      d.fields = d.fields.filter((f) => !f.path.startsWith('manifest.items[].source'))
+      d.versions.layout.minor = 0
+    })
+    const verdict = compareFingerprint(minor0, describeSchema())
+    console.log(`items[].source: ${verdict.rule}`)
+    expect(verdict.ok).toBe(true)
+    expect(verdict.details).toEqual([
+      'added optional manifest.items[].source',
+      'added optional manifest.items[].source.size',
+      'added optional manifest.items[].source.subtitleSize',
+      'added optional manifest.items[].source.codec',
+      'added optional manifest.items[].source.outputSize'
+    ])
+    const unbumped = changed((d) => {
+      d.versions.layout.minor = 0
+    })
+    expect(compareFingerprint(minor0, unbumped).ok).toBe(false)
+  })
+
   it('removing a field or an enum value fails without a major bump', () => {
     const removed = changed((d) => {
       d.fields = d.fields.filter((f) => f.path !== 'manifest.name')

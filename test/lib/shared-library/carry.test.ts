@@ -9,7 +9,17 @@ import { applySyncDoc } from '../../../src/main/lib/sync-state/apply'
 import { clampSyncDoc } from '../../../src/main/lib/sync-state/clock'
 import { pruneDocTombstones } from '../../../src/main/lib/sync-state/gc'
 import { projectSyncDoc } from '../../../src/main/lib/sync-state/project'
-import { CAPS, STATE_MINOR } from '../../../src/main/lib/shared-library/format'
+import {
+  CAPS,
+  LAYOUT_MINOR,
+  STATE_MINOR,
+  type RecordNode,
+  type SchemaField
+} from '../../../src/main/lib/shared-library/format'
+import {
+  presentKeys,
+  type ResolvedItem
+} from '../../../src/main/services/shared-library-export/plan'
 import { readLibrary } from '../../../src/main/lib/shared-library/read'
 import {
   InvalidLibraryDataError,
@@ -79,6 +89,48 @@ function writerFieldsAsIn(root: string, file: string, expected: string, fields: 
   return text(out)
 }
 
+const FORMAT = '../../../src/main/lib/shared-library/format'
+
+/**
+ * The reader and writer as a minor-0 build has them (#623): no
+ * `items[].source` in the schema, and LAYOUT_MINOR 0.
+ */
+async function minor0Build(): Promise<{
+  format: typeof import('../../../src/main/lib/shared-library/format')
+  read: typeof import('../../../src/main/lib/shared-library/read')
+  write: typeof import('../../../src/main/lib/shared-library/write')
+}> {
+  vi.resetModules()
+  vi.doMock(FORMAT, async (importOriginal) => {
+    const real =
+      await importOriginal<typeof import('../../../src/main/lib/shared-library/format')>()
+    const withoutSource = (f: SchemaField): SchemaField => {
+      if (f.name !== 'items' || f.node.kind !== 'array') return f
+      const el = f.node.element as RecordNode
+      const element = { ...el, fields: el.fields.filter((x) => x.name !== 'source') }
+      return { ...f, node: { ...f.node, element } }
+    }
+    return {
+      ...real,
+      LAYOUT_MINOR: 0,
+      MANIFEST_SCHEMA: {
+        ...real.MANIFEST_SCHEMA,
+        fields: real.MANIFEST_SCHEMA.fields.map(withoutSource)
+      }
+    }
+  })
+  try {
+    return {
+      format: await import('../../../src/main/lib/shared-library/format'),
+      read: await import('../../../src/main/lib/shared-library/read'),
+      write: await import('../../../src/main/lib/shared-library/write')
+    }
+  } finally {
+    vi.doUnmock(FORMAT)
+    vi.resetModules()
+  }
+}
+
 const MANIFEST_OWNED = ['generation', 'stateGeneration', 'lastWriter']
 const STATE_OWNED = ['generation', 'manifestGeneration']
 
@@ -107,14 +159,137 @@ describe('golden files round-trip byte-for-byte', () => {
     ).toBe(fixtureText('golden-metadata', 'manifest.json'))
   })
 
-  it.each(['golden-metadata', 'golden-videos'])('%s through writeManifest', async (name) => {
-    const root = fixture(name)
-    const r = await ok(root)
-    const actor = r.manifest.mode === 'videos' ? LOGGED_OUT : OWNER
-    await writeManifest(root, r.manifest, actor, r.manifest.generation)
+  it.each(['golden-metadata', 'golden-videos', 'golden-merged'])(
+    '%s through writeManifest',
+    async (name) => {
+      const root = fixture(name)
+      const r = await ok(root)
+      const actor = r.manifest.mode === 'videos' ? LOGGED_OUT : OWNER
+      await writeManifest(root, r.manifest, actor, r.manifest.generation)
+      expect(
+        writerFieldsAsIn(root, 'manifest.json', fixtureText(name, 'manifest.json'), MANIFEST_OWNED)
+      ).toBe(fixtureText(name, 'manifest.json'))
+    }
+  )
+})
+
+describe('items[].source (#623)', () => {
+  const MERGED = '101:1:9001'
+  const SOURCE = { size: 9000, subtitleSize: 1200, codec: 'copy', outputSize: 10001 }
+
+  /** This PC's pair for episode 1: the `.mp4` and `.ass` sizes. */
+  const pairOf = (videoSize: number, subtitleSize: number): Map<string, ResolvedItem> =>
+    new Map([
+      [
+        MERGED,
+        {
+          key: MERGED,
+          animeId: 101,
+          episodeInt: '1',
+          translationId: 9001,
+          translationType: 'subRu',
+          author: 'Crunchyroll',
+          quality: 1080,
+          title: 'Frieren',
+          label: 'Episode 1',
+          videoPath: '/local/Frieren/Frieren - 01 [Crunchyroll].mp4',
+          ext: '.mp4',
+          videoSize,
+          subtitlePath: '/local/Frieren/Frieren - 01 [Crunchyroll].ass',
+          subtitleSize
+        }
+      ]
+    ])
+
+  it('a minor-0 reader keeps source in the item’s bag and writes it back unchanged', async () => {
+    const old = await minor0Build()
+    const root = fixture('golden-merged')
+    const r = await old.read.readLibrary(root)
+    expect(r.status).toBe('ok')
+    const m = (r as Ok).manifest
+    expect(Object.keys(m.items[0])).not.toContain('source')
+    expect(old.format.unknownFieldsOf(m.items[0])).toEqual({ source: SOURCE })
+    await old.write.writeManifest(root, m, LOGGED_OUT, m.generation)
     expect(
-      writerFieldsAsIn(root, 'manifest.json', fixtureText(name, 'manifest.json'), MANIFEST_OWNED)
-    ).toBe(fixtureText(name, 'manifest.json'))
+      writerFieldsAsIn(
+        root,
+        'manifest.json',
+        fixtureText('golden-merged', 'manifest.json'),
+        MANIFEST_OWNED
+      )
+    ).toBe(fixtureText('golden-merged', 'manifest.json'))
+  })
+
+  it('a minor-0 rewrite of a merged item keeps the old source in the bag, and presentKeys ignores it', async () => {
+    const root = fixture('golden-merged')
+    // The pair this source describes: present while the `.mkv` it was written for is there.
+    const samePair = pairOf(SOURCE.size, SOURCE.subtitleSize)
+    expect(presentKeys((await ok(root)).manifest, samePair)).toEqual([MERGED])
+
+    // A minor-0 PC still has the bug: its own pair (another download) isn't
+    // present, so it copies that `.mp4` + `.ass` over item 1, by itemKey.
+    const old = await minor0Build()
+    const r = (await old.read.readLibrary(root)) as Ok
+    const replaced = {
+      ...r.manifest.items[0],
+      path: 'Frieren/Frieren - 01 [Crunchyroll].mp4',
+      subtitlePath: 'Frieren/Frieren - 01 [Crunchyroll].ass',
+      size: 9500
+    }
+    delete (replaced as { sha256?: string }).sha256
+    await old.write.writeManifest(
+      root,
+      { ...r.manifest, items: [replaced, ...r.manifest.items.slice(1)] },
+      LOGGED_OUT,
+      r.manifest.generation
+    )
+    const raw = readJson(root, 'manifest.json')
+    expect(raw.layoutMinor).toBe(1)
+    expect(raw.items[0]).toMatchObject({ size: 9500, source: SOURCE })
+
+    const after = (await ok(root)).manifest
+    expect(after.items[0].source).toEqual(SOURCE)
+    expect(presentKeys(after, samePair)).toEqual([])
+    // The minor-0 PC's own pair is present by the size rule.
+    expect(presentKeys(after, pairOf(9500, 300))).toEqual([MERGED])
+  })
+
+  it('presentKeys: source matches only an unmerged pair', async () => {
+    const root = tree({
+      'manifest.json': manifest(3, null, {
+        mode: 'videos',
+        layoutMinor: 1,
+        // A merge that ran after the `.ass` went away.
+        items: [
+          item('1', 9001, { size: 8000, source: { ...SOURCE, subtitleSize: 0, outputSize: 8000 } })
+        ]
+      })
+    })
+    const m = (await ok(root)).manifest
+    expect(presentKeys(m, pairOf(SOURCE.size, 0))).toEqual([MERGED])
+    const lone = pairOf(SOURCE.size, 0)
+    lone.set(MERGED, { ...lone.get(MERGED)!, subtitlePath: null })
+    expect(presentKeys(m, lone)).toEqual([])
+  })
+
+  it('a minor-1 writer: an item rebuilt without source has none, though the drive’s had one', async () => {
+    const root = fixture('golden-merged')
+    const m = (await ok(root)).manifest
+    const copied: SharedLibraryItem = {
+      animeId: 101,
+      episodeInt: '1',
+      translationId: 9001,
+      translationType: 'subRu',
+      author: 'Crunchyroll',
+      quality: 1080,
+      path: 'Frieren/Frieren - 01 [Crunchyroll].mp4',
+      subtitlePath: 'Frieren/Frieren - 01 [Crunchyroll].ass',
+      size: 9500
+    }
+    await writeManifest(root, { ...m, items: [copied, ...m.items.slice(1)] }, LOGGED_OUT, 3)
+    const items = readJson(root, 'manifest.json').items
+    expect(items[0]).not.toHaveProperty('source')
+    expect(items[1].source).toEqual(m.items[1].source)
   })
 })
 
@@ -267,9 +442,17 @@ describe('the writer keeps the minor it read', () => {
     const mf = fixture('newer-minor-manifest')
     const r = await ok(mf)
     await writeState(mf, r.state!.doc, OWNER, 4)
-    expect(readJson(mf, 'manifest.json').layoutMinor).toBe(1)
+    expect(readJson(mf, 'manifest.json').layoutMinor).toBe(2)
     await writeManifest(mf, (await ok(mf)).manifest, OWNER, 8)
-    expect(readJson(mf, 'manifest.json').layoutMinor).toBe(1)
+    expect(readJson(mf, 'manifest.json').layoutMinor).toBe(2)
+  })
+
+  it('a minor-0 manifest written by this version is stamped LAYOUT_MINOR (1, #623)', async () => {
+    const root = tree({ 'manifest.json': manifest(3, null, { mode: 'videos' }) })
+    expect((await ok(root)).manifest.layoutMinor).toBe(0)
+    await writeManifest(root, (await ok(root)).manifest, LOGGED_OUT, 3)
+    expect(LAYOUT_MINOR).toBe(1)
+    expect(readJson(root, 'manifest.json').layoutMinor).toBe(1)
   })
 
   it('a fresh writeState after the first-write table’s step 1 stamps STATE_MINOR', async () => {

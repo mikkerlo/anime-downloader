@@ -107,6 +107,8 @@ export interface JobRecord {
   unmerged?: ExportUnmergedMode
   /** The merge's video codec (#576): `copy` unless a re-encode was chosen. */
   codec?: string
+  /** By item key, the pair each finished merge read and the `.mkv` it wrote (#623): the item's `source`. */
+  sources?: Record<string, SharedLibraryItemSource>
   /** The file being copied, so a resume deletes its `.anime-dl-tmp`. */
   current: { key: string; rel: string } | null
   missing: number
@@ -350,6 +352,8 @@ export class ExportJob {
         sha256: video.sha256
       }
       if (item.subtitlePath) out.subtitlePath = item.subtitlePath
+      const source = this.rec.sources?.[item.key]
+      if (source) out.source = source
       ours.set(item.key, out)
     }
     const items: SharedLibraryItem[] = []
@@ -586,7 +590,18 @@ export class ExportJob {
         await unlinkQuiet(this.deps.xfs, tmp).catch(() => {})
         throw stoppedError()
       }
-      this.rec.doneFiles[item.path] = await adoptVerified(this.deps.xfs, tmp, dest)
+      const written = await adoptVerified(this.deps.xfs, tmp, dest)
+      this.rec.doneFiles[item.path] = written
+      // What this merge read, not what the job planned at start (#623).
+      this.rec.sources = {
+        ...this.rec.sources,
+        [item.key]: {
+          size: source.videoSize,
+          subtitleSize: source.subtitleSize,
+          codec: this.rec.codec ?? 'copy',
+          outputSize: written.size
+        }
+      }
       this.rec.current = null
       await this.deps.persist(this.rec)
       return

@@ -10,9 +10,20 @@ import * as path from 'path'
 import { DownloadManager, type DownloadItem } from '../../src/main/download-manager'
 import { LIBRARY_DIR } from '../../src/main/lib/shared-library/read'
 import { MERGE_TMP_SUFFIX } from '../../src/main/services/shared-library-export/copy'
-import type { SharedLibraryExportDeps } from '../../src/main/services/shared-library-export'
+import {
+  JOBS_DIR,
+  type SharedLibraryExportDeps
+} from '../../src/main/services/shared-library-export'
+import type { JobRecord } from '../../src/main/services/shared-library-export/job'
+import { exportEstimate } from '../../src/shared/shared-library-export'
 import { fakeFfmpeg, flush, until, type FakeFfmpeg } from '../helpers/fake-ffmpeg'
-import { makeExportEnv, sel, sha256, type ExportEnv } from '../helpers/shared-library-export'
+import {
+  bytesFor,
+  makeExportEnv,
+  sel,
+  sha256,
+  type ExportEnv
+} from '../helpers/shared-library-export'
 
 const FFMPEG = '/fake/ffmpeg'
 const FFPROBE = '/fake/ffprobe'
@@ -80,6 +91,10 @@ async function start(
 
 const last = (e: ExportEnv): ExportJobView => e.updates[e.updates.length - 1]
 const root = (e: ExportEnv): string => path.join(e.drive, 'Trip')
+
+function jobRecord(e: ExportEnv, jobId: string): JobRecord {
+  return JSON.parse(fs.readFileSync(path.join(e.userData, JOBS_DIR, `${jobId}.json`), 'utf8'))
+}
 
 describe('merge on export (#576)', () => {
   it("'merge' writes one .mkv at the target and leaves the local .mp4 and .ass as they were", async () => {
@@ -395,6 +410,9 @@ describe('merge on export (#576)', () => {
     expect(last(env).status).toBe('completed')
     const mkv = path.join(root(env), 'Beta Show', 'Beta Show - 01 [Studio].mkv')
     expect(fs.readFileSync(mkv, 'utf8')).toBe('scan-made mkv')
+    // A copy, not this job's merge: no `source` (#623).
+    expect(manifestOf(root(env)).items[0]).not.toHaveProperty('source')
+    expect(jobRecord(env, job.jobId).sources).toBeUndefined()
   })
 
   it('Pause mid-merge kills only the export ffmpeg and deletes its temp file; Resume merges again', async () => {
@@ -441,5 +459,191 @@ describe('merge on export (#576)', () => {
     expect(view.failed).toEqual([])
     expect(fs.existsSync(p.video)).toBe(true)
     expect(fs.existsSync(p.subtitle!)).toBe(true)
+  })
+})
+
+describe('re-exporting merged items (#623)', () => {
+  const MKV = (e: ExportEnv, ep = '01'): string =>
+    path.join(root(e), 'Beta Show', `Beta Show - ${ep} [Studio].mkv`)
+  const sizeOf = (f: string): number => fs.statSync(f).size
+
+  /** Merge-exports `keys` with `codec`, each merge writing `output`. */
+  async function mergeExport(
+    e: ExportEnv,
+    keys: string[],
+    codec = 'copy',
+    output = 'the merged mkv'
+  ): Promise<void> {
+    const before = ff.commands.length
+    const job = await start(e, keys, { unmerged: 'merge', codec })
+    for (let i = 0; i < keys.length; i++) {
+      await until(() => ff.commands.length === before + i + 1, `merge ${i + 1}`)
+      ff.commands[before + i].finish(output)
+    }
+    await e.svc.settled(job.jobId)
+    expect(last(e).status).toBe('completed')
+  }
+
+  const planOf = (e: ExportEnv, unmerged: ExportUnmergedMode, codec = 'copy') =>
+    e.svc.plan({ animeIds: null, target: e.drive, name: 'Trip', unmerged, codec })
+
+  it('a re-export of the same selection finds the merged pair present: start refuses, no ffmpeg runs, the .mkv is untouched', async () => {
+    env = makeEnv()
+    const p = pair(env)
+    await mergeExport(env, [p.key])
+    const mtime = fs.statSync(MKV(env)).mtimeMs
+
+    const plan = await planOf(env, 'merge')
+    expect(plan.target?.present).toEqual([p.key])
+    expect(plan.target?.presentMerged).toEqual([p.key])
+    const est = exportEstimate(plan.titles, new Set([p.key]), plan.target!.present, {
+      merge: true,
+      reencode: false
+    })
+    expect(est).toMatchObject({ items: 0, bytes: 0, alreadyThere: 1 })
+
+    const again = await env.svc.start({
+      selection: sel(p.key),
+      target: env.drive,
+      name: 'Trip',
+      unmerged: 'merge'
+    })
+    expect(again).toEqual({
+      ok: false,
+      reason: 'Nothing to copy: the library already has every selected item.'
+    })
+    expect(ff.commands).toHaveLength(1)
+    expect(fs.statSync(MKV(env)).mtimeMs).toBe(mtime)
+    expect(manifestOf(root(env)).items[0].source).toEqual({
+      size: sizeOf(p.video),
+      subtitleSize: sizeOf(p.subtitle!),
+      codec: 'copy',
+      outputSize: 'the merged mkv'.length
+    })
+  })
+
+  it.each(['copy', 'libx265'])(
+    'present is choice-independent: after a %s merge, copy-as-is, merge+copy and merge+libx265 plan the same',
+    async (codec) => {
+      env = makeEnv()
+      const p = pair(env)
+      await mergeExport(env, [p.key], codec)
+      for (const [unmerged, c] of [
+        ['copy-as-is', 'copy'],
+        ['merge', 'copy'],
+        ['merge', 'libx265']
+      ] as const) {
+        const plan = await planOf(env, unmerged, c)
+        expect(plan.target?.present, `${unmerged} + ${c}`).toEqual([p.key])
+        const r = await env.svc.start({
+          selection: sel(p.key),
+          target: env.drive,
+          name: 'Trip',
+          unmerged,
+          codec: c
+        })
+        expect(r.ok, `${unmerged} + ${c}`).toBe(false)
+      }
+      expect(ff.commands).toHaveLength(1)
+      expect(manifestOf(root(env)).items[0].source?.codec).toBe(codec)
+    }
+  )
+
+  it('a re-downloaded episode (another .mp4 size) is not present: only it is merged again, and its source follows', async () => {
+    env = makeEnv()
+    const a = pair(env, '1', 11)
+    const b = pair(env, '2', 12)
+    await mergeExport(env, [a.key, b.key])
+    const mtimeB = fs.statSync(MKV(env, '02')).mtimeMs
+
+    fs.writeFileSync(a.video, bytesFor('re-downloaded', 5000))
+    const plan = await planOf(env, 'merge')
+    expect(plan.target?.present).toEqual([b.key])
+
+    const job = await start(env, [a.key, b.key], { unmerged: 'merge' })
+    await until(() => ff.commands.length === 3, 'the one new merge')
+    expect(ff.commands[2].inputs[0]).toBe(a.video)
+    ff.commands[2].finish('the re-merged mkv')
+    await env.svc.settled(job.jobId)
+    expect(ff.commands).toHaveLength(3)
+    expect(fs.readFileSync(MKV(env), 'utf8')).toBe('the re-merged mkv')
+    expect(fs.statSync(MKV(env, '02')).mtimeMs).toBe(mtimeB)
+    const items = manifestOf(root(env)).items
+    expect(items.find((i) => i.episodeInt === '1')?.source).toEqual({
+      size: 5000,
+      subtitleSize: sizeOf(a.subtitle!),
+      codec: 'copy',
+      outputSize: 'the re-merged mkv'.length
+    })
+    expect((await planOf(env, 'merge')).target?.present.sort()).toEqual([a.key, b.key].sort())
+  })
+
+  it('a changed .ass alone makes the pair not present', async () => {
+    env = makeEnv()
+    const p = pair(env)
+    await mergeExport(env, [p.key])
+    fs.appendFileSync(p.subtitle!, 'Dialogue: edited\n')
+    expect((await planOf(env, 'merge')).target?.present).toEqual([])
+  })
+
+  it('copied items keep the same-size rule: a pair copied as-is is present, with no source', async () => {
+    env = makeEnv()
+    const p = pair(env)
+    const job = await start(env, [p.key], { unmerged: 'copy-as-is' })
+    await env.svc.settled(job.jobId)
+    expect(manifestOf(root(env)).items[0]).not.toHaveProperty('source')
+    const plan = await planOf(env, 'merge', 'libx265')
+    expect(plan.target?.present).toEqual([p.key])
+    expect(plan.target?.presentMerged).toEqual([])
+  })
+
+  it('copy-as-is over a merged item: the new item has no source', async () => {
+    env = makeEnv()
+    const p = pair(env)
+    await mergeExport(env, [p.key])
+    fs.writeFileSync(p.video, bytesFor('re-downloaded', 5000))
+    const job = await start(env, [p.key], { unmerged: 'copy-as-is' })
+    await env.svc.settled(job.jobId)
+    const [item] = manifestOf(root(env)).items
+    expect(item).toMatchObject({
+      path: 'Beta Show/Beta Show - 01 [Studio].mp4',
+      subtitlePath: 'Beta Show/Beta Show - 01 [Studio].ass',
+      size: 5000
+    })
+    expect(item).not.toHaveProperty('source')
+  })
+
+  it('the source is recorded in the job at merge finish, so a quit and resume still writes it', async () => {
+    env = makeEnv({ checkpointEvery: 10 })
+    const a = pair(env, '1', 11)
+    const b = pair(env, '2', 12)
+    const job = await start(env, [a.key, b.key], { unmerged: 'merge' })
+    await until(() => ff.commands.length === 1, 'the first merge')
+    ff.commands[0].finish('first mkv')
+    await until(() => ff.commands.length === 2, 'the second merge')
+    expect(jobRecord(env, job.jobId).sources).toEqual({
+      [a.key]: {
+        size: sizeOf(a.video),
+        subtitleSize: sizeOf(a.subtitle!),
+        codec: 'copy',
+        outputSize: 'first mkv'.length
+      }
+    })
+    dm.destroy()
+    await env.svc.settled(job.jobId)
+
+    dm = new DownloadManager(dmDir, {} as never, dmUserData)
+    dm.setFfmpegDriver(ff.driver)
+    const after = env.restart()
+    await after.init()
+    await after.resume(job.jobId)
+    await until(() => ff.commands.length === 3, 'the second merge after resume')
+    ff.commands[2].finish('second mkv')
+    await after.settled(job.jobId)
+    const items = manifestOf(root(env)).items
+    expect(items.map((i) => [i.episodeInt, i.source?.outputSize])).toEqual([
+      ['1', 'first mkv'.length],
+      ['2', 'second mkv'.length]
+    ])
   })
 })

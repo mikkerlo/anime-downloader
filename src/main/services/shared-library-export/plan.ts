@@ -306,17 +306,47 @@ export async function classifyTarget(
   return { kind: 'add', root, libraryName: existingName, blocked: null, manifest: read.manifest }
 }
 
-/** Keys the library already has with the same size as the local video. */
+/**
+ * Whether `item` is the `.mkv` an export merged from `local`'s pair (#623).
+ * Its `source` counts only while it describes this very file: an older PC's
+ * rewrite carries it back by `itemKey` onto whatever that PC wrote.
+ */
+function mergedFrom(item: SharedLibraryItem, local: ResolvedItem): boolean {
+  const s = item.source
+  return (
+    s !== undefined &&
+    s.outputSize === item.size &&
+    local.subtitlePath !== null &&
+    s.size === local.videoSize &&
+    s.subtitleSize === local.subtitleSize
+  )
+}
+
+/**
+ * The keys the library already has, each as `'same'` (the same size as the
+ * local video) or `'merged'` (the `.mkv` an export merged from the local pair).
+ * It doesn't depend on the merge choice or the codec.
+ */
+export function presence(
+  manifest: SharedLibraryManifest | null,
+  resolved: ReadonlyMap<string, ResolvedItem>
+): Map<string, 'same' | 'merged'> {
+  const out = new Map<string, 'same' | 'merged'>()
+  if (!manifest) return out
+  for (const item of manifest.items) {
+    const key = itemKey(item)
+    const local = resolved.get(key)
+    if (!local) continue
+    if (local.videoSize === item.size) out.set(key, 'same')
+    else if (mergedFrom(item, local)) out.set(key, 'merged')
+  }
+  return out
+}
+
+/** Keys the library already has: the same size as the local video, or merged from the local pair. */
 export function presentKeys(
   manifest: SharedLibraryManifest | null,
   resolved: ReadonlyMap<string, ResolvedItem>
 ): string[] {
-  if (!manifest) return []
-  const out: string[] = []
-  for (const item of manifest.items) {
-    const key = itemKey(item)
-    const local = resolved.get(key)
-    if (local && local.videoSize === item.size) out.push(key)
-  }
-  return out
+  return [...presence(manifest, resolved).keys()]
 }

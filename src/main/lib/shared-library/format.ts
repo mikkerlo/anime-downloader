@@ -13,7 +13,7 @@ import { STATE_MINOR, STATE_VERSION } from '../sync-state/project'
 export { STATE_MINOR, STATE_VERSION }
 
 export const LAYOUT_VERSION = 1 as const
-export const LAYOUT_MINOR = 0 as const
+export const LAYOUT_MINOR = 1 as const
 export const NAMING_RULE = 'v1' as const
 
 /**
@@ -115,7 +115,17 @@ const ITEM = record([
   req('path', str('path')),
   opt('subtitlePath', str('path')),
   req('size', int(0)),
-  opt('sha256', str('sha256'))
+  opt('sha256', str('sha256')),
+  // Minor 1 (#623): the pair an export merged into this `.mkv`.
+  opt(
+    'source',
+    record([
+      req('size', int(0)),
+      req('subtitleSize', int(0)),
+      req('codec', str()),
+      req('outputSize', int(0))
+    ])
+  )
 ])
 
 const NAMING = record([req('rule', oneOf(NAMING_RULE)), req('renamed', array(str(), 'self'))])

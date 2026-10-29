@@ -112,6 +112,12 @@ export interface AttachedLibraryService {
   }[]
   /** `.anime-dl/posters/<animeId>.jpg` from the first library holding one. */
   posterFor(animeId: number): Promise<string | null>
+  /**
+   * `anime-poster://shared/<libraryId>/<animeId>` (S3b #583): that library's
+   * drive poster, checked as `posterFor` checks it. Null unless the library is
+   * attached and available; never the snapshot cache.
+   */
+  libraryPosterFor(libraryId: string, animeId: number): Promise<string | null>
   /** The attached roots, as picked and as `realpath`ed. */
   roots(): string[]
   spawnPathFor(abs: string): string
@@ -879,9 +885,24 @@ export function createAttachedLibraryService(
     return out
   }
 
-  async function posterFor(animeId: number): Promise<string | null> {
+  /** The poster on `o`'s drive, `realpath`- and size-checked now; null on any miss. */
+  async function drivePoster(o: Opened, animeId: number): Promise<string | null> {
     const rel = posterPath(animeId)
-    if (!rel) return null
+    if (!rel || !o.posters.has(animeId)) return null
+    try {
+      const r = await resolveLibraryPath(path.join(o.root, LIBRARY_DIR), { path: rel })
+      if (r.path === 'missing' || r.path === 'escapes') return null
+      // Re-checked at serve time: the drive can change the file after `open()`.
+      const st = await fsp.stat(r.path)
+      if (st.isFile() && st.size <= POSTER_MAX_BYTES) return r.path
+    } catch {
+      // Not served.
+    }
+    return null
+  }
+
+  async function posterFor(animeId: number): Promise<string | null> {
+    if (!posterPath(animeId)) return null
     for (const [libraryId, o] of [...opened, ...cached]) {
       if (!o.posters.has(animeId)) continue
       // An unplugged library's poster comes from the snapshot cache (#582).
@@ -890,17 +911,16 @@ export function createAttachedLibraryService(
         if (p) return p
         continue
       }
-      try {
-        const r = await resolveLibraryPath(path.join(o.root, LIBRARY_DIR), { path: rel })
-        if (r.path === 'missing' || r.path === 'escapes') continue
-        // Re-checked at serve time: the drive can change the file after `open()`.
-        const st = await fsp.stat(r.path)
-        if (st.isFile() && st.size <= POSTER_MAX_BYTES) return r.path
-      } catch {
-        // Next library.
-      }
+      const p = await drivePoster(o, animeId)
+      if (p) return p
     }
     return null
+  }
+
+  async function libraryPosterFor(libraryId: string, animeId: number): Promise<string | null> {
+    const o = opened.get(libraryId)
+    if (!o || !isAvailable(libraryId)) return null
+    return drivePoster(o, animeId)
   }
 
   function roots(): string[] {
@@ -1203,6 +1223,7 @@ export function createAttachedLibraryService(
     checkItem,
     availableSnapshots,
     posterFor,
+    libraryPosterFor,
     roots,
     spawnPathFor: (abs) => spawnPathForRoots(abs, roots(), deps.spawnPath),
     known,

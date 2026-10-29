@@ -32,8 +32,15 @@ interface AnimeSearchResult {
   season: string
 }
 
-/** Why a title is on this PC (#571). Consumers switch on `kind`. */
-type LocalSource = { kind: 'starred' } | { kind: 'downloaded' } | { kind: 'watching' }
+/**
+ * Why a title is on this PC (#571), or on an available attached Shared Library
+ * (#583: `libraryId` is the manifest's uuid). Consumers switch on `kind`.
+ */
+type LocalSource =
+  | { kind: 'starred' }
+  | { kind: 'downloaded' }
+  | { kind: 'watching' }
+  | { kind: 'shared'; libraryId: string; libraryName: string }
 
 /**
  * A `search:local` hit: a title this PC has. `genres` (titles) feeds the

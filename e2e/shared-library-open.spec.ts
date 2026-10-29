@@ -42,6 +42,17 @@ function tree(root: string): Record<string, string> {
   return out
 }
 
+const FIXTURE_ID = '5d7c1f3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f'
+
+/** Submits `q` in Search and returns its local cards (#583: drive titles among them). */
+async function searchLocal(page: Page, q: string): Promise<Locator> {
+  await page.locator('.sidebar').getByRole('button', { name: 'Search', exact: true }).click()
+  const input = page.locator('.search-input')
+  await input.fill(q)
+  await input.press('Enter')
+  return page.locator('.search-view').getByTestId('local-card')
+}
+
 async function playAndWait(page: Page, card: Locator): Promise<void> {
   await card.getByTestId('play-from-drive').click()
   const video = page.locator('video').first()
@@ -53,7 +64,8 @@ async function playAndWait(page: Page, card: Locator): Promise<void> {
 test('open a Shared Library, see its titles, and play an .mp4 and an .mkv from the drive', async () => {
   const profile = makeProfile({
     prefix: 'anime-dl-shared-open-',
-    config: { playerMode: 'builtin' }
+    // Offline, as on the never-online PC: Search has only the drive's titles (#583).
+    config: { playerMode: 'builtin', workOffline: true }
   })
   const drive = path.join(profile.root, 'drive', 'Fixture library')
   fs.cpSync(FIXTURE, drive, { recursive: true })
@@ -98,6 +110,20 @@ test('open a Shared Library, see its titles, and play an .mp4 and an .mkv from t
     await playAndWait(page, cards.filter({ hasText: 'Dungeon Meshi' }))
     await page.locator('.close-btn').first().click()
 
+    // Search finds the drive's title (#583), with the drive badge and the
+    // library's own poster; a click opens the attached title.
+    const hit = await searchLocal(page, 'frieren')
+    await expect(hit).toHaveCount(1)
+    await expect(hit.getByTestId('drive-badge')).toHaveText('On Fixture library')
+    const hitPoster = hit.locator('img.poster')
+    await expect(hitPoster).toHaveAttribute('src', `anime-poster://shared/${FIXTURE_ID}/101`)
+    await expect
+      .poll(() => hitPoster.evaluate((el) => (el as HTMLImageElement).naturalWidth))
+      .toBeGreaterThan(0)
+    await hit.locator('.acard').click()
+    await expect(page.getByTestId('attached-detail')).toBeVisible()
+    await expect(page.getByTestId('attached-detail').locator('h1')).toHaveText('Frieren')
+
     expect(tree(drive)).toEqual(before)
   } finally {
     try {
@@ -116,7 +142,8 @@ test('open a Shared Library, see its titles, and play an .mp4 and an .mkv from t
  * asks the poller for a tick instead of waiting for the 10 s interval.
  */
 test('a library found on a drive, unplugged, re-plugged at a new path, then forgotten', async () => {
-  const profile = makeProfile({ prefix: 'anime-dl-shared-detect-' })
+  // Offline, so Search runs over the local corpus only and never the network (#583).
+  const profile = makeProfile({ prefix: 'anime-dl-shared-detect-', config: { workOffline: true } })
   const mounts = path.join(profile.root, 'mounts')
   const stick = path.join(mounts, 'STICK', 'Fixture library')
   fs.mkdirSync(path.dirname(stick), { recursive: true })
@@ -153,16 +180,33 @@ test('a library found on a drive, unplugged, re-plugged at a new path, then forg
     await expect(dot).toHaveAttribute('data-available', 'true')
     await expect(section.getByTestId('last-sync')).toHaveText('Last sync: never')
 
+    // Search finds the drive's title while it is plugged in (#583).
+    const sharedTab = async (): Promise<void> => {
+      await page.locator('.sidebar').getByRole('button', { name: 'Library', exact: true }).click()
+      await page.locator('.pill-tab', { hasText: 'Shared Libraries' }).click()
+    }
+    await expect(await searchLocal(page, 'frieren')).toHaveCount(1)
+    await sharedTab()
+
     // Unplug: the dot goes unavailable, with Last seen.
     fs.renameSync(stick, away)
     await focus()
     await expect(dot).toHaveAttribute('data-available', 'false', { timeout: 15_000 })
     await expect(section.getByTestId('last-seen')).toContainText('Last seen')
 
+    // Unplugged, its titles drop out of Search; this PC has nothing else.
+    await expect(await searchLocal(page, 'frieren')).toHaveCount(0)
+    await expect(page.locator('.search-view').getByTestId('offline-notice')).toBeVisible()
+    await sharedTab()
+
     // Back at the same path.
     fs.renameSync(away, stick)
     await focus()
     await expect(dot).toHaveAttribute('data-available', 'true', { timeout: 15_000 })
+    const back = await searchLocal(page, 'frieren')
+    await expect(back).toHaveCount(1)
+    await expect(back.getByTestId('drive-badge')).toHaveText('On Fixture library')
+    await sharedTab()
 
     // Unplug, then re-plug under another mount: found by libraryId at the new path.
     fs.renameSync(stick, away)

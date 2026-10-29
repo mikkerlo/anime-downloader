@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SearchView from '../../../src/renderer/src/components/views/SearchView.vue'
+import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 import { offlineApi } from '../../helpers/offline-api'
 
 function anime(id: number, title = `Anime ${id}`): AnimeSearchResult {
@@ -21,14 +22,16 @@ function anime(id: number, title = `Anime ${id}`): AnimeSearchResult {
   }
 }
 
+type SourceArg = Exclude<LocalSource['kind'], 'shared'> | LocalSource
+
 function local(
   id: number,
-  sources: LocalSource['kind'][],
+  sources: SourceArg[],
   extra: Partial<LocalSearchResult> = {}
 ): LocalSearchResult {
   return {
     ...anime(id),
-    localSources: sources.map((kind) => ({ kind })),
+    localSources: sources.map((s) => (typeof s === 'string' ? { kind: s } : s)),
     genres: [],
     ...extra
   }
@@ -479,5 +482,124 @@ describe('SearchView — "In your library" online (#571)', () => {
     expect(wrapper.find('[data-testid="local-section"]').exists()).toBe(false)
     expect(cardIds(wrapper, '.remote-grid')).toEqual([1])
     err.mockRestore()
+  })
+})
+
+describe('SearchView — titles on an attached Shared Library (#583)', () => {
+  const LIB_A = '5d7c1f3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f'
+  const LIB_B = '9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e5f'
+  const onDrive = (libraryId: string, libraryName: string): LocalSource => ({
+    kind: 'shared',
+    libraryId,
+    libraryName
+  })
+  const driveTitle = (id: number, sources: SourceArg[]): LocalSearchResult =>
+    local(id, sources, { posterUrlSmall: `anime-poster://shared/${LIB_A}/${id}` })
+
+  const badges = (card: ReturnType<VueWrapper['find']>): string[] =>
+    card.findAll('.local-badge').map((b) => b.text())
+
+  it('offline: a drive title shows "On <library>" and its drive poster; two drives, two badges', async () => {
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({
+          results: [
+            driveTitle(101, [onDrive(LIB_A, 'Stick')]),
+            driveTitle(102, ['starred', onDrive(LIB_A, 'Stick'), onDrive(LIB_B, 'Backup')])
+          ],
+          corpusSize: 2
+        })
+      },
+      'offline-manual'
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'frieren')
+
+    const cards = wrapper.findAll('[data-testid="local-card"]')
+    expect(badges(cards[0])).toEqual(['On Stick'])
+    expect(cards[0].find('[data-testid="drive-badge"]').attributes('title')).toBe('On Stick')
+    expect(cards[0].find('[data-testid="drive-badge"] svg').exists()).toBe(true)
+    expect(cards[0].find('.local-badge').classes()).toContain('src-shared')
+    expect(cards[0].find('img.poster').attributes('src')).toBe(`anime-poster://shared/${LIB_A}/101`)
+    expect(badges(cards[1])).toEqual(['Starred', 'On Stick', 'On Backup'])
+    expect(cards[1].findAll('[data-testid="drive-badge"]')).toHaveLength(2)
+  })
+
+  it('a library name is drive input and renders as text', async () => {
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({
+          results: [driveTitle(101, [onDrive(LIB_A, '<img src=x onerror=alert(1)>')])],
+          corpusSize: 1
+        })
+      },
+      'offline-manual'
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'frieren')
+    const badge = wrapper.find('[data-testid="drive-badge"]')
+    expect(badge.text()).toBe('On <img src=x onerror=alert(1)>')
+    expect(badge.find('img').exists()).toBe(false)
+  })
+
+  it('clicking a drive title opens it the way the Shared Libraries tab does', async () => {
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({
+          results: [driveTitle(101, [onDrive(LIB_A, 'Stick')])],
+          corpusSize: 1
+        })
+      },
+      'offline-manual'
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    const store = useLibraryStore()
+    const openAnime = vi.spyOn(store, 'openAnime')
+    await submit(wrapper, 'frieren')
+    await wrapper.find('[data-testid="local-card"] .acard').trigger('click')
+    expect(openAnime).toHaveBeenCalledWith(101)
+  })
+
+  it("starring a drive title stores the poster as anime-poster://<id>, as the tab's star does", async () => {
+    const libraryToggle = vi.fn().mockResolvedValue(true)
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({
+          results: [driveTitle(101, [onDrive(LIB_A, 'Stick')])],
+          corpusSize: 1
+        }),
+        libraryToggle
+      },
+      'offline-manual'
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'frieren')
+    await wrapper.find('[data-testid="local-card"] .star-btn').trigger('click')
+    await flushPromises()
+    expect(libraryToggle).toHaveBeenCalledWith({
+      ...anime(101),
+      posterUrlSmall: 'anime-poster://101'
+    })
+  })
+
+  it('online: drive titles are in the "In your library" section', async () => {
+    stubApi({
+      searchLocal: vi.fn().mockResolvedValue({
+        results: [driveTitle(101, [onDrive(LIB_A, 'Stick')])],
+        corpusSize: 1
+      }),
+      searchAnime: vi.fn().mockResolvedValue({ data: [anime(101), anime(7)] })
+    })
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'frieren')
+    const section = wrapper.find('[data-testid="local-section"]')
+    expect(section.find('h3').text()).toBe('In your library')
+    expect(badges(section.find('[data-testid="local-card"]'))).toEqual(['On Stick'])
+    expect(cardIds(wrapper, '.remote-grid')).toEqual([7])
   })
 })

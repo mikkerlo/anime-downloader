@@ -82,6 +82,17 @@ describe('PlayerView: a drive-disconnected result raises the overlay', () => {
     expect(deps).toContain('savePosition: () => void saveProgress(true)')
     expect(deps).toContain('onDriveDisconnected: () => driveDisconnect.onMseDisconnected()')
   })
+
+  it('an anime-video:// stall starts the check too: a 404 after the drive went away never errors', () => {
+    const waiting = slice('function onWaiting(): void {', '\n}')
+    expect(waiting).toContain(
+      'if (activeFilePath.value && !isMkv.value) void driveDisconnect.onVideoError();'
+    )
+    const error = slice('function onVideoElementError(): void {', '\n}')
+    expect(error).toContain(
+      'if (activeFilePath.value && !isMkv.value) void driveDisconnect.onVideoError();'
+    )
+  })
 })
 
 describe('DriveEpisodes on an unplugged drive', () => {

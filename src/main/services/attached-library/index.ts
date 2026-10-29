@@ -159,9 +159,10 @@ export interface AttachedLibraryService {
   onAvailabilityChanged(listener: (t: AttachedLibraryTransition) => void): () => void
   /**
    * `'drive-disconnected'` when `p` is under an attached root and can't be
-   * `stat`ed now; logged once per library until it is seen again. Never throws.
+   * `stat`ed now, or a read of it already failed (`readError`); logged once
+   * per library until it is seen again. Never throws.
    */
-  classifyMissing(p: string): Promise<PlayerFailureReason | null>
+  classifyMissing(p: string, hint?: { readError?: boolean }): Promise<PlayerFailureReason | null>
   /** The same from an error already in hand (the `anime-video://` handler); logs only. */
   reportUnreadable(p: string, err: unknown): boolean
   /** `list()`, with a claim PC's rates from each library base. */
@@ -1140,10 +1141,19 @@ export function createAttachedLibraryService(
     log.warn(`[shared-library] drive-disconnected: ${name} (${libraryId}), ${code} on ${p}`)
   }
 
-  async function classifyMissing(p: string): Promise<PlayerFailureReason | null> {
+  async function classifyMissing(
+    p: string,
+    hint: { readError?: boolean } = {}
+  ): Promise<PlayerFailureReason | null> {
     try {
       const libraryId = libraryOf(p)
       if (!libraryId) return null
+      // A read that failed under an open fd: on a real unplug the path can
+      // still `stat` from cache while the device is gone.
+      if (hint.readError) {
+        noteDisconnect(libraryId, p, { code: 'read error' })
+        return 'drive-disconnected'
+      }
       try {
         await stat(p)
         return null

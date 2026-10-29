@@ -88,11 +88,15 @@ export interface StreamingServiceDeps {
    */
   playerDiagSink?: (line: string) => void
   /**
-   * Why ffmpeg exited non-zero, when it can be told (#582): main wires
+   * Why a run ended, when it can be told (#582): main wires
    * `attachedLibraryService.classifyMissing`, which says `drive-disconnected`
-   * for an input under an attached root that can no longer be `stat`ed.
+   * for an input under an attached root that can no longer be `stat`ed, or
+   * whose read failed (`readError`, from ffmpeg's demux error line).
    */
-  classifyExit?: (inputPath: string) => Promise<PlayerFailureReason | null>
+  classifyExit?: (
+    inputPath: string,
+    hint: { readError: boolean }
+  ) => Promise<PlayerFailureReason | null>
   channels: {
     streamChunk: string
     streamEnd: string
@@ -117,6 +121,14 @@ export const PLAYER_DIAG = process.env.ANIME_DL_PLAYER_DIAG === '1'
 
 /** Filename of the diag log under `userData`; shared with the Debug-tab IPC. */
 export const PLAYER_DIAG_LOG_FILENAME = 'player-diag.log'
+
+/**
+ * What ffmpeg logs when a read of its input fails mid-run (#582): it then
+ * treats the error as the end of its input and exits 0. Measured with ffmpeg
+ * 6.1 under an `EIO` / `ENODEV` / `ENXIO` read shim, copy and transcode alike.
+ */
+export const DEMUX_READ_ERROR =
+  /Error (?:during demuxing|retrieving a packet from demuxer): (?:Input\/output error|No such device(?: or address)?|No such file or directory|Device or resource busy)/
 
 // A malformed file can have one mapped track start much later than the other.
 // Bound how much media either timestamp probe may copy while waiting for the
@@ -834,11 +846,16 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     // Throttle transcode progress IPC: ffmpeg emits progress lines ~4x/sec which
     // is too noisy for a UI label, so we coalesce to at most one send per 500 ms.
     let lastProgressSentAt = 0
+    // Whether this run's demuxer hit a read error (#582), the hint `classifyExit` gets.
+    let demuxReadError = false
     proc.stderr?.on('data', (data: Buffer) => {
       if (procGen !== session.generation) return
       const line = data.toString()
       session.stderrTail.push(line)
       if (session.stderrTail.length > 40) session.stderrTail.shift()
+      if (!demuxReadError && DEMUX_READ_ERROR.test(session.stderrTail.slice(-2).join(''))) {
+        demuxReadError = true
+      }
       if (!session.transcode) return
       // Lines look like:
       //   frame= 1234 fps= 60 q=-1.0 size=... time=00:01:23.45 bitrate=... speed=2.5x
@@ -908,20 +925,57 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
       }
     }
 
-    // stdout ends before `exit` fires, even for a run that failed to open its
-    // input, so the `exit` error below never saw a respawn whose drive was gone:
-    // the session just ended. With a classifier wired (#582), an end that comes
-    // first waits for the exit code. Only a failed run that `classifyExit`
-    // names becomes an error; every other run ends exactly as before.
+    // A drive gone under the open fd (#582) doesn't fail the run: ffmpeg logs
+    // "Error during demuxing: Input/output error", treats it as the end of its
+    // input and exits 0. And stdout ends before `exit` fires, even for a run
+    // that failed to open its input, so the `exit` error below never saw a
+    // respawn whose drive was gone. Either way the session just ended. With a
+    // classifier wired, an end waits for the exit code, and every run that
+    // ends is asked about: a failed one, and a clean one, with the demuxer's
+    // read error as a hint. Only a run that `classifyExit` names becomes the
+    // `drive-disconnected` error; every other run ends or errors as before.
     let endAwaitsExit = false
+    const sendError = (msg: string, reason: PlayerFailureReason | null): void => {
+      session.error = msg
+      console.error('[remux-stream]', msg)
+      const sender = event.sender
+      if (sender && !sender.isDestroyed()) {
+        const payload: PlayerStreamErrorPayload = { sessionId, error: msg }
+        if (reason) payload.reason = reason
+        sender.send(channels.streamError, payload)
+      }
+    }
+    const settle = (code: number | null, classify: NonNullable<typeof deps.classifyExit>): void => {
+      // Held from here, so a late stdout end can't slip in while classifying.
+      session.done = true
+      const endedFirst = endAwaitsExit
+      const failed = code !== 0
+      const msg = failed
+        ? `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
+        : `ffmpeg stopped reading its input: ${session.stderrTail.slice(-3).join('').trim()}`
+      void classify(session.inputPath ?? session.mkvPath, { readError: demuxReadError })
+        .catch(() => null)
+        .then((reason) => {
+          // A seek respawned meanwhile: this run is no longer the session's.
+          if (procGen !== session.generation) return
+          if (reason) sendError(msg, reason)
+          // Unclassified: a failure that exited first is an error, as it
+          // always was, and a run whose stdout ended first just ends.
+          else if (failed && !endedFirst) sendError(msg, null)
+          else finishEnd()
+        })
+    }
     proc.stdout?.on('end', () => {
       if (procGen !== session.generation) return
       if (session.done) return
-      if (deps.classifyExit && proc.exitCode === null && proc.signalCode === null) {
+      const classify = deps.classifyExit
+      if (!classify) return finishEnd()
+      if (proc.exitCode === null && proc.signalCode === null) {
         endAwaitsExit = true
         return
       }
-      finishEnd()
+      // The exit came first, clean (a failed one already settled the run).
+      settle(proc.exitCode, classify)
     })
 
     proc.on('error', (err) => {
@@ -938,43 +992,29 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
 
     proc.on('exit', (code, signal) => {
       if (procGen !== session.generation) return
-      if (signal === 'SIGKILL') return
+      if (signal === 'SIGKILL') {
+        // Our own kills set `done` (cleanup) or move the generation (a seek).
+        // Anyone else's (the OOM killer) after stdout ended must not leave the
+        // held end with neither an end nor an error.
+        if (endAwaitsExit && !session.done) finishEnd()
+        return
+      }
       if (session.done) return
-      if (code === 0) {
-        if (endAwaitsExit) finishEnd()
+      const classify = deps.classifyExit
+      if (!classify) {
+        if (code === 0) return
+        session.done = true
+        sendError(
+          `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`,
+          null
+        )
         return
       }
-      const msg = `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
-      const sendError = (reason: PlayerFailureReason | null): void => {
-        session.error = msg
-        console.error('[remux-stream]', msg)
-        const sender = event.sender
-        if (sender && !sender.isDestroyed()) {
-          const payload: PlayerStreamErrorPayload = { sessionId, error: msg }
-          if (reason) payload.reason = reason
-          sender.send(channels.streamError, payload)
-        }
-      }
-      // Held from here, so a late stdout end can't slip in while classifying.
-      session.done = true
-      if (!deps.classifyExit) {
-        sendError(null)
-        return
-      }
+      // A clean exit before stdout ended settles from the end handler.
+      if (code === 0 && !endAwaitsExit) return
       // ffmpeg gives no errno: an input under an attached root that is gone
-      // now is a disconnected drive (#582). Copy and transcode both land here.
-      const endedFirst = endAwaitsExit
-      void deps
-        .classifyExit(session.inputPath ?? session.mkvPath)
-        .catch(() => null)
-        .then((reason) => {
-          // A seek respawned meanwhile: this run is no longer the session's.
-          if (procGen !== session.generation) return
-          if (reason) sendError(reason)
-          // Unclassified, the run that ended first still just ends, as it always did.
-          else if (endedFirst) finishEnd()
-          else sendError(null)
-        })
+      // now is a disconnected drive. Copy and transcode both land here.
+      settle(code, classify)
     })
 
     return proc

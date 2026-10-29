@@ -361,6 +361,17 @@ describe('the disconnect classification', () => {
     const local = path.join(tempRoot(), 'local.mkv')
     expect(await m.svc.classifyMissing(local)).toBeNull()
     expect(m.svc.reportUnreadable(local, err('EIO'))).toBe(false)
+    expect(await m.svc.classifyMissing(local, { readError: true })).toBeNull()
+  })
+
+  it("a read that failed under an open fd is a disconnect even while the path still stats (a real unplug's cached dentry)", async () => {
+    const m = make()
+    const root = copyFixtureLibrary()
+    await attachAt(m, root)
+    const file = path.join(root, 'Dungeon Meshi', 'Dungeon Meshi - 01 [AniLibria].mkv')
+    expect(fs.existsSync(file)).toBe(true)
+    expect(await m.svc.classifyMissing(file, { readError: false })).toBeNull()
+    expect(await m.svc.classifyMissing(file, { readError: true })).toBe('drive-disconnected')
   })
 
   it('reportUnreadable maps only the disconnect codes', async () => {

@@ -11,14 +11,23 @@
 //   only then raises the overlay. A drive that stays available, such as a
 //   sleeping one that woke up, is a generic playback error.
 //
+//   A stall (`waiting`) starts the same check. Measured in the built app: a
+//   drive renamed away mid-episode turns the next Range request into a 404,
+//   and Chromium then waits forever (no `error` in 90 s); a read that fails
+//   under the open fd errors only after about 30 s of retries.
+//
 // The overlay never retries by itself. Retry is enabled once the library is
 // available again, and re-resolves the episode through `player:find-local-file`,
 // since the drive may come back at another path.
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 
-/** One poll interval of the availability poller (`POLL_INTERVAL_MS`, #581). */
-export const DISCONNECT_WAIT_MS = 10_000
+/**
+ * One poll interval of the availability poller (`POLL_INTERVAL_MS`, #581),
+ * plus the time its tick and the store's re-list take, so a tick due at the
+ * very end of the interval still lands inside the wait.
+ */
+export const DISCONNECT_WAIT_MS = 12_000
 
 export const DRIVE_DISCONNECTED_TEXT = 'The drive was disconnected. Reconnect it to continue.'
 
@@ -39,6 +48,7 @@ export function useDriveDisconnect(deps: {
   retryError: Ref<string>
   retryEnabled: ComputedRef<boolean>
   onMseDisconnected: () => void
+  /** A `<video>` `error` or stall (`waiting`) on a file from an attached drive. */
   onVideoError: () => Promise<'overlay' | 'generic' | 'ignored'>
   retry: () => Promise<void>
 } {
@@ -66,14 +76,25 @@ export function useDriveDisconnect(deps: {
     show(deps.getLibraryId())
   }
 
-  async function onVideoError(): Promise<'overlay' | 'generic' | 'ignored'> {
+  // One check at a time: a stall followed by its `error` is one disconnect.
+  let checking: Promise<'overlay' | 'generic' | 'ignored'> | null = null
+
+  function onVideoError(): Promise<'overlay' | 'generic' | 'ignored'> {
     const id = deps.getLibraryId()
-    if (!id || disconnected.value) return 'ignored'
-    if (!(await deps.waitForUnavailable(id, deps.waitMs ?? DISCONNECT_WAIT_MS))) return 'generic'
-    // The source has errored but still holds its clock.
-    deps.savePosition()
-    show(id)
-    return 'overlay'
+    if (!id || disconnected.value) return Promise.resolve('ignored')
+    if (checking) return checking
+    const run = (async (): Promise<'overlay' | 'generic'> => {
+      if (!(await deps.waitForUnavailable(id, deps.waitMs ?? DISCONNECT_WAIT_MS))) return 'generic'
+      // The source has errored or stalled but still holds its clock.
+      deps.savePosition()
+      show(id)
+      return 'overlay'
+    })()
+    checking = run
+    void run.finally(() => {
+      if (checking === run) checking = null
+    })
+    return run
   }
 
   async function retry(): Promise<void> {

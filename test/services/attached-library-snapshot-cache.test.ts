@@ -254,6 +254,106 @@ describe('the poster cap', () => {
   })
 })
 
+describe('a drive lost while the posters are copied (review r4407995047)', () => {
+  const ID = '44444444-4444-4444-8444-444444444444'
+
+  /** Three poster files on a "drive", and a cache save input over them at `generation`. */
+  function drive(generation: number, gone: Set<number> = new Set(), throws = false) {
+    const root = tempRoot()
+    for (const id of [1, 2, 3])
+      fs.writeFileSync(path.join(root, `${id}.jpg`), Buffer.alloc(100, id))
+    return {
+      manifest: {
+        libraryId: ID,
+        generation,
+        titles: [],
+        items: []
+      } as unknown as SharedLibraryManifest,
+      metas: new Map<number, SharedLibraryMeta>(),
+      posters: [1, 2, 3],
+      posterSource: async (animeId: number): Promise<string | null> => {
+        if (gone.has(animeId)) {
+          if (throws) throw Object.assign(new Error('gone'), { code: 'EIO' })
+          return null
+        }
+        return path.join(root, `${animeId}.jpg`)
+      }
+    }
+  }
+
+  const indexOf = (dir: string): Record<string, unknown> =>
+    JSON.parse(fs.readFileSync(path.join(dir, ID, 'index.json'), 'utf8'))
+
+  it.each([
+    ['a missing poster', false],
+    ['a read that throws', true]
+  ])(
+    '%s mid-loop keeps the last complete cache, and a later save of that generation still runs',
+    async (_l, throws) => {
+      const dir = path.join(tempRoot(), 'cache')
+      const cache = createSnapshotCache({ dir })
+      await cache.save(ID, drive(1), () => true)
+      expect(indexOf(dir)).toMatchObject({ generation: 1, posters: [1, 2, 3] })
+
+      await cache.save(ID, drive(2, new Set([2, 3]), throws), () => true)
+      // Nothing of generation 2 was committed, and the old posters are all still served.
+      expect(indexOf(dir)).toMatchObject({ generation: 1, posters: [1, 2, 3] })
+      expect(indexOf(dir).evicted).toBeUndefined()
+      for (const id of [1, 2, 3]) {
+        const p = cache.posterFile(ID, id)
+        expect(p && fs.existsSync(p)).toBe(true)
+      }
+      expect((await cache.load(ID))?.manifest.generation).toBe(1)
+      expect(fs.existsSync(path.join(dir, ID, 'posters.next'))).toBe(false)
+
+      await cache.save(ID, drive(2), () => true)
+      expect(indexOf(dir)).toMatchObject({ generation: 2, posters: [1, 2, 3] })
+    }
+  )
+
+  it('with no complete cache to keep, the partial one is marked so the same generation saves again', async () => {
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    await cache.save(ID, drive(1, new Set([3])), () => true)
+    expect(indexOf(dir)).toMatchObject({ generation: 1, posters: [1, 2], evicted: true })
+    expect((await cache.load(ID))?.manifest.generation).toBe(1)
+    await cache.save(ID, drive(1), () => true)
+    expect(indexOf(dir)).toMatchObject({ generation: 1, posters: [1, 2, 3] })
+    expect(indexOf(dir).evicted).toBeUndefined()
+  })
+
+  it('through the service: the drive pulled right after a read keeps the cache of the read before', async () => {
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    const root = copyFixtureLibrary()
+    let pullOnChange = false
+    const svc = make(newStore(), cache, {
+      // Runs right after the read is committed, before the queued save copies a poster.
+      onChanged: () => {
+        if (pullOnChange) fs.renameSync(root, `${root}-away`)
+      }
+    })
+    await attach(svc, root)
+    await cache.idle()
+    const first = JSON.parse(
+      fs.readFileSync(path.join(dir, FIXTURE_LIBRARY_ID, 'index.json'), 'utf8')
+    )
+    expect(first.posters).toEqual([101])
+
+    const file = path.join(root, '.anime-dl', 'manifest.json')
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.writeFileSync(file, JSON.stringify({ ...m, generation: m.generation + 1 }))
+    pullOnChange = true
+    await svc.refresh(FIXTURE_LIBRARY_ID, root)
+    await cache.idle()
+    const kept = JSON.parse(
+      fs.readFileSync(path.join(dir, FIXTURE_LIBRARY_ID, 'index.json'), 'utf8')
+    )
+    expect(kept).toEqual(first)
+    expect(fs.existsSync(cache.posterFile(FIXTURE_LIBRARY_ID, 101)!)).toBe(true)
+  })
+})
+
 describe('Forget', () => {
   it("deletes the library's cache dir", async () => {
     const dir = path.join(tempRoot(), 'cache')

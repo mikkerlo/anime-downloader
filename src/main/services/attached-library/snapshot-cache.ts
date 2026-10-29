@@ -10,7 +10,13 @@
 //   unavailable library seen longest ago are evicted, a whole library at a
 //   time, never those of an available one.
 // - `index.json`: the generation the snapshot was taken at and the posters'
-//   total, so the cap needs no directory walk.
+//   total, so the cap needs no directory walk. `evicted` marks posters that
+//   are missing (evicted, or a save the drive left incomplete), so the next
+//   fresh read saves that generation again.
+//
+// A save stages the new posters in `posters.next/`. A poster the read listed
+// that can't be read now means the drive went away mid-save: the last
+// complete cache is kept as it was.
 //
 // Every operation runs on one queue, so a Forget's delete never interleaves
 // with a write, and none of them throws: a failure is logged.
@@ -26,6 +32,7 @@ export const SNAPSHOT_POSTERS_TOTAL_MAX_BYTES = 100 * 1024 * 1024
 const SNAPSHOT_FILE = 'snapshot.json'
 const INDEX_FILE = 'index.json'
 const POSTERS_DIR = 'posters'
+const POSTERS_STAGING = 'posters.next'
 // `libraryId` comes from the drive: S5's reader checks it is a UUID, and it is
 // checked again here, where it becomes a folder name.
 const SAFE_ID = /^[A-Za-z0-9-]{1,64}$/
@@ -169,33 +176,62 @@ export function createSnapshotCache(deps: SnapshotCacheDeps): SnapshotCache {
       const prev = await readIndex(libraryId)
       if (prev && prev.generation === generation && !prev.evicted) return
       await fsp.mkdir(dir, { recursive: true })
+      // The new posters are staged; the old set keeps being served until the
+      // new one is complete.
+      const staging = path.join(dir, POSTERS_STAGING)
+      await fsp.rm(staging, { recursive: true, force: true })
+      await fsp.mkdir(staging, { recursive: true })
+      const posters: number[] = []
+      let posterBytes = 0
+      // A poster the read listed that can't be read now: the drive went away
+      // (or changed) mid-save. Over the cap is not that, just not cached.
+      let incomplete = false
+      for (const animeId of input.posters) {
+        if (!Number.isSafeInteger(animeId) || animeId < 1) continue
+        try {
+          const src = await input.posterSource(animeId)
+          if (!src) {
+            incomplete = true
+            continue
+          }
+          // The drive is untrusted: the cap is checked on the bytes read.
+          const data = await readCapped(src, posterMax)
+          if (!data) continue
+          await fsp.writeFile(path.join(staging, `${animeId}.jpg`), data)
+          posters.push(animeId)
+          posterBytes += data.length
+        } catch {
+          incomplete = true
+        }
+      }
+      if (incomplete && prev && !prev.evicted) {
+        // Keep the complete cache; the next fresh read saves this generation.
+        await fsp.rm(staging, { recursive: true, force: true })
+        log.warn(
+          `[shared-library] snapshot cache: ${libraryId} changed while saving; kept the last one`
+        )
+        return
+      }
       const metas: Record<string, SharedLibraryMeta> = {}
       for (const [id, meta] of input.metas) metas[String(id)] = meta
       await writeAtomic(
         path.join(dir, SNAPSHOT_FILE),
         JSON.stringify({ version: 1, manifest: input.manifest, metas })
       )
+      // No `posterFile` path points into the folder while it is swapped.
+      indexes.delete(libraryId)
       const postersDir = path.join(dir, POSTERS_DIR)
       await fsp.rm(postersDir, { recursive: true, force: true })
-      await fsp.mkdir(postersDir, { recursive: true })
-      const posters: number[] = []
-      let posterBytes = 0
-      for (const animeId of input.posters) {
-        if (!Number.isSafeInteger(animeId) || animeId < 1) continue
-        try {
-          const src = await input.posterSource(animeId)
-          if (!src) continue
-          // The drive is untrusted: the cap is checked on the bytes read.
-          const data = await readCapped(src, posterMax)
-          if (!data) continue
-          await fsp.writeFile(path.join(postersDir, `${animeId}.jpg`), data)
-          posters.push(animeId)
-          posterBytes += data.length
-        } catch {
-          // Not cached: its card shows the placeholder.
-        }
-      }
-      await writeIndex(libraryId, dir, { version: 1, generation, posters, posterBytes })
+      await fsp.rename(staging, postersDir)
+      // With nothing complete to keep, the partial set is kept but marked, so
+      // the next fresh read saves this generation again.
+      await writeIndex(libraryId, dir, {
+        version: 1,
+        generation,
+        posters,
+        posterBytes,
+        ...(incomplete ? { evicted: true as const } : {})
+      })
     })
   }
 

@@ -159,7 +159,7 @@ describe.skipIf(!hasFfmpeg)('MSE mid-play (real ffmpeg)', () => {
       tmpDir,
       getFfmpegPath: () => 'ffmpeg',
       getFfprobePath: () => 'ffprobe',
-      classifyExit: (input) => svc.classifyMissing(input),
+      classifyExit: (input, hint) => svc.classifyMissing(input, hint),
       channels: {
         streamChunk: EVENT_CHUNK,
         streamEnd: 'player:stream-end',

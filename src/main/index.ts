@@ -465,8 +465,8 @@ const skipAnalysisService = createSkipAnalysisService({
 const streamingService = createStreamingService({
   getFfmpegPath,
   getFfprobePath,
-  // A mid-episode ffmpeg exit on a drive that went away (#582).
-  classifyExit: (input) => attachedLibraryService.classifyMissing(input),
+  // A mid-episode ffmpeg run on a drive that went away (#582).
+  classifyExit: (input, hint) => attachedLibraryService.classifyMissing(input, hint),
   // Live-read so the Settings → Debug toggle applies without a restart; the
   // env var stays as a force-on override for one-off runs.
   isPlayerDiagEnabled: () =>

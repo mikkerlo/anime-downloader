@@ -704,21 +704,43 @@ describe('StreamingService exit classification (#582)', () => {
   })
 
   /** A fake ffmpeg: `endFirst` closes stdout before exiting, as a run that can't open its input does. */
-  function fakeFfmpeg(code: number, endFirst: boolean): string {
-    const file = path.join(dir, `ffmpeg-${code}-${endFirst}`)
+  function fakeFfmpeg(code: number, endFirst: boolean, stderr = ''): string {
+    const file = path.join(dir, `ffmpeg-${code}-${endFirst}-${stderr.length}`)
+    const say = stderr ? `printf '%s\\n' '${stderr}' >&2\n` : ''
     // Exit first: a background child keeps stdout open past the exit.
-    const body = endFirst ? `printf x\nexit ${code}\n` : `(sleep 0.3) &\nexit ${code}\n`
+    const body = endFirst ? `printf x\n${say}exit ${code}\n` : `${say}(sleep 0.3) &\nexit ${code}\n`
     fs.writeFileSync(file, `#!/bin/sh\n${body}`, { mode: 0o755 })
     return file
   }
 
+  /** What ffmpeg 6.1 logs when a read of its open input fails, before it exits 0. */
+  const DEMUX_EIO = '[in#0/matroska,webm @ 0x1] Error during demuxing: Input/output error'
+
+  type Classify = (
+    input: string,
+    hint: { readError: boolean }
+  ) => Promise<PlayerFailureReason | null>
+
   async function run(
     ffmpeg: string,
-    classifyExit?: (input: string) => Promise<PlayerFailureReason | null>,
-    ready = true
-  ): Promise<{ sent: [string, unknown][]; session: MseSession; inputs: string[] }> {
+    classifyExit?: Classify,
+    ready = true,
+    afterEnd?: (
+      proc: ReturnType<typeof createStreamingService>['spawnFfmpegForSession'] extends (
+        ...a: never[]
+      ) => infer P
+        ? P
+        : never
+    ) => void
+  ): Promise<{
+    sent: [string, unknown][]
+    session: MseSession
+    inputs: string[]
+    hints: { readError: boolean }[]
+  }> {
     const sent: [string, unknown][] = []
     const inputs: string[] = []
+    const hints: { readError: boolean }[] = []
     const event = {
       sender: {
         isDestroyed: (): boolean => false,
@@ -731,18 +753,20 @@ describe('StreamingService exit classification (#582)', () => {
       channels,
       ...(classifyExit
         ? {
-            classifyExit: (input: string) => {
+            classifyExit: (input: string, hint: { readError: boolean }) => {
               inputs.push(input)
-              return classifyExit(input)
+              hints.push(hint)
+              return classifyExit(input, hint)
             }
           }
         : {})
     })
     const session = mkSession({ ready, inputPath: '/drive/show.mkv', mkvPath: '\\\\?\\X' })
     const proc = svc.spawnFfmpegForSession(session, event, 'sid', 0)
+    if (afterEnd) proc.stdout?.on('end', () => setTimeout(() => afterEnd(proc), 20))
     await new Promise<void>((res) => proc.on('close', () => res()))
     await new Promise((r) => setTimeout(r, 10))
-    return { sent, session, inputs }
+    return { sent, session, inputs, hints }
   }
 
   const disconnected = async (): Promise<PlayerFailureReason> => 'drive-disconnected'
@@ -784,11 +808,49 @@ describe('StreamingService exit classification (#582)', () => {
     ])
   })
 
-  it('a clean run is never classified and ends', async () => {
-    const classify = vi.fn(disconnected)
-    const { sent } = await run(fakeFfmpeg(0, true), classify)
-    expect(classify).not.toHaveBeenCalled()
+  it('a real unplug under the open fd: ffmpeg logs the demux read error and exits 0, which is the disconnect, not the end (review r4407995013)', async () => {
+    const { sent, hints, session } = await run(
+      fakeFfmpeg(0, true, DEMUX_EIO),
+      async (_input, hint) => (hint.readError ? 'drive-disconnected' : null)
+    )
+    expect(hints).toEqual([{ readError: true }])
+    expect(sent.filter(([ch]) => ch !== 'sc')).toEqual([
+      [
+        'sx',
+        {
+          sessionId: 'sid',
+          error: expect.stringContaining('Error during demuxing'),
+          reason: 'drive-disconnected'
+        }
+      ]
+    ])
+    expect(session.endPending).toBe(false)
+  })
+
+  it('a clean exit whose input is gone now is the disconnect too; one still there just ends', async () => {
+    const gone = await run(fakeFfmpeg(0, true), disconnected)
+    expect(gone.hints).toEqual([{ readError: false }])
+    expect(gone.sent.map(([ch]) => ch)).toEqual(['sx'])
+    const there = await run(fakeFfmpeg(0, true), unclassified)
+    expect(there.sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+    // A clean exit before stdout ended is asked once, from the end.
+    const exitFirst = await run(fakeFfmpeg(0, false), disconnected)
+    expect(exitFirst.hints).toHaveLength(1)
+    expect(exitFirst.sent.map(([ch]) => ch)).toEqual(['sx'])
+  })
+
+  it('the demux read error is a hint only: without the classifier the run ends, as on main', async () => {
+    const { sent } = await run(fakeFfmpeg(0, true, DEMUX_EIO))
     expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+  })
+
+  it('an outside SIGKILL after stdout ended finishes the held end (review r4407995020)', async () => {
+    const file = path.join(dir, 'ffmpeg-held')
+    // Writes, closes stdout, then hangs until killed.
+    fs.writeFileSync(file, '#!/bin/sh\nprintf x\nexec 1>&-\nexec sleep 30\n', { mode: 0o755 })
+    const { sent, session } = await run(file, unclassified, true, (proc) => proc.kill('SIGKILL'))
+    expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+    expect(session.done).toBe(true)
   })
 
   it('a classifier that throws is unclassified', async () => {

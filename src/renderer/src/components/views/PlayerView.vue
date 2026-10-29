@@ -1964,6 +1964,8 @@ function onCanPlay(): void {
 function onWaiting(): void {
   growingFile.onWaiting();
   onVideoWaiting();
+  // A drive gone under `anime-video://` stalls rather than errors (#582).
+  if (activeFilePath.value && !isMkv.value) void driveDisconnect.onVideoError();
 }
 
 function onSeekStart(): void {

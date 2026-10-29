@@ -123,6 +123,25 @@ describe('a <video> error on an attached title (anime-video://)', () => {
     expect(await d.onVideoError()).toBe('ignored')
     expect(savePosition).not.toHaveBeenCalled()
   })
+
+  it('a stall and the error that follows it are one check: one wait, one save, one overlay', async () => {
+    const { d, store, savePosition, pause } = await rig()
+    const wait = vi.spyOn(store, 'waitForUnavailable')
+    vi.useFakeTimers()
+    const stall = d.onVideoError()
+    await vi.advanceTimersByTimeAsync(3_000)
+    const error = d.onVideoError()
+    expect(error).toBe(stall)
+    await poll(false)
+    expect(await stall).toBe('overlay')
+    expect(wait).toHaveBeenCalledTimes(1)
+    expect(savePosition).toHaveBeenCalledTimes(1)
+    expect(pause).toHaveBeenCalledTimes(1)
+  })
+
+  it('the wait covers a whole poll interval and the tick after it', () => {
+    expect(DISCONNECT_WAIT_MS).toBeGreaterThan(10_000)
+  })
 })
 
 describe('MSE: main said drive-disconnected', () => {

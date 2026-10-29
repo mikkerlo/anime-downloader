@@ -48,7 +48,7 @@ Two cancel semantics, deliberately separate:
   - `playerPresenceService.isOpen()`: the player's remux, transcode and stream skip detection spawn all three;
   - `skipAnalysisService.getCurrentAnalysis() !== null`: it spawns fpcalc and ffmpeg.
 
-  If any is busy, nothing is deleted or downloaded and the step reports a `warning`: "ffmpeg failed its check but is in use (a merge / the player / skip analysis). Close it, or wait for it to finish, and run Prepare for offline again." A delete that fails with `EBUSY` / `EPERM` / `EACCES` (Windows refusing a running `.exe` that started between the check and the delete) reports the same warning.
+  If any is busy, nothing is deleted or downloaded and the step reports a `warning`: "ffmpeg failed its check but is in use (a merge / the player / skip analysis). Close it, or wait for it to finish, and run Prepare for offline again." A delete that fails with `EBUSY` / `EPERM` / `EACCES` (Windows refusing a running `.exe` that started between the check and the delete) reports the same warning. `clearFfmpegPaths()` runs only once a file was actually removed, so a refused delete leaves the paths, and what `ffmpegStatus` reads, as they were.
 
 ## Merge hold while the player is open (#516)
 

@@ -25,7 +25,7 @@ const STREAM_DETECT_DEADLINE_MS = 120_000
 // lives in one place rather than being inlined twice — two copies had already
 // been edited as a pair once and would drift on the next pass. Deliberately
 // generic: an empty path means *any* of "the bootstrap download is still in
-// flight" (`src/main/index.ts:1088` is fire-and-forget), "the download failed",
+// flight" (`src/main/index.ts:1078` is fire-and-forget), "the download failed",
 // or "this platform has no fpcalc asset at all" (32-bit Windows). The old text
 // advised a restart, which is wrong for the first and third of those.
 const FPCALC_UNAVAILABLE_MESSAGE =

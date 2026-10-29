@@ -120,9 +120,11 @@ export function createBinariesStep(deps: BinariesStepDeps): PrepareStep {
           continue
         }
         let deferred = false
+        let removed = false
         for (const n of names) {
           try {
             await deps.remove(pathOf(n))
+            removed = true
           } catch (err) {
             if (BUSY_CODES.has((err as NodeJS.ErrnoException)?.code ?? '')) {
               details.push({ text: deferredText([n], ['another program']), status: 'warning' })
@@ -132,7 +134,8 @@ export function createBinariesStep(deps: BinariesStepDeps): PrepareStep {
             throw err
           }
         }
-        if (group.ffmpeg) deps.clearFfmpegPaths()
+        // A refused delete leaves the files, and the paths, as they were.
+        if (group.ffmpeg && removed) deps.clearFfmpegPaths()
         if (deferred) {
           done += group.names.length
           continue

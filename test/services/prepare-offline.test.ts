@@ -39,6 +39,7 @@ import { createShikimoriRatesStep } from '../../src/main/services/prepare-offlin
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import type { BinaryCheck } from '../../src/main/ffmpeg-binaries'
+import { createFfmpegStatus } from '../../src/main/lib/ffmpeg-status'
 
 const PROGRESS = 'prepare-offline:progress'
 
@@ -637,6 +638,42 @@ describe('step 1: binaries', () => {
       expect(out.status).toBe('warning')
       expect(out.details[0].text).toMatch(/^ffmpeg failed its check but is in use/)
       expect(r.events.some((e) => e.startsWith('download'))).toBe(false)
+      // Nothing was removed, so the paths stay as they were (review r4416922524).
+      expect(r.events).not.toContain('clearFfmpegPaths')
+    })
+
+    it.each(['EBUSY', 'EPERM', 'EACCES'])(
+      'a refused delete (%s) of a broken ffprobe keeps a healthy ffmpeg available',
+      async (code) => {
+        const r = binariesRig({ ffmpeg: 'good', ffprobe: 'bad', fpcalc: 'good' })
+        r.deps.remove = vi.fn(async () => {
+          throw Object.assign(new Error('refused'), { code })
+        })
+        // What auto-merge reads: available while `getFfmpegPath()` names a file.
+        const status = createFfmpegStatus(async () => ({ available: r.ffmpegPath.value !== '' }))
+        await status.refresh()
+        r.deps.refreshFfmpegStatus = () => status.refresh()
+
+        const out = await createBinariesStep(r.deps).run(ctxFor())
+        expect(out.status).toBe('warning')
+        expect(r.files.get(P.ffmpeg)).toBe('good')
+        expect(r.files.get(P.ffprobe)).toBe('bad')
+        expect(r.ffmpegPath.value).toBe(P.ffmpeg)
+        expect((await status.get()).available).toBe(true)
+      }
+    )
+
+    it('a delete that removed a file before a later one was refused still clears the paths', async () => {
+      const r = binariesRig({ ffmpeg: 'bad', ffprobe: 'bad', fpcalc: 'good' })
+      const remove = r.deps.remove
+      r.deps.remove = vi.fn(async (p: string) => {
+        if (p === P.ffprobe) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+        await remove(p)
+      })
+      await createBinariesStep(r.deps).run(ctxFor())
+      expect(r.files.has(P.ffmpeg)).toBe(false)
+      expect(r.events).toContain('clearFfmpegPaths')
+      expect(r.ffmpegPath.value).toBe('')
     })
 
     it('offline, a failing binary is reported, not deleted', async () => {

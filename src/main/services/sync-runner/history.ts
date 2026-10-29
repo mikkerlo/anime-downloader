@@ -187,8 +187,8 @@ function choiceText(choice: string, names: HistoryNames): string {
   if (choice === 'shikimori') return 'kept Shikimori’s value'
   if (choice.startsWith('library:')) return `kept ${names.library(choice.slice(8))}’s value`
   if (choice === 'combine') return 'combined both'
-  if (choice === 'one') return 'one rewatch'
-  if (choice === 'two') return 'two rewatches'
+  if (choice === 'one') return 'counted one rewatch'
+  if (choice === 'two') return 'counted two rewatches'
   return choice
 }
 
@@ -247,9 +247,16 @@ function mentions(r: SyncLogRecord, libraryId: string): boolean {
 
 /**
  * One page, newest first: records with `at < before`, filtered by library.
- * Records sharing the last `at` all go on the same page, so a page boundary
- * never splits a tie (and the next page's `before` skips none of them). Each
- * month's file is read at most once per page and is bounded by size.
+ *
+ * A file is not in `at` order: a run is stamped when it starts and appended
+ * when it ends, and a resolution or a settle can append in between. So each
+ * month is sorted by `at` (stable, newest first) before the walk. `append`
+ * files a record by `monthOf(record.at)`, so month order plus the sort is the
+ * global `at` order, and `before` is a cursor that skips nothing. (An
+ * append-position cursor would shift when the size bound rewrites a file.)
+ * Records sharing the last `at` all go on the same page, so a boundary never
+ * splits a tie. Each month's file is read at most once per page and is
+ * bounded by size.
  */
 export async function listHistory(
   log: SyncLog,
@@ -270,20 +277,21 @@ export async function listHistory(
   let more = false
   for (const month of await log.months()) {
     if (lastMonth && month > lastMonth) continue
-    const records = await log.read(month)
-    for (let i = records.length - 1; i >= 0; i--) {
-      const r = records[i]
+    const records = (await log.read(month))
+      .map((r, i) => ({ r, key: `${month}:${i}:${r.at}` }))
+      .reverse()
+      .sort((a, b) => b.r.at - a.r.at)
+    for (const x of records) {
+      const r = x.r
       if (!(r.at < before) || (libraryId && !mentions(r, libraryId))) continue
       if (picked.length >= limit && r.at !== picked[picked.length - 1].r.at) {
         more = true
         break
       }
-      picked.push({ r, key: `${month}:${i}` })
+      picked.push(x)
     }
     if (more) break
   }
-  // Within a month, append order is time order except for clamped or parallel writers.
-  picked.sort((a, b) => b.r.at - a.r.at)
   const entries = picked
     .map((p) => toEntry(p.r, p.key, names))
     .filter((e): e is SyncHistoryEntry => !!e)

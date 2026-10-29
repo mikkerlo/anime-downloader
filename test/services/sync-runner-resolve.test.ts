@@ -29,6 +29,7 @@ import {
   type Pc
 } from '../helpers/sync-runner'
 import { projectRate } from '../../src/main/lib/sync-state/project'
+import { writeState as realWriteState } from '../../src/main/lib/shared-library/write'
 
 const ID = String(ANIME)
 const titleDoc = (title: SyncTitleState) => doc({ [ID]: title })
@@ -224,14 +225,14 @@ describe('two PCs resolving the same conflict differently is a conflict', () => 
     return { a, b, ra, rb, root, libraryId }
   }
 
-  it('independent: A resolves to 8 unplugged (its base stays), B to 9 on the drive; back on A, a new conflict 8 vs 9, nothing applied', async () => {
+  it('independent: A resolves to 8 unplugged (its base moves to the 6 it saw, not to 8), B to 9 on the drive; back on A, a new conflict 8 vs 9, nothing applied', async () => {
     const { a, b, ra, rb, root, libraryId } = await twoPcs()
     a.attached.markUnavailable(libraryId, root)
     const res = await a.runner.resolve([ra.id], { [ra.id]: keep('local') })
     expect(res.notes.map((n) => n.text)).toEqual([
       expect.stringContaining("isn't connected. It gets this choice on its next sync.")
     ])
-    expect((await baseOf(a, `library-${libraryId}`))!.rate!.score.value).toBe(7)
+    expect((await baseOf(a, `library-${libraryId}`))!.rate!.score.value).toBe(6)
     expect(await driveScore(root)).toBe(6)
 
     await b.runner.resolve([rb.id], { [rb.id]: keep('local') })
@@ -480,6 +481,73 @@ describe('a claim PC', () => {
     expect(queue(pc)).toEqual([])
     await pc.runner.runAll('manual')
     expect(await conflicts(pc)).toEqual([])
+  })
+})
+
+describe('a party library that cannot be written at resolve time (review of #637)', () => {
+  // The drive at 6 from base 7, this PC at 8: a library-party conflict. Keep mine.
+  async function partySetup(opts: { failWrites?: { left: number } } = {}) {
+    const { root, libraryId } = await makeLibrary({
+      doc: titleDoc({ rate: r({ score: 6 }, T0 + 500) })
+    })
+    const writeState: typeof realWriteState = async (...args) => {
+      if (opts.failWrites && opts.failWrites.left-- > 0) {
+        throw Object.assign(new Error('I/O error'), { code: 'EIO' })
+      }
+      return realWriteState(...args)
+    }
+    const pc = makePc({
+      store: { shikimoriUserRates: [cacheEntry(MAL, ANIME, { score: 8 }, T0)] },
+      runner: { writeState }
+    })
+    pc.offline.value = true
+    await pc.attach(root)
+    await seedBase(pc, libraryId, root, titleDoc({ rate: r({ score: 7 }) }))
+    await pc.runner.runAll('manual')
+    const [rec] = await conflicts(pc)
+    expect(rec.parties).toEqual({ local: 8, [`library:${libraryId}`]: 6 })
+    return { pc, root, libraryId, rec }
+  }
+
+  async function expectWrittenSilentlyNextRun(pc: Pc, root: string, libraryId: string) {
+    // Its base moved to the 6 the conflict showed, not to the choice.
+    expect((await baseOf(pc, `library-${libraryId}`))!.rate!.score.value).toBe(6)
+    expect(await driveScore(root)).toBe(6)
+    const run = await pc.runner.runLibrary(libraryId, 'plug')
+    expect(run.libraries[0]).toMatchObject({ drive: 'ok', counts: { conflicts: 0 } })
+    expect(await conflicts(pc)).toEqual([])
+    expect(await driveScore(root)).toBe(8)
+    expect((await baseOf(pc, `library-${libraryId}`))!.rate!.score.value).toBe(8)
+  }
+
+  it('unplugged: the note holds, and after the plug the drive gets the choice with no second conflict', async () => {
+    const { pc, root, libraryId, rec } = await partySetup()
+    pc.attached.markUnavailable(libraryId, root)
+    const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
+    expect(res.notes.map((n) => n.text)).toEqual([
+      expect.stringContaining("isn't connected. It gets this choice on its next sync.")
+    ])
+    await pc.attached.reopenAt(libraryId, root)
+    await expectWrittenSilentlyNextRun(pc, root, libraryId)
+  })
+
+  it('unreadable at resolve time (the folder is gone while it still shows connected): the same', async () => {
+    const { pc, root, libraryId, rec } = await partySetup()
+    const away = `${root}-away`
+    fs.renameSync(root, away)
+    const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
+    expect(res.notes.map((n) => n.text)).toEqual([expect.stringContaining("couldn't be read")])
+    fs.renameSync(away, root)
+    await expectWrittenSilentlyNextRun(pc, root, libraryId)
+  })
+
+  it('the write fails at resolve time: the same', async () => {
+    const failWrites = { left: 0 }
+    const { pc, root, libraryId, rec } = await partySetup({ failWrites })
+    failWrites.left = 1
+    const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
+    expect(res.notes.map((n) => n.text)).toEqual([expect.stringContaining("couldn't be written")])
+    await expectWrittenSilentlyNextRun(pc, root, libraryId)
   })
 })
 

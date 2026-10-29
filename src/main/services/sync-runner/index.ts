@@ -1355,9 +1355,28 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       wrote.local = true
     }
 
-    // The drives: every connected, writable library holding the title. A party
-    // that can't be written keeps its base, so the next run writes it there.
+    // The drives: every connected, writable library holding the title.
     const local = animeId === null ? null : projectLocal()
+    /**
+     * A party library that can't be written now: its base for this field moves
+     * to the value the conflict showed for it (never to the choice), so the next
+     * run sees only this PC's change and writes the choice silently. If the
+     * library changed again meanwhile (another PC's choice), that run holds a
+     * new conflict. A library that wasn't a party already agrees with its base.
+     */
+    async function holdForNextRun(lib: AttachedLibraryInfo): Promise<void> {
+      const party = `library:${lib.libraryId}`
+      if (!(party in rec.parties)) return
+      const base = await bases.read(`library-${lib.libraryId}`)
+      if (!base) return
+      const doc = normalizeDoc(base.doc)
+      if (putField(doc, animeId!, rec, rec.parties[party], rec.at[party] ?? clock, undefined)) {
+        await bases.write(`library-${lib.libraryId}`, {
+          stateGeneration: base.stateGeneration,
+          doc
+        })
+      }
+    }
     for (const lib of libs) {
       const party = `library:${lib.libraryId}` in rec.parties
       if (!titlesOf(lib).some((ti) => String(ti.animeId) === animeId)) {
@@ -1369,9 +1388,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       }
       const skip = librarySkip(lib)
       if (skip) {
+        await holdForNextRun(lib)
         notes.push(
           skip.driveReason === 'read-only'
-            ? `${lib.name} is read-only on this PC, so it gets this choice from a PC that can write it.`
+            ? `${lib.name} is read-only on this PC. It gets this choice once this PC can write to it.`
             : `${lib.name} isn't connected. It gets this choice on its next sync.`
         )
         continue
@@ -1384,13 +1404,17 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         read.manifest.mode !== 'metadata' ||
         read.manifest.owner?.shikimoriId !== ownerId
       ) {
+        await holdForNextRun(lib)
         notes.push(`${lib.name} couldn't be read. It gets this choice on its next sync.`)
         continue
       }
       const doc = normalizeDoc(structuredClone(read.state?.doc ?? null))
       const base = await bases.read(`library-${lib.libraryId}`)
       const fallback = local?.titles[animeId!] ?? base?.doc.titles[animeId!]
-      if (!putField(doc, animeId!, rec, value, clock, fallback)) continue
+      if (!putField(doc, animeId!, rec, value, clock, fallback)) {
+        await holdForNextRun(lib)
+        continue
+      }
       let stateGeneration: number
       try {
         const actor = buildActor(store, lib.libraryId, deps.appVersion)
@@ -1405,6 +1429,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       } catch (err) {
         if (READ_ONLY_CODES.has(errCode(err) ?? '')) attached.reportWriteFailure(lib.libraryId, err)
         log.warn(`[sync] ${lib.name}: the resolution's drive write failed`, err)
+        await holdForNextRun(lib)
         notes.push(`${lib.name} couldn't be written. It gets this choice on its next sync.`)
         continue
       }

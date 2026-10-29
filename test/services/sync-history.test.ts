@@ -4,7 +4,11 @@ import { describe, it, expect, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { createSyncLog, type SyncLogRecord } from '../../src/main/services/sync-runner/log'
+import {
+  createSyncLog,
+  type SyncLog,
+  type SyncLogRecord
+} from '../../src/main/services/sync-runner/log'
 import {
   listHistory,
   toEntry,
@@ -66,6 +70,88 @@ describe('listHistory', () => {
     expect(p3.nextBefore).toBeNull()
     const keys = [...p1.entries, ...p2.entries, ...p3.entries].map((e) => e.key)
     expect(new Set(keys).size).toBe(6)
+  })
+
+  /** Every page, from the first to the end, flattened. */
+  async function allPages(log: SyncLog, limit: number): Promise<SyncHistoryEntry[][]> {
+    const pages: SyncHistoryEntry[][] = []
+    let before: number | undefined
+    for (let guard = 0; guard < 1000; guard++) {
+      const p = await listHistory(
+        log,
+        { limit, ...(before === undefined ? {} : { before }) },
+        names
+      )
+      pages.push(p.entries)
+      if (p.nextBefore === null) return pages
+      before = p.nextBefore
+    }
+    throw new Error('paging did not end')
+  }
+
+  it('a record appended out of `at` order is on exactly one page (a run stamped at its start, appended at its end)', async () => {
+    const { log } = tmpLog()
+    // R1@5, a resolution @20 appended while the run @10 was still in flight, then R2@30.
+    const T = JAN
+    await log.append(run(T + 5))
+    await log.append({
+      kind: 'resolution',
+      at: T + 20,
+      conflictId: 'c1',
+      animeId: '101',
+      fieldPath: 'rate.score',
+      choice: 'local',
+      value: 8,
+      libraryIds: [LIB],
+      wrote: { local: true, libraries: [LIB], shikimori: 'queued' },
+      notes: []
+    })
+    await log.append(run(T + 10))
+    await log.append(run(T + 30))
+    const pages = await allPages(log, 2)
+    expect(pages.map((p) => p.map((e) => e.at - T))).toEqual([
+      [30, 20],
+      [10, 5]
+    ])
+  })
+
+  it('property: over shuffled append orders, every record is on exactly one page, newest first', async () => {
+    // A seeded PRNG (mulberry32), so a failure reproduces.
+    let seed = 585
+    const rand = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+    for (let iter = 0; iter < 300; iter++) {
+      const n = 1 + Math.floor(rand() * 14)
+      // Clocks over two months, with ties.
+      const ats = Array.from(
+        { length: n },
+        () => (rand() < 0.5 ? JAN : FEB) + Math.floor(rand() * 6)
+      )
+      const files = new Map<string, SyncLogRecord[]>()
+      for (const at of [...ats].sort(() => rand() - 0.5)) {
+        const m = new Date(at).toISOString().slice(0, 7)
+        files.set(m, [...(files.get(m) ?? []), run(at)])
+      }
+      const fake: SyncLog = {
+        append: async () => {},
+        read: async (m) => files.get(m) ?? [],
+        months: async () => [...files.keys()].sort().reverse()
+      }
+      const limit = 1 + Math.floor(rand() * 4)
+      const pages = await allPages(fake, limit)
+      const flat = pages.flat()
+      const ctx = `iter ${iter}: limit ${limit}, appended ${JSON.stringify([...files.values()].flat().map((r) => r.at - JAN))}`
+      expect(new Set(flat.map((e) => e.key)).size, ctx).toBe(n)
+      expect(flat.length, ctx).toBe(n)
+      expect(
+        flat.map((e) => e.at),
+        ctx
+      ).toEqual([...ats].sort((a, b) => b - a))
+    }
   })
 
   it('filters by library', async () => {

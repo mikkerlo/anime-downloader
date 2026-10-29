@@ -92,6 +92,7 @@ describe('export selection helpers', () => {
     expect(exportEstimate(TITLES, selected, ['1:1:12'])).toEqual({
       bytes: 300,
       items: 2,
+      unmerged: 0,
       alreadyThere: 1,
       skipped: 2
     })

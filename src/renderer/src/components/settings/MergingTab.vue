@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
+import { availableCodecs as codecsFor } from '@shared/video-codecs';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
@@ -47,19 +48,7 @@ const hevcPlaybackSupported = (() => {
   return probes.some((p) => v.canPlayType(p) !== '');
 })();
 
-const CODEC_OPTIONS: { value: string; label: string; encoder?: string }[] = [
-  { value: 'copy', label: 'None (copy, fastest)' },
-  { value: 'libx265', label: 'H.265 (CPU)', encoder: 'libx265' },
-  { value: 'hevc_nvenc', label: 'H.265 (NVIDIA GPU)', encoder: 'hevc_nvenc' },
-  { value: 'hevc_amf', label: 'H.265 (AMD GPU)', encoder: 'hevc_amf' },
-  { value: 'hevc_qsv', label: 'H.265 (Intel QSV)', encoder: 'hevc_qsv' },
-  { value: 'hevc_videotoolbox', label: 'H.265 (macOS VideoToolbox)', encoder: 'hevc_videotoolbox' }
-];
-
-const availableCodecs = computed(() => {
-  if (!ffmpeg.value) return [CODEC_OPTIONS[0]];
-  return CODEC_OPTIONS.filter((c) => !c.encoder || ffmpeg.value!.encoders.includes(c.encoder));
-});
+const availableCodecs = computed(() => codecsFor(ffmpeg.value?.encoders ?? []));
 
 const skipQueueStatusLabel = computed<string>(() => {
   const s = skipQueueStatus.value;

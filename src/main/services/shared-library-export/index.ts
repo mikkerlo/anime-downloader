@@ -6,7 +6,12 @@
 import { randomUUID } from 'crypto'
 import { promises as fsp } from 'fs'
 import * as path from 'path'
-import { fitsFreeSpace, requiredBytes } from '@shared/shared-library-export'
+import {
+  fitsFreeSpace,
+  mergedBytes,
+  requiredBytes,
+  type ExportMergeChoice
+} from '@shared/shared-library-export'
 import type { FileCheckResult } from '../../lib/episode-file-scan'
 import type { DownloadedEpisodesMap } from '../../lib/downloaded-episodes'
 import { CAPS, itemKey } from '../../lib/shared-library/format'
@@ -19,7 +24,7 @@ import { createLibrary } from '../../lib/shared-library/write'
 import type { PlayerPresenceService } from '../player-presence'
 import { TOO_LARGE_REASON, nodeFs, type ExportFs } from './copy'
 import { createFsTypeProbe, type FsTypeProbe } from './fs-type-probe'
-import { ExportJob, jobFiles, type JobItem, type JobRecord } from './job'
+import { ExportJob, jobFiles, type ExportMerger, type JobItem, type JobRecord } from './job'
 import {
   createWriteProbe,
   preflight,
@@ -57,6 +62,10 @@ export interface SharedLibraryExportDeps {
   broadcast: (job: ExportJobView) => void
   /** After each manifest write into `root` (#616); never awaited. */
   onLibraryWritten?: (libraryId: string, root: string) => void | Promise<void>
+  /** This PC's ffmpeg (`checkFfmpeg`, #576); without it, Merge into MKV is off. */
+  ffmpegCheck?: () => Promise<{ available: boolean; encoders: string[] }>
+  /** The download manager's merge (#576); without it, Merge into MKV is off. */
+  merger?: ExportMerger
   candidates?: MountCandidates
   xfs?: Partial<ExportFs>
   /** The target's filesystem type (#575); the per-OS commands by default. */
@@ -163,28 +172,62 @@ export function createSharedLibraryExportService(
     return probes.cache
   }
 
+  /** This PC's merge support (#576): ffmpeg found, and a merger wired. */
+  async function mergeSupport(): Promise<ExportMergeSupport> {
+    const off: ExportMergeSupport = { available: false, encoders: [] }
+    if (!deps.ffmpegCheck || !deps.merger) return off
+    try {
+      const info = await deps.ffmpegCheck()
+      return info.available ? { available: true, encoders: [...info.encoders] } : off
+    } catch {
+      return off
+    }
+  }
+
+  /** The merge choice a request makes on this PC: Merge needs ffmpeg, else pairs are copied as-is. */
+  function mergeChoice(
+    unmerged: ExportUnmergedMode | undefined,
+    codec: string | undefined,
+    support: ExportMergeSupport
+  ): ExportMergeChoice & { codec: string } {
+    const merge = unmerged === 'merge' && support.available
+    const c = merge ? (codec ?? 'copy') : 'copy'
+    return { merge, reencode: c !== 'copy', codec: c }
+  }
+
+  /** Whether `r` is merged into an MKV under `choice`: an unmerged pair, with Merge on. */
+  const merges = (r: ResolvedItem, choice: ExportMergeChoice): boolean =>
+    choice.merge && r.subtitlePath !== null
+
   /** The preflight of copying `items` into `root`, where `existing` are the library's other items. */
   function runPreflight(
     items: readonly ResolvedItem[],
     root: string,
     existing: readonly Pick<SharedLibraryItem, 'path' | 'subtitlePath'>[],
+    choice: ExportMergeChoice,
     cache?: Map<string, Promise<FolderProbe>>
   ): Promise<PreflightResult> {
     return preflight(
       {
-        items: items.map((r) => ({
-          key: r.key,
-          size: Math.max(r.videoSize, r.subtitleSize),
-          naming: {
-            animeId: r.animeId,
-            episodeInt: r.episodeInt,
-            translationId: r.translationId,
-            title: r.title,
-            author: r.author,
-            ext: r.ext,
-            subtitle: r.subtitlePath !== null
+        items: items.map((r) => {
+          // A merged pair is one `.mkv` of about the pair's size (#576); a
+          // re-encode's size is unknown until it is written.
+          const merged = merges(r, choice)
+          return {
+            key: r.key,
+            size: merged ? r.videoSize + r.subtitleSize : Math.max(r.videoSize, r.subtitleSize),
+            ...(merged && choice.reencode ? { reencode: true } : {}),
+            naming: {
+              animeId: r.animeId,
+              episodeInt: r.episodeInt,
+              translationId: r.translationId,
+              title: r.title,
+              author: r.author,
+              ext: merged ? '.mkv' : r.ext,
+              subtitle: !merged && r.subtitlePath !== null
+            }
           }
-        })),
+        }),
         existing
       },
       { root },
@@ -240,8 +283,10 @@ export function createSharedLibraryExportService(
       filesDone: files.filter((f) => rec.doneFiles[f.rel]).length,
       filesTotal: files.length,
       bytesDone: job.bytesDone(),
-      bytesTotal: files.reduce((n, f) => n + f.size, 0),
+      // A merged file's size is known only once it's written (#576): done files count as written.
+      bytesTotal: files.reduce((n, f) => n + (rec.doneFiles[f.rel]?.size ?? f.size), 0),
       current: rec.current ? label(rec.current.key) : null,
+      merge: job.mergeState(),
       failed: Object.entries(rec.failed).map(([key, reason]) => ({
         key,
         label: label(key),
@@ -305,6 +350,7 @@ export function createSharedLibraryExportService(
       update: () => update(job),
       checkpointEvery: deps.checkpointEvery ?? 10,
       onLibraryWritten: deps.onLibraryWritten,
+      merger: deps.merger,
       retryMs: deps.retryMs ?? 10_000,
       setTimer: deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms)),
       clearTimer: deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))
@@ -327,7 +373,8 @@ export function createSharedLibraryExportService(
 
   async function plan(req: ExportPlanRequest): Promise<ExportPlan> {
     const { titles, resolved } = await buildTree(source, req.animeIds)
-    if (!req.target) return { titles, target: null, preflight: null }
+    const merge = await mergeSupport()
+    if (!req.target) return { titles, target: null, preflight: null, merge }
     const t = await classifyTarget(req.target, req.name, userId(), pathExists)
     const present = presentKeys(t.manifest, resolved)
     let pf: ExportPreflight | null = null
@@ -338,11 +385,18 @@ export function createSharedLibraryExportService(
       const keys = new Set(candidates.map((r) => r.key))
       const existing = (t.manifest?.items ?? []).filter((i) => !keys.has(itemKey(i)))
       pf = publicPreflight(
-        await runPreflight(candidates, t.root, existing, probeCache(req.session))
+        await runPreflight(
+          candidates,
+          t.root,
+          existing,
+          mergeChoice(req.unmerged, req.codec, merge),
+          probeCache(req.session)
+        )
       )
     }
     return {
       titles,
+      merge,
       preflight: pf,
       target: {
         dir: req.target,
@@ -376,9 +430,17 @@ export function createSharedLibraryExportService(
     const notThereKeys = new Set(notThere.map((r) => r.key))
     const existing = (t.manifest?.items ?? []).filter((i) => !notThereKeys.has(itemKey(i)))
 
+    // Merge into MKV (#576) needs this PC's ffmpeg; without it pairs are
+    // copied as they are. The codec is `copy` unless the request names one.
+    const support = await mergeSupport()
+    const choice = mergeChoice(req.unmerged, req.codec, support)
+    if (choice.merge && choice.reencode && !support.encoders.includes(choice.codec)) {
+      return { ok: false, reason: `This PC’s ffmpeg can’t encode with ${choice.codec}.` }
+    }
+
     // Probed again here, never from the dialog's cache: the stick may have
     // been swapped or write-protected since the plan.
-    const pf = await runPreflight(notThere, t.root, existing)
+    const pf = await runPreflight(notThere, t.root, existing, choice)
     if (!pf.ok) return { ok: false, reason: pf.blockers.join(' ') }
     const skippedKeys = new Set(pf.skipped)
     const toCopy = notThere.filter((r) => !skippedKeys.has(r.key))
@@ -389,7 +451,14 @@ export function createSharedLibraryExportService(
           'Nothing to copy: every selected file is over 4 GB, which this FAT32 drive can’t hold.'
       }
     }
-    const bytes = toCopy.reduce((n, r) => n + r.videoSize + r.subtitleSize, 0)
+    const bytes = toCopy.reduce(
+      (n, r) =>
+        n +
+        (merges(r, choice)
+          ? mergedBytes(r.videoSize + r.subtitleSize, choice.reencode)
+          : r.videoSize + r.subtitleSize),
+      0
+    )
     const free = await freeBytes(req.target)
     if (!fitsFreeSpace(bytes, free)) {
       return {
@@ -436,8 +505,9 @@ export function createSharedLibraryExportService(
       path: named[i].path,
       ...(named[i].subtitlePath !== undefined ? { subtitlePath: named[i].subtitlePath } : {}),
       renamed: named[i].renamed,
-      videoSize: r.videoSize,
-      subtitleSize: r.subtitleSize
+      ...(merges(r, choice)
+        ? { videoSize: r.videoSize + r.subtitleSize, subtitleSize: 0, merge: true }
+        : { videoSize: r.videoSize, subtitleSize: r.subtitleSize })
     }))
     const rec: JobRecord = {
       version: 1,
@@ -458,6 +528,8 @@ export function createSharedLibraryExportService(
           .map((r) => [r.key, { animeId: r.animeId, label: r.label, reason: TOO_LARGE_REASON }])
       ),
       fsType: pf.fsType,
+      unmerged: choice.merge ? 'merge' : 'copy-as-is',
+      ...(choice.merge ? { codec: choice.codec } : {}),
       current: null,
       missing,
       snapshotted: [],

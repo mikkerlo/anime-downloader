@@ -60,3 +60,27 @@ describe('ExportJobCard skipped files (#575)', () => {
     expect(w.find('[data-testid="export-job-skipped"]').exists()).toBe(false)
   })
 })
+
+describe('ExportJobCard merge states (#576)', () => {
+  const step = (over: Partial<ExportJobView>): string => {
+    const w = mount(ExportJobCard, {
+      props: { job: job({ status: 'running', current: 'Show — Episode 1', ...over }) }
+    })
+    return w.find('[data-testid="export-job-step"]').text()
+  }
+
+  it('says what the current file is at: waiting, merging, or copying', () => {
+    expect(step({ merge: { phase: 'waiting', percent: 0 } })).toBe(
+      'Waiting for a download merge: Show — Episode 1'
+    )
+    expect(step({ merge: { phase: 'merging', percent: 47 } })).toBe('Merging 47%: Show — Episode 1')
+    expect(step({ merge: null })).toBe('Copying: Show — Episode 1')
+  })
+
+  it('a held merge shows the player hold', () => {
+    const w = mount(ExportJobCard, {
+      props: { job: job({ status: 'held', current: 'Show — Episode 1', merge: null }) }
+    })
+    expect(w.text()).toContain('Paused while the player is open')
+  })
+})

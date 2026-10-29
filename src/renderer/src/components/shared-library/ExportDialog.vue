@@ -3,7 +3,9 @@
 // estimate and the free-space bar refresh live as the selection changes, and
 // the target is re-planned when the folder or the library name changes. The
 // preflight (#575) comes with each plan and is narrowed to the selection here.
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+// Unmerged pairs (#576) are merged into MKV by default when this PC has ffmpeg.
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { availableCodecs } from '@shared/video-codecs';
 import {
   exportEstimate,
   fitsFreeSpace,
@@ -44,6 +46,22 @@ let nameTimer: ReturnType<typeof setTimeout> | null = null;
 // Main probes each folder once while this dialog is open.
 const session = crypto.randomUUID();
 
+// Merge into MKV (#576): offered when ffmpeg is on this PC, with `copy` (no
+// re-encode) as the codec until the user picks one.
+const mergeSupport = ref<ExportMergeSupport>({ available: false, encoders: [] });
+const unmerged = ref<ExportUnmergedMode>('copy-as-is');
+const codec = ref('copy');
+const canMerge = computed(() => mergeSupport.value.available);
+const codecOptions = computed(() =>
+  availableCodecs(mergeSupport.value.encoders).map((c) =>
+    c.value === 'copy' ? { ...c, label: 'No (fastest)' } : c
+  )
+);
+const choice = computed(() => ({
+  merge: canMerge.value && unmerged.value === 'merge',
+  reencode: codec.value !== 'copy'
+}));
+
 const preflight = computed(() =>
   planPreflight.value ? preflightForSelection(planPreflight.value, selected.value) : null
 );
@@ -67,7 +85,13 @@ const toEstimate = computed(() => {
   for (const k of skipped) out.delete(k);
   return out;
 });
-const estimate = computed(() => exportEstimate(titles.value, toEstimate.value, present.value));
+const estimate = computed(() =>
+  exportEstimate(titles.value, toEstimate.value, present.value, choice.value)
+);
+// A re-encode's output size is unknown: the estimate is the source plus 10%.
+const sizeWillChange = computed(
+  () => choice.value.merge && choice.value.reencode && estimate.value.unmerged > 0
+);
 const free = computed(() => target.value?.free ?? null);
 const fits = computed(() => fitsFreeSpace(estimate.value.bytes, free.value));
 const barPercent = computed(() => {
@@ -116,7 +140,9 @@ async function replan(): Promise<void> {
       animeIds: titles.value.map((t) => t.animeId),
       target: dir.value,
       name: name.value,
-      session
+      session,
+      unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
+      codec: codec.value
     });
     target.value = plan.target;
     planPreflight.value = plan.preflight ?? null;
@@ -137,6 +163,8 @@ onMounted(async () => {
     });
     titles.value = plan.titles;
     if (props.preselect) selected.value = new Set(allKeys(plan.titles));
+    if (plan.merge) mergeSupport.value = plan.merge;
+    unmerged.value = mergeSupport.value.available ? 'merge' : 'copy-as-is';
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -160,6 +188,9 @@ function onNameInput(): void {
   nameTimer = setTimeout(() => void replan(), 300);
 }
 
+// The preflight's names (`.mkv`) and FAT32 sizes depend on the merge choice.
+watch([unmerged, codec], () => void replan());
+
 async function startExport(): Promise<void> {
   if (blockedReason.value || !dir.value) return;
   starting.value = true;
@@ -168,7 +199,9 @@ async function startExport(): Promise<void> {
     const result = await exportStore.start({
       selection: toSelection(titles.value, selected.value),
       target: dir.value,
-      name: name.value
+      name: name.value,
+      unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
+      codec: codec.value
     });
     if (result.ok) emit('close');
     else error.value = result.reason;
@@ -229,6 +262,48 @@ async function startExport(): Promise<void> {
         </label>
       </div>
 
+      <div v-if="estimate.unmerged > 0" class="unmerged" data-testid="export-unmerged">
+        <div class="unmerged-title">Unmerged episodes ({{ estimate.unmerged }}):</div>
+        <div class="mode">
+          <label>
+            <input
+              v-model="unmerged"
+              type="radio"
+              value="copy-as-is"
+              data-testid="export-unmerged-copy"
+            />
+            Copy .mp4 + .ass as they are
+          </label>
+          <label :class="{ disabled: !canMerge }">
+            <input
+              v-model="unmerged"
+              type="radio"
+              value="merge"
+              :disabled="!canMerge"
+              data-testid="export-unmerged-merge"
+            />
+            Merge into MKV
+          </label>
+        </div>
+        <div v-if="!canMerge" class="hint" data-testid="export-merge-missing">
+          ffmpeg isn't installed on this PC. Download it in Settings → Merging
+        </div>
+        <template v-else-if="unmerged === 'merge'">
+          <label class="field">
+            <span class="label">Re-encode video</span>
+            <select v-model="codec" data-testid="export-codec">
+              <option v-for="c in codecOptions" :key="c.value" :value="c.value">
+                {{ c.label }}
+              </option>
+            </select>
+          </label>
+          <div class="hint">Resolution is never reduced.</div>
+          <div class="hint">
+            Other PCs need ffmpeg to play .mkv files. They download it once while online.
+          </div>
+        </template>
+      </div>
+
       <div class="space">
         <div class="bar" :class="{ over: !fits }" data-testid="export-space-bar">
           <div class="fill" :style="{ width: `${barPercent}%` }"></div>
@@ -239,6 +314,7 @@ async function startExport(): Promise<void> {
           <template v-if="estimate.alreadyThere > 0">
             · {{ estimate.alreadyThere }} already on the drive</template
           >
+          <template v-if="sizeWillChange"> · size will change</template>
         </div>
       </div>
 
@@ -384,6 +460,25 @@ async function startExport(): Promise<void> {
 .soon {
   font-size: 0.7rem;
   color: var(--text-3);
+}
+
+.unmerged {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unmerged-title {
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+
+.unmerged select {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text);
+  padding: 4px 6px;
 }
 
 .bar {

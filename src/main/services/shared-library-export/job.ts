@@ -23,14 +23,18 @@ import {
   StaleGenerationError,
   writeManifest
 } from '../../lib/shared-library/write'
+import { subtitleMeta } from '../../lib/subtitle-meta'
 import type { PlayerPresenceService } from '../player-presence'
 import {
+  MERGE_TMP_SUFFIX,
   TMP_SUFFIX,
   TOO_LARGE_REASON,
   TooLargeError,
   VerifyError,
+  adoptVerified,
   copyVerified,
   errnoOf,
+  isTooLargeForFilesystem,
   unlinkQuiet,
   writeSmallFile,
   type ExportFs
@@ -54,6 +58,29 @@ export interface JobItem {
   renamed: boolean
   videoSize: number
   subtitleSize: number
+  /** An unmerged pair merged into the `.mkv` at `path` (#576); `videoSize` is the pair's sum. */
+  merge?: boolean
+}
+
+/** One export merge, as the job asks for it (#576); `DownloadManager.mergeForExport` runs it. */
+export interface ExportMergeRequest {
+  jobId: string
+  videoPath: string
+  subtitlePath: string | null
+  outputPath: string
+  codec: string
+  subMeta?: { language: string; title: string }
+  onPercent?: (pct: number) => void
+  onWaiting?: () => void
+  onAcquired?: () => void
+}
+
+/** The download manager's ffmpeg, as the export uses it (#576). */
+export interface ExportMerger {
+  /** `'held'`: a player view is open; `'gone'`: the `.mp4` went while it waited. */
+  merge: (req: ExportMergeRequest) => Promise<'done' | 'held' | 'gone'>
+  /** Stops `jobId`'s merge, running or waiting. */
+  cancel: (jobId: string) => void
 }
 
 /** `userData/export-jobs/<jobId>.json`. */
@@ -76,6 +103,10 @@ export interface JobRecord {
   skipped?: Record<string, { animeId: number; label: string; reason: string }>
   /** The target's filesystem at start (#575), for the run-time size rule. */
   fsType?: ExportFsType
+  /** How unmerged pairs go (#576); `merge` items carry `merge: true`. */
+  unmerged?: ExportUnmergedMode
+  /** The merge's video codec (#576): `copy` unless a re-encode was chosen. */
+  codec?: string
   /** The file being copied, so a resume deletes its `.anime-dl-tmp`. */
   current: { key: string; rel: string } | null
   missing: number
@@ -106,6 +137,8 @@ export interface JobDeps {
   retryMs: number
   setTimer: (fn: () => void, ms: number) => unknown
   clearTimer: (handle: unknown) => void
+  /** Runs `merge` items (#576); without it they fail. */
+  merger?: ExportMerger
 }
 
 class DriveGoneError extends Error {}
@@ -136,6 +169,7 @@ export class ExportJob {
   private base: SharedLibraryManifest | null = null
   private signature: string | null = null
   private sinceCheckpoint = 0
+  private mergeNow: ExportMergeState | null = null
 
   constructor(
     readonly rec: JobRecord,
@@ -153,6 +187,11 @@ export class ExportJob {
   /** The run in progress, or null. */
   running(): Promise<void> | null {
     return this.current
+  }
+
+  /** The merge in flight (#576): waiting for the ffmpeg mutex, or merging; null while copying. */
+  mergeState(): ExportMergeState | null {
+    return this.mergeNow
   }
 
   bytesDone(): number {
@@ -456,7 +495,105 @@ export class ExportJob {
     }
   }
 
-  /** Deletes the `.anime-dl-tmp` a crash or a kill left behind. */
+  /**
+   * A merge item (#576): the `.mp4` + `.ass` pair goes through the download
+   * manager's ffmpeg into `<dest>.anime-dl-tmp.mkv` on the target, then gets
+   * the same rename and verify as a copy. The local files are never touched.
+   * Waits for the ffmpeg mutex, and for the player while it is open.
+   */
+  private async mergeItem(item: JobItem, first: ResolvedItem): Promise<void> {
+    if (this.rec.doneFiles[item.path]) return
+    let source = first
+    for (let gone = 0; ; ) {
+      // A download merge turned the pair into an `.mkv` meanwhile: copy that.
+      if (source.ext === '.mkv') return this.copyItem(item, source)
+      if (this.stop) throw stoppedError()
+      const merger = this.deps.merger
+      if (!merger) throw new Error('merging needs ffmpeg, which this PC doesn’t have')
+      const dest = await resolveWriteTarget(this.rec.root, item.path)
+      if (dest === 'escapes') throw new EscapeError(item.path)
+      this.rec.current = { key: item.key, rel: item.path }
+      await this.deps.persist(this.rec)
+      try {
+        await this.deps.xfs.mkdir(path.dirname(dest))
+      } catch (err) {
+        if (errnoOf(err) !== 'EEXIST') throw err
+      }
+      const tmp = `${dest}${MERGE_TMP_SUFFIX}`
+      await unlinkQuiet(this.deps.xfs, tmp)
+
+      // The awaits above are a window a Pause or Cancel can land in before
+      // `copyAbort` exists: checked again here, synchronously up to the merger's wait.
+      if (this.stop) throw stoppedError()
+      const abort = new AbortController()
+      this.copyAbort = abort
+      const onAbort = (): void => merger.cancel(this.rec.jobId)
+      abort.signal.addEventListener('abort', onAbort)
+      const show = (state: ExportMergeState | null): void => {
+        this.mergeNow = state
+        this.inFlight = state ? Math.round((state.percent / 100) * item.videoSize) : 0
+        this.deps.update(this.rec, this.bytesDone())
+      }
+      let outcome: 'done' | 'held' | 'gone'
+      try {
+        outcome = await merger.merge({
+          jobId: this.rec.jobId,
+          videoPath: source.videoPath,
+          subtitlePath: source.subtitlePath,
+          outputPath: tmp,
+          codec: this.rec.codec ?? 'copy',
+          ...(source.subtitlePath !== null
+            ? { subMeta: subtitleMeta(item.translationType, item.author) }
+            : {}),
+          onWaiting: () => show({ phase: 'waiting', percent: 0 }),
+          onAcquired: () => show({ phase: 'merging', percent: 0 }),
+          onPercent: (percent) => show({ phase: 'merging', percent })
+        })
+      } catch (err) {
+        if ((err as Error).name === 'MergeQuitError') throw err
+        const partial = abort.signal.aborted
+          ? null
+          : await this.deps.xfs.stat(tmp).then(
+              (s) => s.size,
+              () => null
+            )
+        await unlinkQuiet(this.deps.xfs, tmp).catch(() => {})
+        if (abort.signal.aborted) throw stoppedError()
+        // #575's run-time rule: a re-encode that still outgrew FAT32 is skipped.
+        if (isTooLargeForFilesystem(err, this.rec.fsType ?? 'unknown', partial)) {
+          throw new TooLargeError(err instanceof Error ? err.message : String(err))
+        }
+        throw err
+      } finally {
+        abort.signal.removeEventListener('abort', onAbort)
+        this.copyAbort = null
+        show(null)
+      }
+
+      if (outcome === 'held') {
+        await this.holdWhilePlayerOpen()
+        if (this.stop) throw stoppedError()
+        if (this.rec.status !== 'running') await this.setStatus('running')
+        continue
+      }
+      if (outcome === 'gone') {
+        const again = await this.deps.resolve(item)
+        if (typeof again !== 'object' || ++gone > 2) throw new Error('the source file is gone')
+        source = again
+        continue
+      }
+      if (abort.signal.aborted) {
+        await unlinkQuiet(this.deps.xfs, tmp).catch(() => {})
+        throw stoppedError()
+      }
+      this.rec.doneFiles[item.path] = await adoptVerified(this.deps.xfs, tmp, dest)
+      this.rec.current = null
+      await this.deps.persist(this.rec)
+      return
+    }
+  }
+
+  /** Deletes the `.anime-dl-tmp` (or a merge's `.anime-dl-tmp.mkv`) a crash or a kill left behind. */
   private async dropLeftoverTmp(): Promise<void> {
     const cur = this.rec.current
     if (!cur) return
@@ -464,6 +601,7 @@ export class ExportJob {
     if (dest !== 'escapes') {
       try {
         await unlinkQuiet(this.deps.xfs, `${dest}${TMP_SUFFIX}`)
+        await unlinkQuiet(this.deps.xfs, `${dest}${MERGE_TMP_SUFFIX}`)
       } catch (err) {
         // A plain file where the folder was: no tmp can be under it.
         if (errnoOf(err) !== 'ENOTDIR') throw err
@@ -516,8 +654,12 @@ export class ExportJob {
         }
         await this.snapshotTitle(item.animeId)
         try {
-          await this.copyItem(item, source)
+          if (item.merge) await this.mergeItem(item, source)
+          else await this.copyItem(item, source)
         } catch (err) {
+          // Quit (#576): `destroy()` killed the merge and deleted its output.
+          // Nothing is recorded; the next boot shows the job paused.
+          if ((err as Error).name === 'MergeQuitError') return
           if ((err as Error).name === 'AbortError') {
             this.inFlight = 0
             this.copyAbort = null
@@ -578,6 +720,12 @@ export class ExportJob {
       off()
     }
   }
+}
+
+function stoppedError(): Error {
+  const err = new Error('stopped')
+  err.name = 'AbortError'
+  return err
 }
 
 class EscapeError extends Error {

@@ -430,7 +430,18 @@ const sharedLibraryExport = createSharedLibraryExportService({
     claim: null
   }),
   broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
-  onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root)
+  onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root),
+  // Merge into MKV on export (#576): the queue's ffmpeg, behind its mutex.
+  ffmpegCheck: () => checkFfmpeg(),
+  merger: {
+    merge: (req) =>
+      downloadManager.mergeForExport({
+        ...req,
+        ffmpegPath: getFfmpegPath(),
+        ffprobePath: getFfprobePath()
+      }),
+    cancel: (jobId) => downloadManager.cancelExportMerge(jobId)
+  }
 })
 
 const skipAnalysisService = createSkipAnalysisService({

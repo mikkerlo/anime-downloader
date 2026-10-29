@@ -11,6 +11,10 @@ const downloadsStore = useDownloadsStore();
 const { groups } = storeToRefs(downloadsStore);
 // Shared Library export jobs (#574) sit above the download queue.
 const { jobs: exportJobs } = storeToRefs(useExportStore());
+// One ffmpeg at a time (#576): while an export merges, a download's merge waits.
+const exportMerging = computed(() =>
+  exportJobs.value.some((j) => j.status === 'running' && j.merge?.phase === 'merging')
+);
 // Offline main leaves queued items queued (#567); say why they don't start (#568).
 const { isOffline } = storeToRefs(useOfflineStore());
 const WAITING = 'waiting for connection';
@@ -176,6 +180,13 @@ async function mergeFinished(): Promise<void> {
     </header>
     <div class="body">
       <ExportJobCard v-for="job in exportJobs" :key="job.jobId" :job="job" />
+      <div
+        v-if="exportMerging && hasMergeable"
+        class="export-merge-note"
+        data-testid="export-merge-note"
+      >
+        Download merges wait until the export’s current merge finishes.
+      </div>
       <div v-if="groups.length === 0 && exportJobs.length === 0" class="empty-state">
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
@@ -479,6 +490,12 @@ async function mergeFinished(): Promise<void> {
   flex: 1;
   overflow-y: auto;
   padding: var(--pad-y) var(--pad-x) 48px;
+}
+
+.export-merge-note {
+  font-size: 0.8rem;
+  color: var(--st-orange);
+  margin-bottom: 14px;
 }
 
 /* summary */

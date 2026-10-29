@@ -44,7 +44,8 @@ function group(id: number, overrides: Partial<EpisodeGroup> = {}): EpisodeGroup 
 function stubApi(groups: EpisodeGroup[], offline: OfflineApi = offlineApi()): void {
   const real: Record<string, unknown> = {
     ...offline.api,
-    downloadGetQueue: vi.fn().mockResolvedValue(groups)
+    downloadGetQueue: vi.fn().mockResolvedValue(groups),
+    exportListJobs: vi.fn().mockResolvedValue([])
   }
   ;(window as unknown as { api: unknown }).api = new Proxy(real, {
     get: (t, p, r) => (p in t ? Reflect.get(t, p, r) : () => () => {})
@@ -200,5 +201,55 @@ describe('DownloadsView — offline (#568)', () => {
     offline.emit('online')
     await flushPromises()
     expect(wrapper.find('.dl-status').text()).toBe('queued')
+  })
+})
+
+describe('DownloadsView — an export merge holds the ffmpeg (#576)', () => {
+  function exportJob(merge: ExportMergeState | null): ExportJobView {
+    return {
+      jobId: 'j1',
+      libraryId: 'lib',
+      libraryName: 'Trip',
+      root: '/drive/Trip',
+      status: 'running',
+      filesDone: 0,
+      filesTotal: 1,
+      bytesDone: 0,
+      bytesTotal: 10,
+      current: 'Show — Episode 1',
+      merge,
+      failed: [],
+      skipped: [],
+      missing: 0,
+      note: null,
+      error: null,
+      createdAt: 1
+    }
+  }
+
+  async function mountWith(job: ExportJobView): Promise<ReturnType<typeof mount>> {
+    stubApi([group(1, { mergeStatus: 'pending' })])
+    const real = (window as unknown as { api: Record<string, unknown> }).api
+    ;(window as unknown as { api: unknown }).api = new Proxy(
+      {},
+      {
+        get: (_t, p) => (p === 'exportListJobs' ? async () => [job] : Reflect.get(real, p))
+      }
+    )
+    const wrapper = mount(DownloadsView)
+    await flushPromises()
+    return wrapper
+  }
+
+  it('says a download merge waits while an export merges', async () => {
+    const wrapper = await mountWith(exportJob({ phase: 'merging', percent: 12 }))
+    expect(wrapper.find('[data-testid="export-merge-note"]').text()).toBe(
+      'Download merges wait until the export’s current merge finishes.'
+    )
+  })
+
+  it('no note while the export copies', async () => {
+    const wrapper = await mountWith(exportJob(null))
+    expect(wrapper.find('[data-testid="export-merge-note"]').exists()).toBe(false)
   })
 })

@@ -395,6 +395,28 @@ interface ExportPlanRequest {
   name: string
   /** The dialog's id: the target's filesystem and write probes run once per folder within it (#575). */
   session?: string
+  /** How unmerged pairs would go (#576), for the preflight's names and sizes; `copy-as-is` by default. */
+  unmerged?: ExportUnmergedMode
+  /** The merge's video codec (#576); `copy` by default. */
+  codec?: string
+}
+
+/**
+ * Unmerged `.mp4` + `.ass` pairs (#576): copied as both files, or merged into
+ * one `.mkv` on the target with the exporting PC's ffmpeg.
+ */
+type ExportUnmergedMode = 'copy-as-is' | 'merge'
+
+/** Whether this PC can merge on export (#576): its ffmpeg and the HEVC encoders it reports. */
+interface ExportMergeSupport {
+  available: boolean
+  encoders: string[]
+}
+
+/** An export's merge in flight (#576): waiting for a download merge, or merging. */
+interface ExportMergeState {
+  phase: 'waiting' | 'merging'
+  percent: number
 }
 
 /** The target's filesystem type, as the per-OS probe reports it (#575). */
@@ -432,12 +454,18 @@ interface ExportPlan {
   target: ExportTarget | null
   /** Null before a folder is picked, and for a blocked target. */
   preflight: ExportPreflight | null
+  /** Whether Merge into MKV can be offered (#576). */
+  merge: ExportMergeSupport
 }
 
 interface ExportStartRequest {
   selection: ExportSelectionItem[]
   target: string
   name: string
+  /** `copy-as-is` when left out; `merge` falls back to it on a PC without ffmpeg (#576). */
+  unmerged?: ExportUnmergedMode
+  /** `copy` when left out, never the Merging tab's `videoCodec` (#576). */
+  codec?: string
 }
 
 type ExportStartResult = { ok: true; job: ExportJobView } | { ok: false; reason: string }
@@ -472,6 +500,8 @@ interface ExportJobView {
   bytesTotal: number
   /** The item being copied, as "Title — episode". */
   current: string | null
+  /** The current item's merge (#576); null while copying. */
+  merge?: ExportMergeState | null
   /** Items that failed (verify, a source error, a path that escapes the root). */
   failed: { key: string; label: string; reason: string }[]
   /** Items skipped as too large for the drive (`too-large-for-filesystem`), by preflight or at run time. */

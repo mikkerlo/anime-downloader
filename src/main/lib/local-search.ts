@@ -1,6 +1,7 @@
 // Offline local search over the titles this PC has (#571): starred, downloaded,
 // and every `animeCache` entry with a detail (which, after #570, includes
-// continue-watching titles). Pure: the handler hands in one store snapshot per
+// continue-watching titles), plus the titles of every available attached
+// Shared Library (#583). Pure: the handler hands in one store snapshot per
 // query. Titles that are only on the Shikimori list are not in the corpus; the
 // rates only annotate corpus titles with `listStatus`, joined by MAL id.
 
@@ -11,6 +12,17 @@ interface StoredRateRow {
   shikiAnime?: { id?: number }
 }
 
+/**
+ * One available attached library's title snapshot, as
+ * `AttachedLibraryService.availableSnapshots()` returns it. Read from a drive,
+ * so every field is checked here before use.
+ */
+export interface AttachedSnapshot {
+  libraryId: string
+  name: string
+  titles: { animeId: number; name: string; meta: SharedLibraryMeta | null }[]
+}
+
 export interface LocalSearchSnapshot {
   library?: Record<string, AnimeSearchResult | undefined>
   downloadedAnime?: Record<string, AnimeSearchResult | undefined>
@@ -19,6 +31,13 @@ export interface LocalSearchSnapshot {
   shikimoriAnimeDetails?: Record<string, { details?: { status?: string } } | undefined>
   /** A `watchProgress` entry in the last 90 days (#570's recent-watch index). */
   isRecentlyWatched: (animeId: number) => boolean
+  /** Available attached libraries only (#583): an unplugged one is left out by the caller. */
+  attached?: AttachedSnapshot[]
+}
+
+/** `anime-poster://shared/<libraryId>/<animeId>`: that library's snapshot poster (#583). */
+export function sharedPosterUrl(libraryId: string, animeId: number): string {
+  return `anime-poster://shared/${libraryId}/${animeId}`
 }
 
 interface Field {
@@ -100,10 +119,113 @@ function malIdOf(row: StoredRateRow): number | undefined {
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : undefined
 }
 
+/** One attached library's copy of a title, already checked. */
+interface AttachedTitle {
+  source: Extract<LocalSource, { kind: 'shared' }>
+  anime: AnimeSearchResult
+  /** Every title string the snapshot holds, for matching. */
+  names: string[]
+  genres: string[]
+  malId?: number
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+const text = (v: unknown): string | undefined =>
+  typeof v === 'string' && v.trim().length > 0 ? v : undefined
+const count = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined
+const positiveId = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : undefined
+
+function titlesOf(v: unknown): AnimeSearchResult['titles'] {
+  if (!isRecord(v)) return {}
+  const out: AnimeSearchResult['titles'] = {}
+  for (const k of ['ru', 'romaji', 'ja'] as const) {
+    const t = text(v[k])
+    if (t !== undefined) out[k] = t
+  }
+  return out
+}
+
+/**
+ * A drive's snapshot entry as a corpus title, or null when it has no title to
+ * show. It reads the way the Shared Libraries tab does: the snapshot's search
+ * record when there is one, else the manifest name and `meta.titles`.
+ */
+function attachedTitle(
+  libraryId: string,
+  libraryName: string,
+  raw: unknown
+): { animeId: number; title: AttachedTitle } | null {
+  if (!isRecord(raw)) return null
+  const animeId = positiveId(raw.animeId)
+  if (animeId === undefined) return null
+  const meta = isRecord(raw.meta) ? raw.meta : {}
+  const sr = isRecord(meta.searchResult) ? meta.searchResult : null
+  const name = text(raw.name)
+  const title = text(sr?.title) ?? name
+  if (title === undefined) return null
+  const metaTitles = isRecord(meta.titles) ? meta.titles : {}
+  const names = [
+    title,
+    name,
+    ...Object.values(titlesOf(sr?.titles)),
+    ...Object.values(titlesOf(metaTitles)),
+    text(metaTitles.en)
+  ].filter((t): t is string => t !== undefined)
+  const genres = (Array.isArray(meta.genres) ? meta.genres : [])
+    .map((g) => (isRecord(g) ? text(g.title) : undefined))
+    .filter((t): t is string => t !== undefined)
+  const episodes = Array.isArray(meta.episodes) ? meta.episodes.length : 0
+  const malId = positiveId(meta.malId)
+  return {
+    animeId,
+    title: {
+      source: { kind: 'shared', libraryId, libraryName },
+      anime: {
+        id: animeId,
+        title,
+        titles: sr ? titlesOf(sr.titles) : titlesOf(metaTitles),
+        // The drive's poster URL is untrusted: the card reads this library's snapshot poster.
+        posterUrlSmall: sharedPosterUrl(libraryId, animeId),
+        numberOfEpisodes: count(sr?.numberOfEpisodes) ?? episodes,
+        type: text(sr?.type) ?? text(meta.type) ?? '',
+        typeTitle: text(sr?.typeTitle) ?? '',
+        year: count(sr?.year) ?? count(meta.year) ?? 0,
+        season: text(sr?.season) ?? ''
+      },
+      names,
+      genres,
+      ...(malId !== undefined ? { malId } : {})
+    }
+  }
+}
+
+/** Each title's copies across the available libraries, by anime id; a bad entry is skipped. */
+function attachedById(libraries: unknown): Map<number, AttachedTitle[]> {
+  const out = new Map<number, AttachedTitle[]>()
+  for (const lib of Array.isArray(libraries) ? libraries : []) {
+    const libraryId = isRecord(lib) ? text(lib.libraryId) : undefined
+    if (!isRecord(lib) || libraryId === undefined || !Array.isArray(lib.titles)) continue
+    const libraryName = typeof lib.name === 'string' ? lib.name : ''
+    for (const raw of lib.titles) {
+      const hit = attachedTitle(libraryId, libraryName, raw)
+      if (!hit) continue
+      const list = out.get(hit.animeId) ?? []
+      if (list.some((t) => t.source.libraryId === libraryId)) continue
+      list.push(hit.title)
+      out.set(hit.animeId, list)
+    }
+  }
+  return out
+}
+
 export function buildCorpus(snapshot: LocalSearchSnapshot): LocalCorpusEntry[] {
   const library = snapshot.library ?? {}
   const downloaded = snapshot.downloadedAnime ?? {}
   const cache = snapshot.animeCache ?? {}
+  const attached = attachedById(snapshot.attached)
   const statusByMal = new Map<number, ShikiUserRateStatus>()
   for (const row of snapshot.shikimoriUserRates ?? []) {
     const malId = malIdOf(row)
@@ -113,25 +235,31 @@ export function buildCorpus(snapshot: LocalSearchSnapshot): LocalCorpusEntry[] {
   const ids = new Set<string>([
     ...Object.keys(library),
     ...Object.keys(downloaded),
-    ...Object.keys(cache).filter((id) => cache[id]?.animeDetail)
+    ...Object.keys(cache).filter((id) => cache[id]?.animeDetail),
+    ...[...attached.keys()].map(String)
   ])
   const corpus: LocalCorpusEntry[] = []
   for (const key of ids) {
     const animeId = Number(key)
     if (!Number.isInteger(animeId) || animeId <= 0) continue
     const detail = cache[key]?.animeDetail
-    const base = detail ?? library[key] ?? downloaded[key]
-    if (!base || typeof base.title !== 'string') continue
+    const drives = attached.get(animeId) ?? []
+    const local = detail ?? library[key] ?? downloaded[key]
+    // A title on this PC reads from its local record; one only on a drive, from the first drive.
+    const base = local && typeof local.title === 'string' ? local : drives[0]?.anime
+    if (!base) continue
 
     const localSources: LocalSource[] = []
     if (library[key]) localSources.push({ kind: 'starred' })
     if (downloaded[key]) localSources.push({ kind: 'downloaded' })
     if (snapshot.isRecentlyWatched(animeId)) localSources.push({ kind: 'watching' })
+    for (const d of drives) localSources.push(d.source)
 
-    const genres = (detail?.genres ?? [])
+    const genres = (detail ? (detail.genres ?? []) : [])
       .map((g) => g?.title)
       .filter((t): t is string => typeof t === 'string' && t.length > 0)
-    const malId = detail?.myAnimeListId
+    if (!detail) genres.push(...(drives.find((d) => d.genres.length > 0)?.genres ?? []))
+    const malId = detail?.myAnimeListId ?? drives.find((d) => d.malId !== undefined)?.malId
     const listStatus = malId !== undefined ? statusByMal.get(malId) : undefined
     const airingStatus =
       malId !== undefined
@@ -145,7 +273,13 @@ export function buildCorpus(snapshot: LocalSearchSnapshot): LocalCorpusEntry[] {
       ...(listStatus ? { listStatus } : {}),
       ...(airingStatus ? { airingStatus } : {}),
       genres,
-      titleFields: toFields([base.title, titles.ru, titles.romaji, titles.ja]),
+      titleFields: toFields([
+        base.title,
+        titles.ru,
+        titles.romaji,
+        titles.ja,
+        ...drives.flatMap((d) => d.names)
+      ]),
       genreFields: toFields(genres)
     })
   }

@@ -304,7 +304,14 @@ export class ImportJob {
     const base = this.baseOf(item)
     const stem = path.basename(item.dest, path.extname(item.dest))
     const isVideo = (f: LocalFile): boolean => f.ext !== '.ass'
-    // This job's own copies (another translation it just brought in) are not duplicates.
+    // This job's own copies (another translation it just brought in) are not duplicates,
+    // except one at this exact name: two translations under one author tag. Never a
+    // silent second registration of that file.
+    if (this.rec.doneFiles[item.dest]) {
+      this.rec.kept[item.key] = SAME_NAME
+      await this.deps.persist(this.rec)
+      return 'keep'
+    }
     const files = (await this.deps.localFiles(item)).filter((f) => !this.rec.doneFiles[f.path])
     const same = files.filter((f) => f.stem === stem)
     const others = files.filter((f) => f.stem !== stem)

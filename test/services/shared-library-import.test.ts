@@ -8,7 +8,11 @@ import * as path from 'path'
 import { nodeFs, TMP_SUFFIX, type ExportFs } from '../../src/main/lib/shared-library/copy'
 import { UNSAFE_NAME } from '../../src/main/lib/shared-library/local-name'
 import { createPlayerPresenceService } from '../../src/main/services/player-presence'
-import { KEPT_LOCAL, STILL_BUSY } from '../../src/main/services/shared-library-import/job'
+import {
+  KEPT_LOCAL,
+  SAME_NAME,
+  STILL_BUSY
+} from '../../src/main/services/shared-library-import/job'
 import { fsWritesUnder, mtimeSnapshot } from '../helpers/attached-library'
 import {
   FIXTURE_LIBRARY_ID,
@@ -432,6 +436,52 @@ describe('duplicates: ask, showing both sizes', () => {
     expect(Object.keys(read<object>('downloadedEpisodes')).sort()).toEqual([MESHI, other])
     expect(job(env)).toMatchObject({ status: 'completed', itemsDone: 2, kept: [] })
     expect(env.updates.filter((u) => u.status === 'waiting-duplicate')).toEqual([])
+  })
+
+  // PR #633 second review: two translations under one author tag share a local
+  // name. The job's own first copy must not hide that: the second is kept,
+  // never registered against the first one's file.
+  it('Import all of two translations under one author tag: the second is kept, never registered on the first’s file', async () => {
+    const voice = '202:1:9102'
+    env = makeImportEnv(
+      {},
+      {
+        editDrive: (d) => {
+          const rel = 'Dungeon Meshi/Dungeon Meshi - 01 [AniLibria] (voice).mkv'
+          fs.writeFileSync(path.join(d, rel), Buffer.alloc(1234, 9))
+          const file = path.join(d, '.anime-dl', 'manifest.json')
+          const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+          m.items.push({
+            ...m.items[1],
+            translationId: 9102,
+            translationType: 'voiceRu',
+            author: 'AniLibria',
+            path: rel,
+            size: 1234
+          })
+          fs.writeFileSync(file, `${JSON.stringify(m, null, 2)}\n`)
+        }
+      }
+    )
+    const j = await startOk(env, [MESHI, voice])
+    await until(
+      () => ['completed', 'waiting-duplicate'].includes(job(env).status),
+      'the end or a prompt'
+    )
+    if (job(env).status === 'waiting-duplicate') {
+      await env.svc.resolveDuplicate(j.jobId, { choice: 'keep', applyToAll: true })
+    }
+    await env.svc.settled(j.jobId)
+    // No second key pointing at the first translation's file.
+    expect(Object.keys(read<object>('downloadedEpisodes'))).toEqual([MESHI])
+    expect(job(env).kept).toEqual([
+      { key: voice, label: 'Dungeon Meshi — Episode 1', reason: SAME_NAME }
+    ])
+    expect(job(env)).toMatchObject({ status: 'completed', itemsDone: 1 })
+    expect(env.updates.filter((u) => u.status === 'waiting-duplicate')).toEqual([])
+    expect(fs.readFileSync(path.join(env.hot, 'Dungeon Meshi', `${MESHI_FILE}.mkv`))).toEqual(
+      fs.readFileSync(path.join(env.drive, MESHI_MKV))
+    )
   })
 
   it('a pause while asking stops the job; the resume asks again', async () => {

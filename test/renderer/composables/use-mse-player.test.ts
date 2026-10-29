@@ -227,6 +227,7 @@ describe('useMsePlayer — resetMseState', () => {
     expect(m.mseSrcUrl.value).toBe('')
     expect(m.transcodingHevc.value).toBe(false)
     expect(m.transcodeSpeed.value).toBeNull()
+    expect(m.mkvBuffering.value).toBe(false)
   })
 
   it('is idempotent', () => {
@@ -1791,6 +1792,307 @@ describe('useMsePlayer — stream end vs. the seek reply (#607)', () => {
     expect(fakeMs.endOfStream).toHaveBeenCalledTimes(1)
 
     await seekDone
+    m.resetMseState()
+  })
+})
+
+// #634: a stream error tears the session down while `handleUnbufferedSeek` is
+// parked on an await. PlayerView then drops the `<video>` src, which detaches
+// the MediaSource and removes its SourceBuffers, so every later `buffered` read
+// or `timestampOffset` write on the captured `sb` throws. The continuation must
+// notice the teardown after each await and stop touching the old session.
+describe('useMsePlayer — a stream error during the seek continuation (#634)', () => {
+  type SeekReply = { generation: number; timestampOffset: number } | { error: string }
+
+  const removedError = (): DOMException =>
+    new DOMException(
+      'This SourceBuffer has been removed from the parent media source.',
+      'InvalidStateError'
+    )
+
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  // A SourceBuffer that can be removed from its MediaSource. `remove()` never
+  // finishes on its own, so each test decides when (or whether) the drain ends.
+  class DetachableSourceBuffer extends EventTarget {
+    updating = false
+    detached = false
+    removeCalls: [number, number][] = []
+    afterAbort: [number, number][] | null = null
+    ranges = new FakeBuffered()
+    private offset = 0
+    get buffered(): FakeBuffered {
+      if (this.detached) throw removedError()
+      return this.ranges
+    }
+    get timestampOffset(): number {
+      return this.offset
+    }
+    set timestampOffset(v: number) {
+      if (this.detached) throw removedError()
+      this.offset = v
+    }
+    appendBuffer(): void {}
+    remove(start: number, end: number): void {
+      this.removeCalls.push([start, end])
+      this.updating = true
+    }
+    finishRemove(): void {
+      this.updating = false
+      this.dispatchEvent(new Event('updateend'))
+    }
+    abort(): void {
+      if (this.afterAbort) this.ranges.ranges = this.afterAbort
+    }
+    // What the MSE spec does to a SourceBuffer removed mid-`remove()`.
+    detach(): void {
+      this.detached = true
+      this.updating = false
+      this.dispatchEvent(new Event('abort'))
+      this.dispatchEvent(new Event('updateend'))
+    }
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    constructor(public sb: DetachableSourceBuffer) {
+      super()
+    }
+    addSourceBuffer(): DetachableSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+    endOfStream(): void {
+      this.readyState = 'ended'
+    }
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+    vi.restoreAllMocks()
+  })
+
+  function rig() {
+    const video = {
+      currentTime: 100,
+      paused: false,
+      error: null,
+      play: vi.fn(async () => {
+        video.paused = false
+      }),
+      pause: vi.fn(() => {
+        video.paused = true
+      })
+    }
+    const replies: ((r: SeekReply) => void)[] = []
+    const seekSpy = vi.fn(() => new Promise<SeekReply>((res) => replies.push(res)))
+    const startSpy = vi.fn<(sessionId: string) => Promise<void>>(async () => {})
+    setApi({
+      playerStreamSeek: seekSpy,
+      playerStreamStart: startSpy,
+      playerStreamAck: vi.fn(async () => {})
+    })
+    const setSyncplayLocalReady = vi.fn()
+    const m = useMsePlayer(
+      makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement, setSyncplayLocalReady })
+    )
+    function open(sessionId: string): DetachableSourceBuffer {
+      const sb = new DetachableSourceBuffer()
+      const ms = new FakeMediaSource(sb)
+      ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => ms)
+      m.startMseSession({
+        sessionId,
+        generation: 0,
+        duration: 1400,
+        mimeType: 'video/mp4',
+        resumeTarget: 0,
+        timestampOffset: 0,
+        refusedSeek: false
+      })
+      ms.dispatchEvent(new Event('sourceopen'))
+      return sb
+    }
+    const sb = open('s1')
+    // The target (100) is outside what is buffered, so the respawn path runs.
+    sb.ranges.ranges = [[0, 5]]
+    return {
+      m,
+      video,
+      sb,
+      open,
+      seekSpy,
+      startSpy,
+      setSyncplayLocalReady,
+      // Resolves the oldest outstanding seek.
+      reply: (r: SeekReply): void => replies.shift()!(r)
+    }
+  }
+
+  it('an error during the remove drain abandons the continuation (T1)', async () => {
+    const { m, video, sb, startSpy, setSyncplayLocalReady, reply } = rig()
+    const seekDone = m._internal.handleUnbufferedSeek()
+    reply({ generation: 1, timestampOffset: 99 })
+    await vi.waitFor(() => expect(sb.removeCalls).toHaveLength(1))
+
+    m._internal.handleStreamError('s1', 'ffmpeg exited with code 183')
+    // Stands in for PlayerView's `src` patch: the composable never removes the
+    // SourceBuffer itself.
+    sb.detach()
+
+    await expect(seekDone).resolves.toBeUndefined()
+    expect(startSpy.mock.calls).toEqual([['s1']])
+    expect(m.mkvBuffering.value).toBe(false)
+    expect(video.pause).not.toHaveBeenCalled()
+    expect(setSyncplayLocalReady).not.toHaveBeenCalledWith(false)
+    expect(m.remuxError.value).toBe('ffmpeg exited with code 183')
+    expect(m.hasActiveSession.value).toBe(false)
+  })
+
+  // Parks the continuation in the buffer-ahead gate: the fresh run's range is
+  // short of the 1.5 s lead, so the gate polls.
+  async function seekIntoGate(r: ReturnType<typeof rig>): Promise<{ seekDone: Promise<void> }> {
+    r.sb.afterAbort = [[99, 99.5]]
+    const seekDone = r.m._internal.handleUnbufferedSeek()
+    r.reply({ generation: 1, timestampOffset: 99 })
+    await vi.waitFor(() => expect(r.sb.removeCalls).toHaveLength(1))
+    r.sb.finishRemove()
+    await vi.waitFor(() => expect(r.m.mkvBuffering.value).toBe(true))
+    // Wrapped, or the async return would adopt `seekDone` and wait out the gate.
+    return { seekDone }
+  }
+
+  it('an error during the buffer-ahead poll clears the toast and leaves the gate (T2)', async () => {
+    const r = rig()
+    const { m, video, sb, startSpy, setSyncplayLocalReady } = r
+    const { seekDone } = await seekIntoGate(r)
+    expect(video.pause).toHaveBeenCalledTimes(1)
+
+    m._internal.handleStreamError('s1', 'ffmpeg exited with code 183')
+    sb.detach()
+    expect(m.mkvBuffering.value).toBe(false)
+
+    await expect(seekDone).resolves.toBeUndefined()
+    expect(video.play).not.toHaveBeenCalled()
+    expect(setSyncplayLocalReady).toHaveBeenLastCalledWith(true)
+    expect(startSpy.mock.calls).toEqual([['s1'], ['s1']])
+    expect(m.mkvBuffering.value).toBe(false)
+  })
+
+  it('an error during the last poll before the deadline does not resume the element (T2b)', async () => {
+    let clock = 1000
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const r = rig()
+    const { m, video, sb } = r
+    const { seekDone } = await seekIntoGate(r)
+
+    // The gate is asleep in a poll; the deadline passes before it wakes, so
+    // the `while` exits without another in-loop check.
+    clock += 5000
+    m._internal.handleStreamError('s1', 'ffmpeg exited with code 183')
+    sb.detach()
+
+    await expect(seekDone).resolves.toBeUndefined()
+    expect(video.play).not.toHaveBeenCalled()
+    expect(m.mkvBuffering.value).toBe(false)
+  })
+
+  it('a session opened while the old continuation is parked keeps its toast and its element (T3)', async () => {
+    const { m, video, sb, open, startSpy, reply } = rig()
+    const seekDone = m._internal.handleUnbufferedSeek()
+    reply({ generation: 1, timestampOffset: 99 })
+    await vi.waitFor(() => expect(sb.removeCalls).toHaveLength(1))
+    m._internal.handleStreamError('s1', 'ffmpeg exited with code 183')
+
+    const sb2 = open('s2')
+    // PlayerView sets the toast right after `startMseSession`.
+    m.mkvBuffering.value = true
+    sb.detach()
+
+    await expect(seekDone).resolves.toBeUndefined()
+    expect(startSpy.mock.calls).toEqual([['s1'], ['s2']])
+    expect(video.pause).not.toHaveBeenCalled()
+    expect(m.mkvBuffering.value).toBe(true)
+    expect(sb2.timestampOffset).toBe(0)
+    m.resetMseState()
+  })
+
+  it('an error before the seek reply leaves nothing to undo (T5)', async () => {
+    const { m, sb, startSpy, reply } = rig()
+    const seekDone = m._internal.handleUnbufferedSeek()
+    m._internal.handleStreamError('s1', 'ffmpeg exited with code 183')
+    sb.detach()
+    reply({ generation: 1, timestampOffset: 99 })
+
+    await expect(seekDone).resolves.toBeUndefined()
+    expect(sb.removeCalls).toEqual([])
+    expect(startSpy.mock.calls).toEqual([['s1']])
+    expect(m.mkvBuffering.value).toBe(false)
+  })
+
+  it('an { error } seek reply on a live session still releases the in-flight flag (T6)', async () => {
+    const { m, video, seekSpy, reply } = rig()
+    const first = m._internal.handleUnbufferedSeek()
+    reply({ error: 'seek failed' })
+    await first
+
+    video.currentTime = 200
+    const second = m._internal.handleUnbufferedSeek()
+    expect(seekSpy.mock.calls).toEqual([
+      ['s1', 100],
+      ['s1', 200]
+    ])
+    reply({ error: 'seek failed' })
+    await second
+    m.resetMseState()
+  })
+
+  // The stale `finally` no longer clears the in-flight flag, so a session
+  // opened without a `resetMseState()` in between must clear it itself.
+  it('a new session does not inherit a parked seek’s in-flight flag (T7)', async () => {
+    const { m, video, open, seekSpy, reply } = rig()
+    const parked = m._internal.handleUnbufferedSeek()
+
+    const sb2 = open('s2')
+    sb2.ranges.ranges = [[0, 5]]
+    video.currentTime = 300
+    const next = m._internal.handleUnbufferedSeek()
+    expect(seekSpy.mock.calls).toEqual([
+      ['s1', 100],
+      ['s2', 300]
+    ])
+
+    reply({ generation: 1, timestampOffset: 99 })
+    await expect(parked).resolves.toBeUndefined()
+    reply({ error: 'seek failed' })
+    await next
     m.resetMseState()
   })
 })

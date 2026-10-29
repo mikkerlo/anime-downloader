@@ -47,6 +47,7 @@ function target(over: Partial<ExportTarget>): ExportTarget {
     dir: '/drive',
     root: '/drive/Anime Library',
     kind: 'new',
+    mode: 'videos',
     libraryName: 'Anime Library',
     blocked: null,
     free: 1_000_000,
@@ -58,12 +59,17 @@ function target(over: Partial<ExportTarget>): ExportTarget {
 
 let api: Record<string, unknown>
 
-function stubApi(t: ExportTarget, pf: ExportPreflight | null = null): void {
+function stubApi(
+  t: ExportTarget | ((req: ExportPlanRequest) => ExportTarget),
+  pf: ExportPreflight | null = null,
+  account: Partial<Pick<ExportPlan, 'canExportMetadata' | 'nickname'>> = {}
+): void {
   api = {
     exportPlan: vi.fn(async (req: ExportPlanRequest) => ({
       titles: TITLES,
-      target: req.target ? t : null,
-      preflight: req.target ? pf : null
+      target: req.target ? (typeof t === 'function' ? t(req) : t) : null,
+      preflight: req.target ? pf : null,
+      ...account
     })),
     exportPickTarget: vi.fn(async () => '/drive'),
     exportStart: vi.fn(async () => ({ ok: false, reason: 'refused by main' })),
@@ -73,8 +79,13 @@ function stubApi(t: ExportTarget, pf: ExportPreflight | null = null): void {
   ;(window as unknown as { api: unknown }).api = api
 }
 
-async function open(t: ExportTarget, preselect = true, pf: ExportPreflight | null = null) {
-  stubApi(t, pf)
+async function open(
+  t: ExportTarget | ((req: ExportPlanRequest) => ExportTarget),
+  preselect = true,
+  pf: ExportPreflight | null = null,
+  account: Partial<Pick<ExportPlan, 'canExportMetadata' | 'nickname'>> = {}
+) {
+  stubApi(t, pf, account)
   const w = mount(ExportDialog, { props: { animeIds: [1], preselect } })
   await flushPromises()
   await w.find('[data-testid="export-pick"]').trigger('click')
@@ -114,12 +125,29 @@ describe('ExportDialog (#574)', () => {
     expect(startButton(w).disabled).toBe(false)
   })
 
-  it('disables Export for an own With metadata library', async () => {
+  it('routes a Videos only add into an own With metadata library to With metadata, and says why (#586)', async () => {
     const w = await open(
-      target({ kind: 'own-metadata', blocked: 'This library carries watch state.' })
+      target({ kind: 'own-metadata', mode: 'metadata', libraryName: 'Trip' }),
+      true,
+      null,
+      {
+        canExportMetadata: true,
+        nickname: 'akira'
+      }
     )
-    expect(w.find('[data-testid="export-target-line"]').text()).toContain('needs With metadata')
-    expect(startButton(w).disabled).toBe(true)
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe(
+      "Adds to 'Trip' (With metadata)"
+    )
+    expect(radio(w, 'export-mode-metadata').checked).toBe(true)
+    expect(radio(w, 'export-mode-videos').checked).toBe(false)
+    expect(radio(w, 'export-mode-videos').disabled).toBe(true)
+    expect(w.find('[data-testid="export-mode-routed"]').text()).toBe(
+      'This library carries watch state, so new titles are added with it.'
+    )
+    expect(startButton(w).disabled).toBe(false)
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(expect.objectContaining({ mode: 'metadata' }))
   })
 
   it('says a foreign library gets a sibling, and Export stays enabled', async () => {
@@ -166,9 +194,87 @@ describe('ExportDialog (#574)', () => {
       target: '/drive',
       name: 'Anime Library',
       unmerged: 'copy-as-is',
-      codec: 'copy'
+      codec: 'copy',
+      mode: 'videos'
     })
     expect(w.text()).toContain('refused by main')
+  })
+})
+
+describe('ExportDialog With metadata (#586)', () => {
+  const ME = { canExportMetadata: true, nickname: 'akira' }
+  const byMode =
+    (videos: Partial<ExportTarget>, metadata: Partial<ExportTarget>) => (req: ExportPlanRequest) =>
+      req.mode === 'metadata'
+        ? target({ mode: 'metadata', ...metadata })
+        : target({ mode: 'videos', ...videos })
+
+  it('logged out: With metadata is disabled, with the reason', async () => {
+    const w = await open(target({}), true, null, { canExportMetadata: false, nickname: null })
+    expect(radio(w, 'export-mode-metadata').disabled).toBe(true)
+    expect(radio(w, 'export-mode-videos').checked).toBe(true)
+    expect(w.find('[data-testid="export-mode-hint"]').text()).toBe(
+      'Log in to Shikimori to include watch state'
+    )
+  })
+
+  it('logged in: offered with its help text; choosing it names the library after the account and re-plans', async () => {
+    const w = await open(byMode({}, { libraryName: 'Anime Library (akira)' }), true, null, ME)
+    expect(radio(w, 'export-mode-metadata').disabled).toBe(false)
+    expect(w.find('[data-testid="export-mode-hint"]').text()).toBe(
+      'Includes watch progress, Shikimori status, stars and priority for these titles only. Never includes passwords or tokens.'
+    )
+    await w.find('[data-testid="export-mode-metadata"]').trigger('change')
+    await flushPromises()
+    expect((w.find('[data-testid="export-name"]').element as HTMLInputElement).value).toBe(
+      'Anime Library (akira)'
+    )
+    const calls = (api.exportPlan as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0] as ExportPlanRequest
+    )
+    expect(calls[calls.length - 1]).toMatchObject({
+      mode: 'metadata',
+      name: 'Anime Library (akira)'
+    })
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'metadata', name: 'Anime Library (akira)' })
+    )
+  })
+
+  it('a Videos-only target With metadata: the upgrade needs the confirmation, which goes to main', async () => {
+    const w = await open(
+      byMode({ kind: 'add', libraryName: 'Trip' }, { kind: 'upgrade', libraryName: 'Trip' }),
+      true,
+      null,
+      ME
+    )
+    expect(w.find('[data-testid="export-takeover"]').exists()).toBe(false)
+    await w.find('[data-testid="export-mode-metadata"]').trigger('change')
+    await flushPromises()
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe(
+      "Upgrade 'Trip' to With metadata"
+    )
+    expect(w.find('[data-testid="export-takeover"]').text()).toBe(
+      "You'll become the owner of this library. Other PCs that use it will see it as akira's library."
+    )
+    expect(startButton(w).disabled).toBe(true)
+    await w.find('[data-testid="export-takeover-confirm"]').setValue(true)
+    expect(startButton(w).disabled).toBe(false)
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'metadata', confirmTakeover: true })
+    )
+  })
+
+  it('a claimed target: the claim message, and a sibling', async () => {
+    const w = await open(target({ kind: 'claimed', ownerNickname: 'friend' }))
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe(
+      'You use this library through a claim. Your export goes into a new library next to it.'
+    )
+    expect(startButton(w).disabled).toBe(false)
   })
 })
 

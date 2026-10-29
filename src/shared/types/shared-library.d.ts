@@ -441,18 +441,35 @@ interface ExportPrefetchView {
 }
 
 /**
- * How the export would treat the chosen folder:
+ * How the export would treat the chosen folder (the table in docs/shared-library.md):
  * - `new`: no library there, one is created at `root`;
- * - `add`: a Videos-only library, added to (with `ownerNickname` set when it is
- *   the sibling an earlier export made next to a foreign library);
- * - `own-metadata`: a With metadata library owned by this PC's account, blocked
- *   until S6e (#586);
- * - `foreign`: a With metadata library owned by someone else (or claimed), never
- *   written; the export goes into a new library at `root`, next to it;
+ * - `add`: a Videos-only library, added to in Videos only (with `ownerNickname`
+ *   set when it is the sibling an earlier export made next to a foreign library);
+ * - `upgrade`: a Videos-only library, With metadata (S6e #586): this user takes
+ *   it over, only with `confirmTakeover` (owner decision 9);
+ * - `own-metadata`: a With metadata library owned by this PC's account: merged
+ *   first, then widened, always With metadata (a Videos only add is routed here);
+ * - `claimed`: a library this PC uses through a local claim (S7a #578), never
+ *   written; the export goes into a library at `root`, next to it;
+ * - `foreign`: a With metadata library owned by someone else, never written;
+ *   the export goes into a new library at `root`, next to it;
  * - `read-only`: a library this version can't write (a newer major, over a cap,
  *   or interrupted), blocked.
  */
-type ExportTargetKind = 'new' | 'add' | 'own-metadata' | 'foreign' | 'read-only'
+type ExportTargetKind =
+  | 'new'
+  | 'add'
+  | 'upgrade'
+  | 'own-metadata'
+  | 'claimed'
+  | 'foreign'
+  | 'read-only'
+
+/** *Videos only*, or *With metadata*: the watch state of the titles in scope too (S6e #586). */
+type ExportMode = 'videos' | 'metadata'
+
+/** A With metadata job's step (S6e #586): the copy, then the watch state, then done. */
+type ExportJobPhase = 'copy' | 'state' | 'done'
 
 interface ExportTarget {
   /** The folder the user picked. */
@@ -460,11 +477,13 @@ interface ExportTarget {
   /** The library root the export writes (a new folder for `new` and `foreign`). */
   root: string
   kind: ExportTargetKind
+  /** The mode the export runs in: the request's, except `own-metadata`, always With metadata. */
+  mode: ExportMode
   /** The library's name: the existing one's, or the one to create. */
   libraryName: string
-  /** `foreign`, or `add` next to a foreign library: whose library is at the picked folder. */
+  /** `foreign` or `claimed`, or a library next to one: whose library is at the picked folder. */
   ownerNickname?: string
-  /** Why the export is blocked (`own-metadata`, `read-only`); null when it isn't. */
+  /** Why the export is blocked (`read-only`); null when it isn't. */
   blocked: string | null
   /** Free bytes on the target's filesystem, or null when `statfs` failed. */
   free: number | null
@@ -496,6 +515,8 @@ interface ExportPlanRequest {
   unmerged?: ExportUnmergedMode
   /** The merge's video codec (#576); `copy` by default. */
   codec?: string
+  /** `videos` by default (S6e #586). */
+  mode?: ExportMode
 }
 
 /**
@@ -557,6 +578,10 @@ interface ExportPlan {
   prefetch: ExportPrefetchGate
   /** Free bytes where pre-fetched episodes download (the hot root), or null when unknown. */
   localFree: number | null
+  /** A Shikimori account is set (`shikimoriUser`, an expired session included): With metadata is offered (S6e #586). */
+  canExportMetadata: boolean
+  /** That account's nickname, for the default library name; null logged out. */
+  nickname: string | null
 }
 
 interface ExportStartRequest {
@@ -569,6 +594,10 @@ interface ExportStartRequest {
   unmerged?: ExportUnmergedMode
   /** `copy` when left out, never the Merging tab's `videoCodec` (#576). */
   codec?: string
+  /** `videos` when left out (S6e #586). */
+  mode?: ExportMode
+  /** The user confirmed becoming the owner of a Videos-only library (`upgrade`, owner decision 9). */
+  confirmTakeover?: boolean
 }
 
 type ExportStartResult = { ok: true; job: ExportJobView } | { ok: false; reason: string }
@@ -618,6 +647,10 @@ interface ExportJobView {
   /** The job-level error (`failed`). */
   error: string | null
   createdAt: number
+  /** `metadata` for a With metadata job (S6e #586); absent for Videos only. */
+  mode?: ExportMode
+  /** A With metadata job's step: "Copying", then "Saving watch state". */
+  phase?: ExportJobPhase
 }
 
 // --- Copy to this PC (S7b #579) ---------------------------------------------------

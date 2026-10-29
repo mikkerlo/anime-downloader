@@ -72,7 +72,9 @@ beforeEach(() => {
       changed = cb
       return () => {}
     },
-    onSharedLibraryFound: () => () => {}
+    onSharedLibraryFound: () => () => {},
+    syncGetStatus: async () => ({ running: [], libraries: {} }),
+    onSyncRunFinished: () => () => {}
   }
 })
 

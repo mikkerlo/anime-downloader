@@ -19,7 +19,9 @@ it('checks ffmpeg at startup and on window focus only while a library is attache
     sharedLibraryList: vi.fn().mockImplementation(async () => list),
     ffmpegCheck,
     onSharedLibrariesChanged: () => () => {},
-    onSharedLibraryFound: () => () => {}
+    onSharedLibraryFound: () => () => {},
+    syncGetStatus: async () => ({ running: [], libraries: {} }),
+    onSyncRunFinished: () => () => {}
   }
   const store = useSharedLibrariesStore()
   await flushPromises()
@@ -55,7 +57,9 @@ it('a PC that starts with a library attached checks once, after the first refres
       return ffmpegCheck()
     }),
     onSharedLibrariesChanged: () => () => {},
-    onSharedLibraryFound: () => () => {}
+    onSharedLibraryFound: () => () => {},
+    syncGetStatus: async () => ({ running: [], libraries: {} }),
+    onSyncRunFinished: () => () => {}
   }
   useSharedLibrariesStore()
   await flushPromises()

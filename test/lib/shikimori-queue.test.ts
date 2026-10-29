@@ -194,3 +194,106 @@ describe('recordServerError (#599)', () => {
     expect(recordServerErrorInParked(parked, '8', 1, [100], 4_000).parked).toBe(parked)
   })
 })
+
+// --- #584: scoped entries and provenance
+import { stripProvenance, provenanceNames } from '../../src/main/lib/shikimori-queue'
+
+describe('consolidateQueue — scoped merge entries (#584)', () => {
+  const v = { episodes: 1, status: 'watching' as const, score: 0, rewatches: 0 }
+  const e = (queuedAt: number, over: object = {}) => ({
+    malId: 5,
+    rateId: 1,
+    before: v,
+    after: v,
+    queuedAt,
+    ...over
+  })
+
+  it('unions resolvedFields, and fields while every entry is scoped; keeps the first before', () => {
+    const [item] = consolidateQueue([
+      e(1, { fields: ['episodes'], resolvedFields: ['score'], before: { ...v, score: 4 } }),
+      e(2, { fields: ['status'], resolvedFields: ['rewatches'] })
+    ] as never)
+    expect(item.fields).toEqual(['episodes', 'status'])
+    expect(item.resolvedFields).toEqual(['score', 'rewatches'])
+    expect(item.before.score).toBe(4)
+  })
+
+  it('one unscoped entry makes the item unscoped (the whole-rate policy), resolvedFields still unioned', () => {
+    const [item] = consolidateQueue([
+      e(1, { fields: ['episodes'], resolvedFields: ['score'] }),
+      e(2)
+    ] as never)
+    expect(item.fields).toBeUndefined()
+    expect(item.resolvedFields).toEqual(['score'])
+  })
+
+  it('keeps provenance per field, the last writer winning', () => {
+    const [item] = consolidateQueue([
+      e(1, {
+        fields: ['score'],
+        origin: { kind: 'sync-merge', provenance: { score: { libraryId: 'M' } } }
+      }),
+      e(2, {
+        fields: ['score', 'episodes'],
+        origin: {
+          kind: 'sync-merge',
+          provenance: { score: { libraryId: 'L' }, episodes: { libraryId: 'L' } }
+        }
+      })
+    ] as never)
+    expect(item.origin!.provenance).toEqual({
+      score: { libraryId: 'L' },
+      episodes: { libraryId: 'L' }
+    })
+  })
+})
+
+describe('stripProvenance (#584 Forget)', () => {
+  const v = { episodes: 1, status: 'watching' as const, score: 0, rewatches: 0 }
+  const user = { malId: 1, rateId: 1, before: v, after: { ...v, score: 9 }, queuedAt: 1 }
+  const merged = {
+    malId: 2,
+    rateId: 2,
+    before: v,
+    after: { ...v, score: 8, episodes: 4 },
+    queuedAt: 2,
+    fields: ['score', 'episodes'] as SyncRateField[],
+    origin: {
+      kind: 'sync-merge' as const,
+      provenance: { score: { libraryId: 'L' }, episodes: { libraryId: 'M' } }
+    }
+  }
+  const resolution = {
+    malId: 3,
+    rateId: 3,
+    before: v,
+    after: { ...v, score: 6 },
+    queuedAt: 3,
+    fields: [] as SyncRateField[],
+    resolvedFields: ['score'] as SyncRateField[],
+    origin: {
+      kind: 'sync-merge' as const,
+      provenance: { score: { resolution: 'c1', libraryIds: ['L', 'M'] } }
+    }
+  }
+
+  it("removes L's fields and resolutions, keeps M's and every user entry", () => {
+    const out = stripProvenance([user, merged, resolution], 'L')
+    expect(out).toHaveLength(2)
+    expect(out[0]).toBe(user)
+    expect(out[1]).toMatchObject({
+      malId: 2,
+      fields: ['episodes'],
+      after: { score: 0, episodes: 4 }
+    })
+    expect(out[1].origin!.provenance).toEqual({ episodes: { libraryId: 'M' } })
+  })
+
+  it('is a no-op for a library no entry names, and idempotent', () => {
+    const once = stripProvenance([user, merged, resolution], 'L')
+    expect(stripProvenance(once, 'L')).toEqual(once)
+    expect(stripProvenance([user, merged], 'X')).toEqual([user, merged])
+    expect(provenanceNames({ resolution: 'c', libraryIds: ['Q'] }, 'Q')).toBe(true)
+  })
+})

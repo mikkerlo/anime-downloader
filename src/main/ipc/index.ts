@@ -39,6 +39,7 @@ import * as debugRouter from './debug.ipc'
 import * as offlineRouter from './offline.ipc'
 import * as sharedLibraryRouter from './shared-library.ipc'
 import type { SharedLibraryExportService } from '../services/shared-library-export'
+import type { SyncRunner } from '../services/sync-runner'
 import type { FileCheckResult } from '../lib/episode-file-scan'
 
 export interface FfmpegInfo {
@@ -128,6 +129,8 @@ export interface AppDeps {
   attachedLibraryService: AttachedLibraryService
   /** Export to a Shared Library: plan, jobs, re-plug (#574). */
   sharedLibraryExport: SharedLibraryExportService
+  /** The Shared Library merge (#584): Sync now, the login trigger, status. */
+  syncRunner?: SyncRunner
 }
 
 /**

@@ -55,6 +55,9 @@ import { createAttachedLibraryService } from './services/attached-library'
 import { createAvailabilityPoller } from './services/attached-library/poller'
 import { createSnapshotCache, SNAPSHOT_DIR } from './services/attached-library/snapshot-cache'
 import { createSyncBaseStore } from './lib/sync-state/bases'
+import { createSyncRunner, type SyncRunner } from './services/sync-runner'
+import { createLocalFiles } from './services/sync-runner/local-files'
+import { buildRateCacheEntries } from './lib/shikimori-rate-cache'
 import { createMountCandidates, mountParents } from './lib/shared-library/mount-candidates'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
@@ -219,10 +222,14 @@ const playerPresenceService = createPlayerPresenceService()
 // Attached Shared Libraries (#578). Their roots live only in this service. An
 // unplugged library renders from its snapshot cache, and a claim PC's rates
 // come from the library base under `sync-bases/` (#582).
+// The merge runner (#584), created once the Shikimori sync service exists;
+// Forget waits for its run on the library through `syncIdle`.
+let syncRunner: SyncRunner | null = null
 const attachedLibraryService = createAttachedLibraryService({
   store,
   checkFfmpeg: () => checkFfmpeg(),
   onChanged: () => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED),
+  syncIdle: (libraryId) => syncRunner?.idle(libraryId) ?? Promise.resolve(),
   snapshotCache: createSnapshotCache({ dir: path.join(app.getPath('userData'), SNAPSHOT_DIR) }),
   syncBases: createSyncBaseStore(path.join(app.getPath('userData'), 'sync-bases'), fs.promises)
 })
@@ -427,6 +434,47 @@ let downloadManager: DownloadManager
 let resolveFfmpegReady!: (info: FfmpegInfo) => void
 const ffmpegReady = new Promise<FfmpegInfo>((resolve) => {
   resolveFfmpegReady = resolve
+})
+
+// The Shared Library merge (#584): the only writer of state to a drive.
+const syncLocalFiles = createLocalFiles({
+  store,
+  scanEpisodeFiles: (name) => fileScanner.scanEpisodeFiles(name),
+  sanitizeFilename,
+  displayName: (anime) => getDisplayName(anime)
+})
+syncRunner = createSyncRunner({
+  store,
+  userDataDir: app.getPath('userData'),
+  attached: attachedLibraryService,
+  sync: shikimoriSyncService,
+  isOffline,
+  onOnline: (listener) => {
+    let wasOffline = offlineService.isOffline()
+    return offlineService.onChange(() => {
+      const offline = offlineService.isOffline()
+      if (wasOffline && !offline) listener()
+      wasOffline = offline
+    })
+  },
+  broadcast: broadcastToAll,
+  runFinishedChannel: EVENT_CHANNELS.SYNC_RUN_FINISHED,
+  appVersion: app.getVersion(),
+  localEpisodeFile: syncLocalFiles.localEpisodeFile,
+  resolveEpisodeFile: syncLocalFiles.resolveEpisodeFile,
+  refreshRates: () => {
+    void (async () => {
+      const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+      if (!user) return
+      const token = await shikimori.ensureFreshToken(store)
+      const rows = await shikimori.getUserAnimeRates(token, user.id)
+      const malMap = await lookupByMalIds(rows.map((r) => r.anime.id))
+      if ((store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id !== user.id) return
+      const entries = buildRateCacheEntries(rows, malMap)
+      store.set('shikimoriUserRates', entries)
+      broadcastToAll(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, entries)
+    })().catch((err) => console.warn('[sync] the rate refresh failed:', err))
+  }
 })
 
 // Export to a Shared Library (#574). Reads the merge status lazily, so the
@@ -718,7 +766,8 @@ function registerIpcHandlers(): void {
     offlineService,
     recentWatch,
     attachedLibraryService,
-    sharedLibraryExport
+    sharedLibraryExport,
+    syncRunner: syncRunner ?? undefined
   })
 }
 
@@ -797,6 +846,9 @@ async function bootstrap(): Promise<void> {
   animeCacheService.cleanupStale()
   store.migrateWatchProgressV2()
   store.ensureInstallId()
+  // The merge subscribes before the startup read, whose availability
+  // transitions are its first trigger (#584).
+  syncRunner?.start()
   // Re-reads the attached Shared Libraries (#578) in the background; reading
   // never writes to a drive.
   const sharedLibrariesRead = attachedLibraryService

@@ -128,7 +128,7 @@ async function attach(choice?: SharedLibraryAttachChoice): Promise<void> {
           v-if="result.library.role === 'owner' || result.library.role === 'claim'"
           class="sl-text"
         >
-          Sync arrives in a later update.
+          Watch state is merged with this library now, and whenever it's connected.
         </p>
         <p v-if="result.library.message" class="sl-warn" data-testid="read-only-message">
           {{ result.library.message }}

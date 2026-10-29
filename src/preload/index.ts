@@ -569,6 +569,11 @@ const api = {
   sharedLibraryDismissPrompt: (libraryIds: string[]) =>
     ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_DISMISS_PROMPT, libraryIds) as Promise<void>,
   onSharedLibraryFound: subscribe<SharedLibraryFound>(EVENT_CHANNELS.SHARED_LIBRARY_FOUND),
+  // The merge (#584)
+  sharedLibrarySyncNow: (req: SyncNowRequest = {}) =>
+    ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_SYNC_NOW, req) as Promise<SyncRunResult | null>,
+  syncGetStatus: () => ipcRenderer.invoke(CHANNELS.SYNC_GET_STATUS) as Promise<SyncStatus>,
+  onSyncRunFinished: subscribe<SyncRunResult>(EVENT_CHANNELS.SYNC_RUN_FINISHED),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>

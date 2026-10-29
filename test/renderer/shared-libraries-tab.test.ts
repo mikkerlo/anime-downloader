@@ -129,7 +129,7 @@ describe('LibraryView — the Shared Libraries tab on a fresh PC', () => {
     ])
     expect(w.text()).not.toContain('No saved anime yet')
     expect(w.find('[data-testid="role-badge"]').text()).toBe('Owner')
-    expect(w.text()).toContain('Sync arrives in a later update.')
+    expect(w.find('[data-testid="sync-now"]').text()).toBe('Sync now')
   })
 
   it('with nothing attached the row stays hidden (control)', async () => {

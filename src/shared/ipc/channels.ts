@@ -120,6 +120,7 @@ export const CHANNELS = {
   SHARED_LIBRARY_LIST: 'shared-library:list',
   SHARED_LIBRARY_PICK_AND_DISCOVER: 'shared-library:pick-and-discover',
   SHARED_LIBRARY_RELOCATE: 'shared-library:relocate',
+  SHARED_LIBRARY_SYNC_NOW: 'shared-library:sync-now',
 
   // Shell
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
@@ -170,6 +171,9 @@ export const CHANNELS = {
   STORAGE_REBIND_ROOT: 'storage:rebind-root',
   STORAGE_RUN_CLEANUP: 'storage:run-cleanup',
   STORAGE_SET_MODE: 'storage:set-mode',
+
+  // Shared Library merge (#584)
+  SYNC_GET_STATUS: 'sync:get-status',
 
   // Syncplay
   SYNCPLAY_CONNECT: 'syncplay:connect',
@@ -293,6 +297,9 @@ export const EVENT_CHANNELS = {
   STORAGE_CLEANUP_PENDING: 'storage:cleanup-pending',
   STORAGE_MOVE_TO_COLD_PROGRESS: 'storage:move-to-cold-progress',
   STORAGE_USAGE_PROGRESS: 'storage:usage-progress',
+
+  // Shared Library merge (#584)
+  SYNC_RUN_FINISHED: 'sync:run-finished',
 
   // Syncplay
   SYNCPLAY_CONNECTION_STATUS: 'syncplay:connection-status',

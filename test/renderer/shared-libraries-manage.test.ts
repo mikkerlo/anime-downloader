@@ -100,22 +100,57 @@ describe('the management row', () => {
     )
   })
 
-  it('the Sync now, history, status and conflict slots render nothing until filled', async () => {
+  it("S10's history and conflict slots render nothing until filled", async () => {
     list = [lib('a')]
     stubApi()
     const w = mount(SharedLibrariesTab, { props: { starredIds: new Set<number>() } })
     await flushPromises()
-    for (const slot of [
-      'slot-sync-now',
-      'slot-sync-history',
-      'slot-sync-status',
-      'slot-conflicts'
-    ]) {
+    for (const slot of ['slot-sync-history', 'slot-conflicts']) {
       const el = w.find(`[data-testid="${slot}"]`)
       expect(el.exists()).toBe(true)
       expect(el.element.childNodes).toHaveLength(0)
     }
-    expect(w.text()).not.toMatch(/Sync now|Sync history/)
+    expect(w.text()).not.toMatch(/Sync history/)
+  })
+
+  it('Sync now runs every library, shows Syncing… and stays disabled while the run is in flight (#584)', async () => {
+    list = [lib('a')]
+    let finish!: () => void
+    const syncNow = vi.fn(() => new Promise<null>((res) => (finish = () => res(null))))
+    stubApi({
+      sharedLibrarySyncNow: syncNow,
+      syncGetStatus: vi.fn(async () => ({ running: [], libraries: {} }))
+    })
+    const w = mount(SharedLibrariesTab, { props: { starredIds: new Set<number>() } })
+    await flushPromises()
+    const btn = w.find('[data-testid="sync-now"]')
+    await btn.trigger('click')
+    expect(btn.text()).toBe('Syncing…')
+    expect(btn.attributes('disabled')).toBeDefined()
+    await btn.trigger('click')
+    expect(syncNow).toHaveBeenCalledTimes(1)
+    expect(syncNow).toHaveBeenCalledWith({})
+    finish()
+    await flushPromises()
+    expect(btn.text()).toBe('Sync now')
+  })
+
+  it('the status line reads "N changes synced, M need review" from the last run (#584)', async () => {
+    list = [lib('a')]
+    const last: SyncLibraryResult = {
+      libraryId: 'a',
+      drive: 'ok',
+      shikimori: 'ok',
+      counts: { applied: 3, conflicts: 1, clamped: 0 },
+      waitingMalIds: [],
+      rewatchesSuperseded: 0
+    }
+    stubApi({
+      syncGetStatus: vi.fn(async () => ({ running: [], libraries: { a: { last, needReview: 1 } } }))
+    })
+    const w = mount(SharedLibrariesTab, { props: { starredIds: new Set<number>() } })
+    await flushPromises()
+    expect(w.find('[data-testid="sync-status"]').text()).toBe('3 changes synced, 1 need review')
   })
 
   it('the ⋯ menu holds Open folder, Re-locate… and Forget; Forget opens the confirmation', async () => {
@@ -269,5 +304,30 @@ describe('the found-on-a-drive toast', () => {
     list = [lib('aaaaaaaa-0000-4000-8000-000000000001')]
     await store.refresh()
     expect(store.found).toEqual([])
+  })
+})
+
+describe("the detail page's Sync now (#584)", () => {
+  const title = (animeId: number) => ({ animeId }) as AttachedLibraryTitle
+  it('shows only for a title an owned or claimed library has in scope, and runs that title only', async () => {
+    list = [
+      lib('own', { role: 'owner', titles: [title(1)] }),
+      lib('claim', { role: 'claim', titles: [title(2)] }),
+      lib('foreign', { role: 'foreign', titles: [title(3)] }),
+      lib('videos', { role: 'videos', mode: 'videos', titles: [title(4)] })
+    ]
+    const syncNow = vi.fn(async () => null)
+    stubApi({ sharedLibrarySyncNow: syncNow })
+    const store = useSharedLibrariesStore()
+    await store.refresh()
+    expect([1, 2, 3, 4, 5].map((id) => store.canSyncTitle(id))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false
+    ])
+    await store.syncNow(1)
+    expect(syncNow).toHaveBeenCalledWith({ animeId: 1 })
   })
 })

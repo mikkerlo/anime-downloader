@@ -1297,3 +1297,257 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   })
   return { promise, resolve }
 }
+
+// --- #584: scoped entries, resolvedFields, rewatches drift, settles, drainNow, the queue lock
+
+type Vals = { episodes: number; status: string; score: number; rewatches: number }
+const vals = (v: Partial<Vals>): Vals => ({
+  episodes: 0,
+  status: 'watching',
+  score: 0,
+  rewatches: 0,
+  ...v
+})
+const server = (v: Partial<Vals>, id = 77) => ({
+  id,
+  target_id: 9,
+  target_type: 'Anime',
+  ...vals(v)
+})
+
+function entry(over: Record<string, unknown>) {
+  return { malId: 9, rateId: 77, queuedAt: 1, before: vals({}), after: vals({}), ...over }
+}
+
+async function drainOne(over: Record<string, unknown>, current: ReturnType<typeof server> | null) {
+  const { svc } = makeService({ shikimoriUpdateQueue: [entry(over)] })
+  const events: unknown[] = []
+  svc.onItemSettled((e) => events.push(e))
+  getUserRate.mockResolvedValue(current)
+  updateUserRate.mockImplementation(async (_t, id, episodes, status, score, rewatches) => ({
+    id,
+    target_id: 9,
+    target_type: 'Anime',
+    episodes,
+    status,
+    score,
+    rewatches
+  }))
+  createUserRate.mockImplementation(async (_t, _u, _m, episodes, status, score, rewatches) => ({
+    id: 5,
+    target_id: 9,
+    target_type: 'Anime',
+    episodes,
+    status,
+    score,
+    rewatches
+  }))
+  await svc.syncShikimoriQueue()
+  return { events: events as import('../../src/main/services/shikimori-sync').ShikiItemSettled[] }
+}
+
+describe('ShikimoriSyncService — field-scoped merge entries (#584)', () => {
+  it('(must 3) resolvedFields: only the resolved field is forced; episodes keep the server value', async () => {
+    const { events } = await drainOne(
+      {
+        before: vals({ episodes: 5, score: 7 }),
+        after: vals({ episodes: 5, score: 8 }),
+        fields: [],
+        resolvedFields: ['score']
+      },
+      server({ episodes: 8, score: 6 })
+    )
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 77, 8, 'watching', 8, 0)
+    expect(events[0]).toMatchObject({ outcome: 'applied', fieldsApplied: ['score'] })
+  })
+
+  it('(must 3) a resolution consolidated behind a later user edit keeps score forced', async () => {
+    const { svc } = makeService({
+      shikimoriUpdateQueue: [
+        entry({
+          queuedAt: 1,
+          before: vals({ episodes: 5, score: 7 }),
+          after: vals({ episodes: 5, score: 8 }),
+          fields: [],
+          resolvedFields: ['score']
+        }),
+        entry({
+          queuedAt: 2,
+          before: vals({ episodes: 5, score: 8 }),
+          after: vals({ episodes: 5, score: 8, status: 'on_hold' })
+        })
+      ]
+    })
+    getUserRate.mockResolvedValue(server({ episodes: 8, score: 6 }))
+    updateUserRate.mockResolvedValue(server({ episodes: 8, score: 8 }))
+    await svc.syncShikimoriQueue()
+    // Unscoped now (the user edit), so the whole-rate policy keeps the server for the rest; score stays forced.
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 77, 8, 'watching', 8, 0)
+  })
+
+  it('(must 3) a rewatches-only resolution', async () => {
+    await drainOne(
+      {
+        before: vals({ rewatches: 1 }),
+        after: vals({ rewatches: 3 }),
+        fields: [],
+        resolvedFields: ['rewatches']
+      },
+      server({ rewatches: 2, score: 4 })
+    )
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 77, 0, 'watching', 4, 3)
+  })
+
+  it('mutation (whole-entry resolved): forcing every field lowers episodes to 5', async () => {
+    const { driftPayload } = await import('../../src/main/services/shikimori-sync')
+    const item = {
+      before: vals({ episodes: 5, score: 7 }),
+      after: vals({ episodes: 5, score: 8 }),
+      fields: [] as SyncRateField[],
+      resolvedFields: ['score'] as SyncRateField[]
+    }
+    expect(driftPayload(item as never, vals({ episodes: 8, score: 6 }) as never).episodes).toBe(8)
+    const wholeEntry = {
+      ...item,
+      resolvedFields: ['episodes', 'status', 'score', 'rewatches'] as SyncRateField[]
+    }
+    expect(
+      driftPayload(wholeEntry as never, vals({ episodes: 8, score: 6 }) as never).episodes
+    ).toBe(5)
+  })
+
+  it('scoped drift: an episodes-only entry writes episodes and keeps the server status', async () => {
+    const { events } = await drainOne(
+      { before: vals({ episodes: 3 }), after: vals({ episodes: 6 }), fields: ['episodes'] },
+      server({ episodes: 3, status: 'on_hold' })
+    )
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 77, 6, 'on_hold', 0, 0)
+    expect(events[0]).toMatchObject({
+      outcome: 'applied',
+      fieldsApplied: ['episodes'],
+      fieldsKeptByServer: []
+    })
+  })
+
+  it('partial: the server moved score; episodes applied, score kept by the server', async () => {
+    const { events } = await drainOne(
+      {
+        before: vals({ episodes: 3, score: 7 }),
+        after: vals({ episodes: 6, score: 8 }),
+        fields: ['episodes', 'score']
+      },
+      server({ episodes: 3, score: 9 })
+    )
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 77, 6, 'watching', 9, 0)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      outcome: 'partial',
+      fieldsApplied: ['episodes'],
+      fieldsKeptByServer: ['score']
+    })
+  })
+
+  it('server-won: a scoped score entry against a moved server sends nothing', async () => {
+    const { events } = await drainOne(
+      { before: vals({ score: 7 }), after: vals({ score: 8 }), fields: ['score'] },
+      server({ score: 9 })
+    )
+    expect(updateUserRate).not.toHaveBeenCalled()
+    expect(events[0]).toMatchObject({
+      outcome: 'server-won',
+      fieldsApplied: [],
+      fieldsKeptByServer: ['score']
+    })
+  })
+
+  it('created and dropped are each emitted once', async () => {
+    const created = await drainOne({ after: vals({ episodes: 2 }), fields: ['episodes'] }, null)
+    expect(created.events.map((e) => e.outcome)).toEqual(['created'])
+    getUserRate.mockReset()
+    const { svc } = makeService({
+      shikimoriUpdateQueue: [entry({ fields: ['score'], after: vals({ score: 11 }) })]
+    })
+    const events: string[] = []
+    svc.onItemSettled((e) => events.push(e.outcome))
+    getUserRate.mockRejectedValue(new ShikiApiError('bad score', 422))
+    await svc.syncShikimoriQueue()
+    expect(events).toEqual(['dropped'])
+  })
+
+  it('a rewatches-only drift is detected (a user entry against a moved rewatches)', async () => {
+    await drainOne(
+      {
+        before: vals({ episodes: 3, rewatches: 1 }),
+        after: vals({ episodes: 3, score: 5, rewatches: 1 })
+      },
+      server({ episodes: 3, rewatches: 2 })
+    )
+    // Drift, and not forward progress: the server wins, as today.
+    expect(updateUserRate).not.toHaveBeenCalled()
+  })
+
+  it('two listeners both fire, and an unsubscribe removes only its own', async () => {
+    const { svc } = makeService({
+      shikimoriUpdateQueue: [entry({ fields: ['score'], after: vals({ score: 3 }) })]
+    })
+    const a: string[] = []
+    const b: string[] = []
+    const offA = svc.onItemSettled((e) => a.push(e.outcome))
+    svc.onItemSettled((e) => b.push(e.outcome))
+    offA()
+    getUserRate.mockResolvedValue(server({}))
+    updateUserRate.mockResolvedValue(server({ score: 3 }))
+    await svc.syncShikimoriQueue()
+    expect(a).toEqual([])
+    expect(b).toEqual(['applied'])
+  })
+})
+
+describe('ShikimoriSyncService — drainNow and withQueueLock (#584)', () => {
+  it('drainNow waits for a drain in flight, then drains what was queued meanwhile', async () => {
+    const { svc, store } = makeService({
+      shikimoriUpdateQueue: [entry({ malId: 1, fields: ['score'], after: vals({ score: 1 }) })]
+    })
+    const gate = deferred<ReturnType<typeof server>>()
+    getUserRate.mockReturnValueOnce(gate.promise).mockResolvedValue(server({}))
+    updateUserRate.mockResolvedValue(server({ score: 1 }))
+    const first = svc.syncShikimoriQueue()
+    const queue = store.get('shikimoriUpdateQueue') as unknown[]
+    store.set('shikimoriUpdateQueue', [
+      ...queue,
+      entry({ malId: 2, queuedAt: 2, fields: ['score'], after: vals({ score: 1 }) })
+    ])
+    const now = svc.drainNow()
+    gate.resolve(server({}))
+    await first
+    await now
+    expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+    expect(getUserRate.mock.calls.map((c) => c[2])).toEqual([1, 2])
+  })
+
+  it('a drain mid-item finishes before the lock is taken, and none starts until it returns', async () => {
+    const { svc, store } = makeService({
+      shikimoriUpdateQueue: [entry({ malId: 1, fields: ['score'], after: vals({ score: 1 }) })]
+    })
+    const gate = deferred<ReturnType<typeof server>>()
+    getUserRate.mockReturnValueOnce(gate.promise).mockResolvedValue(server({}))
+    updateUserRate.mockResolvedValue(server({ score: 1 }))
+    const order: string[] = []
+    const drain = svc.syncShikimoriQueue().then(() => order.push('drain done'))
+    const locked = svc.withQueueLock(async () => {
+      order.push('lock')
+      store.set('shikimoriUpdateQueue', [
+        entry({ malId: 3, queuedAt: 3, fields: ['score'], after: vals({ score: 1 }) })
+      ])
+      await svc.syncShikimoriQueue() // refused while locked
+      expect(getUserRate).toHaveBeenCalledTimes(1)
+      order.push('unlock')
+    })
+    gate.resolve(server({}))
+    await drain
+    await locked
+    expect(order).toEqual(['drain done', 'lock', 'unlock'])
+    await svc.drainNow()
+    expect(getUserRate.mock.calls.map((c) => c[2])).toEqual([1, 3])
+  })
+})

@@ -635,6 +635,16 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
               Back
             </button>
             <h1>{{ getAnimeName() }}</h1>
+            <button
+              v-if="sharedStore.canSyncTitle(animeId)"
+              class="btn btn-ghost btn-sm"
+              data-testid="detail-sync-now"
+              :disabled="sharedStore.syncing.includes(`title:${animeId}`)"
+              title="Merge this title's watch state with its Shared Libraries, then Shikimori"
+              @click="sharedStore.syncNow(animeId)"
+            >
+              {{ sharedStore.syncing.includes(`title:${animeId}`) ? 'Syncing…' : 'Sync now' }}
+            </button>
             <div v-if="anime.titles?.romaji || anime.titles?.ja" class="detail-romaji">
               {{ anime.titles.romaji || anime.titles.ja }}
             </div>
@@ -923,6 +933,16 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
               Back
             </button>
             <h1>{{ attachedAnime.title }}</h1>
+            <button
+              v-if="sharedStore.canSyncTitle(animeId)"
+              class="btn btn-ghost btn-sm"
+              data-testid="detail-sync-now"
+              :disabled="sharedStore.syncing.includes(`title:${animeId}`)"
+              title="Merge this title's watch state with its Shared Libraries, then Shikimori"
+              @click="sharedStore.syncNow(animeId)"
+            >
+              {{ sharedStore.syncing.includes(`title:${animeId}`) ? 'Syncing…' : 'Sync now' }}
+            </button>
             <div
               v-if="attachedAnime.titles?.romaji || attachedAnime.titles?.ja"
               class="detail-romaji"

@@ -409,6 +409,9 @@ interface Api {
   /** "Don't ask for this drive", by `libraryId`. */
   sharedLibraryDismissPrompt: (libraryIds: string[]) => Promise<void>
   onSharedLibraryFound: (callback: (found: SharedLibraryFound) => void) => Unsubscribe
+  sharedLibrarySyncNow: (req?: SyncNowRequest) => Promise<SyncRunResult | null>
+  syncGetStatus: () => Promise<SyncStatus>
+  onSyncRunFinished: (callback: (result: SyncRunResult) => void) => Unsubscribe
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>

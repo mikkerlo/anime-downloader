@@ -20,7 +20,11 @@ async function pickFolder(sender: Electron.WebContents, title: string): Promise<
   return result.filePaths[0]
 }
 
-export function register({ attachedLibraryService, sharedLibraryExport }: AppDeps): void {
+export function register({
+  attachedLibraryService,
+  sharedLibraryExport,
+  syncRunner
+}: AppDeps): void {
   // --- Open a Shared Library (#578)
   ipcMain.handle(
     CHANNELS.SHARED_LIBRARY_PICK_AND_DISCOVER,
@@ -41,11 +45,40 @@ export function register({ attachedLibraryService, sharedLibraryExport }: AppDep
 
   ipcMain.handle(
     CHANNELS.SHARED_LIBRARY_ATTACH,
-    (_event, libraryId: string, choice?: SharedLibraryAttachChoice, from?: unknown) => {
+    async (_event, libraryId: string, choice?: SharedLibraryAttachChoice, from?: unknown) => {
       if (typeof libraryId !== 'string') return { ok: false, error: 'No library given.' }
       const c = choice === 'claim' || choice === 'videos' ? choice : undefined
-      return attachedLibraryService.attach(libraryId, c, from === 'found' ? 'found' : 'opened')
+      const r = await attachedLibraryService.attach(
+        libraryId,
+        c,
+        from === 'found' ? 'found' : 'opened'
+      )
+      // The merge after attach (#584), in the background: the attach never waits for it.
+      if (r.ok && syncRunner) {
+        void syncRunner
+          .runLibrary(libraryId, 'attach')
+          .catch((err) => console.error('[sync] the attach run failed:', err))
+      }
+      return r
     }
+  )
+
+  // --- The merge (#584): Sync now (every library, or one title's) and the status line
+  ipcMain.handle(
+    CHANNELS.SHARED_LIBRARY_SYNC_NOW,
+    async (_event, req?: SyncNowRequest): Promise<SyncRunResult | null> => {
+      if (!syncRunner) return null
+      const animeId = Number.isSafeInteger(req?.animeId) ? req!.animeId! : null
+      if (animeId !== null) return syncRunner.runTitle(animeId, 'manual')
+      if (typeof req?.libraryId === 'string') return syncRunner.runLibrary(req.libraryId, 'manual')
+      return syncRunner.runAll('manual')
+    }
+  )
+
+  ipcMain.handle(
+    CHANNELS.SYNC_GET_STATUS,
+    (): Promise<SyncStatus> =>
+      syncRunner?.status() ?? Promise.resolve({ running: [], libraries: {} })
   )
 
   // An unplugged library lists from the snapshot cache; a claim PC's rates come

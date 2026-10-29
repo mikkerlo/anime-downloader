@@ -2,9 +2,11 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as shikimori from '../../shikimori'
 import { isNetworkError } from '../../lib/errors'
+import { createListenerSet } from '../../lib/listener-set'
 import {
   consolidateQueue,
   dropFromParked,
+  type ConsolidatedWorkItem,
   recordServerError,
   recordServerErrorInParked,
   type ParkedQueues,
@@ -128,6 +130,77 @@ export interface ShikimoriSyncService {
   setCachedFriendsActivity(userId: number, data: ShikiFriendActivityEntry[]): CachedFriendsActivity
   /** Drops both snapshots and their file: logout and account switch. */
   clearOfflineSnapshots(): void
+  /** Waits for a drain in flight, then drains once (#584). Never rejects. */
+  drainNow(): Promise<void>
+  /**
+   * Runs `fn` with no drain in flight: waits for one already running, and keeps
+   * any new drain from starting until `fn` settles (#584's Forget).
+   */
+  withQueueLock<T>(fn: () => T | Promise<T>): Promise<T>
+  /** Every consumed work item's outcome (#584). Multi-listener; returns an unsubscribe. */
+  onItemSettled(listener: (e: ShikiItemSettled) => void): () => void
+}
+
+/**
+ * One consumed drain item (#584). `fieldsApplied` hold the entry's value on
+ * the server now; `fieldsKeptByServer` kept the server's. `dropped` is a 4xx
+ * (or a 5xx past its window): nothing applied.
+ */
+export interface ShikiItemSettled {
+  ownerId: number
+  malId: number
+  consumedQueuedAts: number[]
+  outcome: 'applied' | 'created' | 'partial' | 'server-won' | 'dropped'
+  rate: shikimori.ShikiUserRate | null
+  fieldsApplied: SyncRateField[]
+  fieldsKeptByServer: SyncRateField[]
+  after: QueuedShikimoriUpdate['after']
+  provenance?: Partial<Record<SyncRateField, SyncProvenance>>
+  error?: string
+}
+
+const RATE_FIELDS: readonly SyncRateField[] = ['episodes', 'status', 'score', 'rewatches']
+
+type RateFieldValues = QueuedShikimoriUpdate['after']
+
+function valuesOf(rate: shikimori.ShikiUserRate): RateFieldValues {
+  return {
+    episodes: rate.episodes,
+    status: rate.status,
+    score: rate.score,
+    rewatches: rate.rewatches ?? 0
+  }
+}
+
+// An entry queued before `rewatches` was recorded has none: it means 0.
+function beforeOf(item: Pick<ConsolidatedWorkItem, 'before'>, f: SyncRateField): number | string {
+  return f === 'rewatches' ? (item.before.rewatches ?? 0) : item.before[f]
+}
+
+/** The fields an item means to change: a scoped entry's own, otherwise every rate field. */
+function intendedFields(item: ConsolidatedWorkItem): SyncRateField[] {
+  if (!item.fields) return [...RATE_FIELDS]
+  return RATE_FIELDS.filter((f) => item.fields!.includes(f) || item.resolvedFields?.includes(f))
+}
+
+/**
+ * What a drifted item sends (#584 §3). A scoped entry writes `after[f]` only
+ * where the server still has `before[f]`; `resolvedFields` always take
+ * `after`; everything else keeps the server's value. An unscoped (user) entry
+ * keeps today's whole-rate policy, with its `resolvedFields` forced.
+ */
+export function driftPayload(
+  item: Pick<ConsolidatedWorkItem, 'before' | 'after' | 'fields' | 'resolvedFields'>,
+  current: RateFieldValues
+): RateFieldValues {
+  const resolved = new Set(item.resolvedFields ?? [])
+  if (!item.fields && shouldApplyOnDrift(current, item.after)) return { ...item.after }
+  const out = { ...current }
+  for (const f of RATE_FIELDS) {
+    const scopedOk = !!item.fields?.includes(f) && current[f] === beforeOf(item, f)
+    if (resolved.has(f) || scopedOk) (out as Record<string, unknown>)[f] = item.after[f]
+  }
+  return out
 }
 
 function sleep(ms: number): Promise<void> {
@@ -135,7 +208,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function shouldApplyOnDrift(
-  current: shikimori.ShikiUserRate,
+  current: { episodes: number; status: shikimori.ShikiUserRateStatus },
   after: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
 ): boolean {
   if (after.episodes <= current.episodes) return false
@@ -294,7 +367,58 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     broadcast(deps.rateUpdatedChannel, cached[idx])
   }
 
-  async function syncShikimoriQueue(): Promise<void> {
+  const settled = createListenerSet<[ShikiItemSettled]>('shikimori-item-settled')
+  // The drain in flight, and Forget's queue lock (#584).
+  let inFlight: Promise<void> | null = null
+  let queueLock: Promise<void> | null = null
+  let drainAfterLock = false
+
+  function syncShikimoriQueue(): Promise<void> {
+    if (syncInProgress || deps.isOffline?.()) return Promise.resolve()
+    if (queueLock) {
+      drainAfterLock = true
+      return Promise.resolve()
+    }
+    const run = drainOnce()
+    inFlight = run
+    void run
+      .catch(() => {})
+      .finally(() => {
+        if (inFlight === run) inFlight = null
+      })
+    return run
+  }
+
+  async function drainNow(): Promise<void> {
+    try {
+      while (queueLock) await queueLock
+      await inFlight?.catch(() => {})
+      await syncShikimoriQueue()
+      // Another caller's drain started meanwhile: it covers every entry queued so far.
+      await inFlight?.catch(() => {})
+    } catch (err) {
+      console.warn('[shikimori sync] drainNow failed:', err)
+    }
+  }
+
+  async function withQueueLock<T>(fn: () => T | Promise<T>): Promise<T> {
+    while (queueLock) await queueLock
+    let release!: () => void
+    queueLock = new Promise<void>((resolve) => (release = resolve))
+    try {
+      await inFlight?.catch(() => {})
+      return await fn()
+    } finally {
+      queueLock = null
+      release()
+      if (drainAfterLock) {
+        drainAfterLock = false
+        void syncShikimoriQueue()
+      }
+    }
+  }
+
+  async function drainOnce(): Promise<void> {
     if (syncInProgress || deps.isOffline?.()) return
     const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
     if (queue.length === 0) {
@@ -345,6 +469,27 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
         ownerChanged = true
         break
       }
+      const intended = intendedFields(item)
+      const settle = (
+        outcome: ShikiItemSettled['outcome'],
+        rate: shikimori.ShikiUserRate | null,
+        sent: RateFieldValues | null,
+        error?: string
+      ): void => {
+        const applied = sent ? intended.filter((f) => sent[f] === item.after[f]) : []
+        settled.emit({
+          ownerId: user.id,
+          malId: item.malId,
+          consumedQueuedAts: [...item.consumedQueuedAts],
+          outcome,
+          rate,
+          fieldsApplied: applied,
+          fieldsKeptByServer: sent ? intended.filter((f) => !applied.includes(f)) : [],
+          after: { ...item.after },
+          ...(item.origin ? { provenance: { ...item.origin.provenance } } : {}),
+          ...(error !== undefined ? { error } : {})
+        })
+      }
       try {
         const current = await shikimori.getUserRate(accessToken, user.id, item.malId)
 
@@ -359,38 +504,37 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
             item.after.rewatches
           )
           reconcileCacheFromRate(user.id, item.malId, created)
+          dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+          settle('created', created, item.after)
         } else {
-          const driftMatches =
-            current.episodes === item.before.episodes &&
-            current.status === item.before.status &&
-            current.score === item.before.score
-
-          if (driftMatches) {
-            const updated = await shikimori.updateUserRate(
+          const now = valuesOf(current)
+          // `rewatches` is part of the drift check (#584): a rewatches-only drift is drift.
+          const driftMatches = RATE_FIELDS.every((f) => now[f] === beforeOf(item, f))
+          const sent = driftMatches ? item.after : driftPayload(item, now)
+          let rate = current
+          if (RATE_FIELDS.some((f) => sent[f] !== now[f]) || driftMatches) {
+            rate = await shikimori.updateUserRate(
               accessToken,
               current.id,
-              item.after.episodes,
-              item.after.status,
-              item.after.score,
-              item.after.rewatches
+              sent.episodes,
+              sent.status,
+              sent.score,
+              sent.rewatches
             )
-            reconcileCacheFromRate(user.id, item.malId, updated)
-          } else if (shouldApplyOnDrift(current, item.after)) {
-            const updated = await shikimori.updateUserRate(
-              accessToken,
-              current.id,
-              item.after.episodes,
-              item.after.status,
-              item.after.score,
-              item.after.rewatches
-            )
-            reconcileCacheFromRate(user.id, item.malId, updated)
-          } else {
-            reconcileCacheFromRate(user.id, item.malId, current)
           }
+          reconcileCacheFromRate(user.id, item.malId, rate)
+          dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+          const applied = intended.filter((f) => sent[f] === item.after[f])
+          settle(
+            applied.length === intended.length
+              ? 'applied'
+              : applied.length === 0
+                ? 'server-won'
+                : 'partial',
+            rate,
+            sent
+          )
         }
-
-        dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
       } catch (err) {
         if (isNetworkError(err)) {
           aborted = true
@@ -421,6 +565,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
               err.message
             )
             dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+            settle('dropped', null, null, err.message)
           } else {
             hadServerError = true
             if (ownerCurrent) lastSyncError = 'Shikimori server error — will retry'
@@ -429,6 +574,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
         } else {
           console.warn('[shikimori sync] dropping item', item.malId, err)
           dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+          settle('dropped', null, null, err instanceof Error ? err.message : String(err))
         }
       }
 
@@ -742,6 +888,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     setCachedCalendar,
     getCachedFriendsActivity,
     setCachedFriendsActivity,
-    clearOfflineSnapshots
+    clearOfflineSnapshots,
+    drainNow,
+    withQueueLock,
+    onItemSettled: (listener) => settled.add(listener)
   }
 }

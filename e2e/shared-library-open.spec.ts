@@ -79,6 +79,8 @@ test('open a Shared Library, see its titles, and play an .mp4 and an .mkv from t
     await page.getByTestId('show-library').click()
 
     await expect(page.locator('.pill-tab', { hasText: 'Shared Libraries' })).toHaveClass(/active/)
+    // The tab header's Sync now (#584) is shown, not hidden with S10's empty slots.
+    await expect(page.getByTestId('sync-now')).toBeVisible()
     const cards = page.getByTestId('drive-title')
     // Frieren's card reads its snapshot's romaji title; Dungeon Meshi has no meta.
     await expect(cards.locator('.acard-title')).toHaveText(['Sousou no Frieren', 'Dungeon Meshi'])

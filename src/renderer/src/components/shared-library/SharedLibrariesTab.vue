@@ -15,6 +15,7 @@ import {
   pathOverflowText,
   rateText,
   readOnlyTitle,
+  syncStatusText,
   useSharedLibrariesStore
 } from '../../stores/shared-libraries';
 import { usePlayFromDrive } from '../../composables/use-play-from-drive';
@@ -24,21 +25,21 @@ import { formatAgo } from '../../utils';
 // attached library, its titles from the drive's snapshot. Copy to this PC and
 // Import all arrive with S7b (#579). Each section header is the library's
 // management row (#581): availability, Last seen, a badge, Last sync, and the
-// ⋯ menu. The empty `slot-*` spans are where S9 (#584) and S10 (#585) render.
+// ⋯ menu. Sync now and the status line are the merge's (#584); the empty
+// `slot-*` spans are where S10 (#585) renders.
 // Strings from the drive are rendered as text only.
 defineProps<{ starredIds: ReadonlySet<number> }>();
 const emit = defineEmits<{ toggleStar: [anime: AnimeSearchResult] }>();
 
 const libraryStore = useLibraryStore();
 const shared = useSharedLibrariesStore();
-const { libraries, ffmpegAvailable } = storeToRefs(shared);
+const { libraries, ffmpegAvailable, syncStatus, syncing } = storeToRefs(shared);
 const { play } = usePlayFromDrive();
 const error = ref('');
 
 const ROLE_NOTE: Partial<Record<AttachedLibraryRole, string>> = {
   foreign: 'Owned by someone else: used as videos only, its watch state is ignored.',
-  owner: 'Sync arrives in a later update.',
-  claim: 'Used on this PC as its owner. Sync arrives in a later update.'
+  claim: 'Used on this PC as its owner.'
 };
 
 async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle): Promise<void> {
@@ -61,7 +62,15 @@ function playBlockedTitle(
   <div class="shared-tab" data-testid="shared-libraries-tab">
     <p v-if="libraries.length === 0" class="status-text">No Shared Library is open.</p>
     <header v-else class="tab-head" data-testid="shared-tab-head">
-      <span class="slot" data-testid="slot-sync-now"></span>
+      <button
+        class="sl-btn"
+        data-testid="sync-now"
+        :disabled="syncing.includes('all')"
+        title="Merge watch state with every connected library you own or use as its owner, then Shikimori"
+        @click="shared.syncNow()"
+      >
+        {{ syncing.includes('all') ? 'Syncing…' : 'Sync now' }}
+      </button>
       <span class="slot" data-testid="slot-sync-history"></span>
     </header>
     <p v-if="error" class="sl-error">{{ error }}</p>
@@ -96,7 +105,12 @@ function playBlockedTitle(
         <span class="sl-muted" data-testid="last-sync"
           >Last sync: {{ lastSyncWhen(lib.lastSyncAt) }}</span
         >
-        <span class="slot" data-testid="slot-sync-status"></span>
+        <span
+          v-if="syncStatusText(syncStatus.libraries[lib.libraryId])"
+          class="sl-muted"
+          data-testid="sync-status"
+          >{{ syncStatusText(syncStatus.libraries[lib.libraryId]) }}</span
+        >
         <span class="slot" data-testid="slot-conflicts"></span>
         <div class="grow"></div>
         <button class="sl-btn" disabled title="Arrives in a later update">Import all</button>
@@ -180,8 +194,7 @@ function playBlockedTitle(
   gap: 10px;
 }
 
-.slot:empty,
-.tab-head:not(:has(.slot:not(:empty))) {
+.slot:empty {
   display: none;
 }
 

@@ -182,6 +182,23 @@ export interface JobRecord {
   /** The "Found at" / "Resumed at" line last appended to the note, so the next one replaces exactly it. */
   noteWhere?: string
   error: string | null
+  /** A With metadata job (S6e #586); absent for Videos only. */
+  mode?: 'metadata'
+  /** A With metadata job's step: `state` only after the copy's final checkpoint, `done` after the base. */
+  phase?: ExportJobPhase
+}
+
+/** S9's (#584) library leg for this job's library, as `SyncRunner.runExport` runs it. */
+export type ExportStateWriter = (target: {
+  libraryId: string
+  root: string
+  name: string
+}) => Promise<SyncLibraryResult>
+
+const STATE_FAILED: Partial<Record<NonNullable<SyncLibraryResult['driveReason']>, string>> = {
+  foreign: 'the library’s owner isn’t logged in on this PC',
+  'write-failed-read-only': 'the drive is read-only',
+  unreadable: 'the library couldn’t be read'
 }
 
 export interface JobDeps {
@@ -205,6 +222,8 @@ export interface JobDeps {
   merger?: ExportMerger
   /** Pre-fetch (#577); without it, waiting items stay waiting. */
   prefetch?: PrefetchJobDeps
+  /** The With metadata state step (S6e #586); without it, such a job can't finish. */
+  writeState?: ExportStateWriter
 }
 
 class DriveGoneError extends Error {}
@@ -1042,6 +1061,33 @@ export class ExportJob {
     return 'done'
   }
 
+  /**
+   * The With metadata state step (S6e #586): S9's merge of this PC with the
+   * library against its base, the write of the state for every title in
+   * `titles[]`, then the base. Idempotent, so a resume just runs it again.
+   * False when it didn't land: the job is paused with why, and Resume retries.
+   */
+  private async saveState(): Promise<boolean> {
+    const write = this.deps.writeState
+    if (!write) throw new Error('saving watch state isn’t available on this PC')
+    this.rec.error = null
+    this.deps.update(this.rec, this.bytesDone())
+    const r = await write({
+      libraryId: this.rec.libraryId,
+      root: this.rec.root,
+      name: this.rec.libraryName
+    })
+    if (r.drive === 'ok') {
+      this.rec.phase = 'done'
+      return true
+    }
+    if (!(await this.identityOk())) throw new DriveGoneError('the library is not at its root')
+    const why = (r.driveReason && STATE_FAILED[r.driveReason]) || 'the write failed'
+    this.rec.error = `Saving watch state failed: ${why}. Resume to try again.`
+    await this.setStatus('paused')
+    return false
+  }
+
   /** An item's source now: a pre-fetched one from the files its readiness reads (#577). */
   private resolveFor(item: JobItem): Promise<ResolvedItem | 'missing' | 'busy'> {
     const p = this.prefetchOf(item)
@@ -1104,24 +1150,32 @@ export class ExportJob {
       await this.dropLeftoverTmp()
       await this.setStatus('running')
 
-      // Downloaded items first; then, while pre-fetched ones (#577) wait, each
-      // one that becomes ready is planned and goes through the same step.
-      const offPrefetch = this.subscribePrefetch()
-      try {
-        for (;;) {
-          if ((await this.copyPlanned()) === 'quit') return
-          if (this.stop) break
-          if (!(await this.prefetchStep())) break
-          if (this.stop) break
+      // A With metadata job resumed in `state` never copies again (S6e #586).
+      if (this.rec.phase !== 'state') {
+        // Downloaded items first; then, while pre-fetched ones (#577) wait, each
+        // one that becomes ready is planned and goes through the same step.
+        const offPrefetch = this.subscribePrefetch()
+        try {
+          for (;;) {
+            if ((await this.copyPlanned()) === 'quit') return
+            if (this.stop) break
+            if (!(await this.prefetchStep())) break
+            if (this.stop) break
+          }
+        } finally {
+          offPrefetch()
         }
-      } finally {
-        offPrefetch()
+        await this.dropLeftoverTmp()
+        await this.checkpoint()
+        if (this.stop === 'pause') return await this.setStatus('paused')
+        if (this.stop === 'cancel') return await this.setStatus('cancelled')
+        if (this.rec.mode === 'metadata') {
+          this.rec.phase = 'state'
+          await this.deps.persist(this.rec)
+        }
       }
-      await this.dropLeftoverTmp()
-      await this.checkpoint()
-      if (this.stop === 'pause') await this.setStatus('paused')
-      else if (this.stop === 'cancel') await this.setStatus('cancelled')
-      else await this.setStatus('completed')
+      if (this.rec.phase === 'state' && !(await this.saveState())) return
+      await this.setStatus('completed')
     } catch (err) {
       this.inFlight = 0
       this.copyAbort = null

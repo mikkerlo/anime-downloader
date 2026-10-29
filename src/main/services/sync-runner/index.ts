@@ -109,6 +109,12 @@ export interface SyncRunner {
   runAll(trigger: SyncTrigger): Promise<SyncRunResult>
   runLibrary(libraryId: string, trigger: SyncTrigger): Promise<SyncRunResult>
   runTitle(animeId: number, trigger: SyncTrigger): Promise<SyncRunResult>
+  /**
+   * S6e's (#586) state step for a With metadata export into `target`, attached
+   * here or not: the library leg as this PC's owner, writing the drive even
+   * when nothing changed, so the job always ends with a state and its base.
+   */
+  runExport(target: { libraryId: string; root: string; name: string }): Promise<SyncLibraryResult>
   /** Resolves once no run of `libraryId` is in flight (S7c's `syncIdle`). */
   idle(libraryId: string): Promise<void>
   status(): Promise<SyncStatus>
@@ -352,7 +358,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   async function libraryLeg(
     lib: AttachedLibraryInfo,
     runId: string,
-    animeId: string | null
+    animeId: string | null,
+    force = false
   ): Promise<Outcome> {
     const skip = librarySkip(lib)
     if (skip) return skip
@@ -384,6 +391,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       return fail('unreadable')
     }
     const ownerId = manifest.owner.shikimoriId
+    // The export's leg is the owner's only: an account switched meanwhile is foreign.
+    if (force && userId() !== ownerId) return { ...out, drive: 'skipped', driveReason: 'foreign' }
     const role = lib.role
     const scopeAll = manifest.titles.map((t) => String(t.animeId))
     const scope = animeId === null ? scopeAll : scopeAll.filter((id) => id === animeId)
@@ -578,7 +587,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       doc.priorityOrder = read.state.doc.priorityOrder
     const prunedStones = !sameValue(doc.tombstones, { ...driveStones })
     let stateGeneration = manifest.stateGeneration
-    if (m.changesB.length > 0 || prunedStones) {
+    if (m.changesB.length > 0 || prunedStones || force) {
       try {
         const actor = buildActor(store, libraryId, deps.appVersion)
         const w = await writeState(lib.root, doc as SharedSyncDoc, actor, manifest.stateGeneration)
@@ -1164,6 +1173,93 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     return result
   }
 
+  async function runExport(target: {
+    libraryId: string
+    root: string
+    name: string
+  }): Promise<SyncLibraryResult> {
+    const { libraryId } = target
+    // After any run of this library in flight; `idle` (Forget) waits for this one.
+    for (let r = inflight.get(libraryId); r; r = inflight.get(libraryId)) await r
+    let settle!: (r: SyncLibraryResult) => void
+    inflight.set(libraryId, new Promise<SyncLibraryResult>((resolve) => (settle = resolve)))
+    const runId = makeId()
+    const lib: AttachedLibraryInfo = {
+      ...target,
+      mode: 'metadata',
+      ownerNickname: null,
+      role: 'owner',
+      access: 'read-write',
+      available: true,
+      lastSeenAt: now(),
+      lastSyncAt: null,
+      pathOverflow: 0,
+      mkvCount: 0,
+      titles: []
+    }
+    let o: Outcome
+    let r: SyncLibraryResult | undefined
+    try {
+      try {
+        o = await locked(() => libraryLeg(lib, runId, null, true))
+      } catch (err) {
+        log.error(`[sync] the export's library leg failed for ${target.name}:`, err)
+        o = {
+          drive: 'error',
+          driveReason: 'io',
+          counts: emptyCounts(),
+          changes: [],
+          conflicts: [],
+          clamps: [],
+          raises: [],
+          resolvedElsewhere: []
+        }
+      }
+      r = {
+        libraryId,
+        drive: o.drive,
+        ...(o.driveReason ? { driveReason: o.driveReason } : {}),
+        shikimori: 'skipped',
+        counts: o.counts,
+        waitingMalIds: [],
+        rewatchesSuperseded: 0
+      }
+      const result: SyncRunResult = { runId, trigger: 'export', libraries: [r] }
+      await locked(() =>
+        syncLog.append({
+          kind: 'run',
+          runId,
+          trigger: 'export',
+          at: now(),
+          libraries: [libraryId],
+          counts: o.counts,
+          changes: o.changes,
+          conflicts: o.conflicts,
+          clamps: o.clamps,
+          skippedMalIds: [],
+          raises: o.raises,
+          resolvedElsewhere: o.resolvedElsewhere,
+          result
+        })
+      ).catch((err) => log.warn('[sync] could not write the sync log', err))
+      deps.broadcast(deps.runFinishedChannel ?? EVENT_CHANNELS.SYNC_RUN_FINISHED, result)
+      return r
+    } finally {
+      const done: SyncLibraryResult = r ?? {
+        libraryId,
+        drive: 'error',
+        driveReason: 'io',
+        shikimori: 'skipped',
+        counts: emptyCounts(),
+        waitingMalIds: [],
+        rewatchesSuperseded: 0
+      }
+      lastResults.set(libraryId, done)
+      settle(done)
+      inflight.delete(libraryId)
+    }
+  }
+
   function shikiSkipReason(lib: AttachedLibraryInfo): SyncLibraryResult['shikimoriReason'] {
     if (lib.role === 'claim') return 'claim'
     if (userId() === null) return 'logged-out'
@@ -1187,6 +1283,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           l.titles.some((t) => t.animeId === animeId),
         String(animeId)
       ),
+    runExport,
     async idle(libraryId) {
       await inflight.get(libraryId)?.catch(() => {})
     },

@@ -7,9 +7,12 @@ import { randomUUID } from 'crypto'
 import { promises as fsp } from 'fs'
 import * as path from 'path'
 import {
+  LOG_IN_FOR_METADATA,
   fitsFreeSpace,
   mergedBytes,
+  metadataLibraryName,
   requiredBytes,
+  takeoverUnconfirmed,
   type ExportMergeChoice
 } from '@shared/shared-library-export'
 import type { MergeStatus } from '../../download-manager'
@@ -21,7 +24,7 @@ import {
   type MountCandidates
 } from '../../lib/shared-library/mount-candidates'
 import type { absoluteOverflow } from '../../lib/shared-library/paths'
-import { createLibrary } from '../../lib/shared-library/write'
+import { createLibrary, writeManifest } from '../../lib/shared-library/write'
 import type { PlayerPresenceService } from '../player-presence'
 import { TOO_LARGE_REASON, nodeFs, type ExportFs } from './copy'
 import { createFsTypeProbe, type FsTypeProbe } from './fs-type-probe'
@@ -29,6 +32,7 @@ import {
   ExportJob,
   jobFiles,
   type ExportMerger,
+  type ExportStateWriter,
   type JobItem,
   type JobRecord,
   type PrefetchJobDeps,
@@ -46,6 +50,7 @@ import {
   buildTree,
   classifyTarget,
   createResolver,
+  DEFAULT_LIBRARY_NAME,
   displayName,
   presence,
   presentKeys,
@@ -102,6 +107,8 @@ export interface SharedLibraryExportDeps {
   merger?: ExportMerger
   /** The download queue (#577); without it, not-downloaded episodes can't be pre-fetched. */
   downloads?: ExportDownloads
+  /** S9's library leg (`SyncRunner.runExport`): a With metadata job's state step (S6e #586). */
+  writeLibraryState?: ExportStateWriter
   /** `isMergeExpected` after `ffmpegReady` (#577), read at every evaluation. */
   mergeExpected?: () => Promise<boolean>
   /** The offline service (#567): offline, nothing is pre-fetched. */
@@ -192,6 +199,30 @@ export function createSharedLibraryExportService(
   const pathExists = async (p: string): Promise<boolean> => (await fileSize(p)) !== null
   const userId = (): number | null =>
     get<{ id?: number } | null>('shikimoriUser')?.id ?? deps.actor().shikimoriUserId
+  // With metadata needs a Shikimori account (S6e #586): `shikimoriUser`, which
+  // an expired session keeps and only logout clears.
+  const account = (): (SharedLibraryOwner & { nickname: string }) | null => {
+    const u = get<{ id?: number; nickname?: string } | null>('shikimoriUser')
+    return typeof u?.id === 'number' ? { shikimoriId: u.id, nickname: u.nickname ?? '' } : null
+  }
+  const claimed = (libraryId: string): boolean =>
+    !!get<Record<string, AttachedLibraryRecord> | undefined>('attachedLibraries')?.[libraryId]
+      ?.claim
+  /** The request's mode, and its name with the With metadata default. */
+  const modeAndName = (req: {
+    mode?: ExportMode
+    name: string
+  }): { mode: ExportMode; name: string } => {
+    const mode = req.mode ?? 'videos'
+    const a = account()
+    const fallback =
+      mode === 'metadata' && a?.nickname ? metadataLibraryName(a.nickname) : DEFAULT_LIBRARY_NAME
+    return { mode, name: req.name.trim() || fallback }
+  }
+  const classify = (dir: string, req: { mode?: ExportMode; name: string }) => {
+    const { mode, name } = modeAndName(req)
+    return classifyTarget(dir, name, userId(), pathExists, { mode, claimed })
+  }
 
   // Pre-fetch (#577): online, with a token, and with a download queue to enqueue into.
   const gate = (): ExportPrefetchGate =>
@@ -458,7 +489,8 @@ export function createSharedLibraryExportService(
       prefetch: job.prefetchView().map((p) => ({ ...p, label: label(p.key) })),
       note: rec.note,
       error: rec.error,
-      createdAt: rec.createdAt
+      createdAt: rec.createdAt,
+      ...(rec.mode ? { mode: rec.mode, phase: rec.phase ?? 'copy' } : {})
     }
   }
 
@@ -510,6 +542,7 @@ export function createSharedLibraryExportService(
       onLibraryWritten: deps.onLibraryWritten,
       merger: deps.merger,
       ...(prefetchDeps ? { prefetch: prefetchDeps } : {}),
+      ...(deps.writeLibraryState ? { writeState: deps.writeLibraryState } : {}),
       retryMs: deps.retryMs ?? 10_000,
       setTimer: deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms)),
       clearTimer: deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))
@@ -534,9 +567,15 @@ export function createSharedLibraryExportService(
     const { titles, resolved } = await buildTree(source, req.animeIds)
     const merge = await mergeSupport()
     const hot = hotRoot()
-    const prefetch = { prefetch: gate(), localFree: hot === null ? null : await freeBytes(hot) }
+    const a = account()
+    const prefetch = {
+      prefetch: gate(),
+      localFree: hot === null ? null : await freeBytes(hot),
+      canExportMetadata: a !== null,
+      nickname: a?.nickname ?? null
+    }
     if (!req.target) return { titles, target: null, preflight: null, merge, ...prefetch }
-    const t = await classifyTarget(req.target, req.name, userId(), pathExists)
+    const t = await classify(req.target, req)
     const there = presence(t.manifest, resolved)
     const present = [...there.keys()]
     let pf: ExportPreflight | null = null
@@ -564,6 +603,7 @@ export function createSharedLibraryExportService(
         dir: req.target,
         root: t.root,
         kind: t.kind,
+        mode: t.mode,
         libraryName: t.libraryName,
         ...(t.ownerNickname !== undefined ? { ownerNickname: t.ownerNickname } : {}),
         blocked: t.blocked,
@@ -607,8 +647,16 @@ export function createSharedLibraryExportService(
     if (other) return { ok: false, reason: `Another export is running (${other.rec.libraryName}).` }
     const ids = [...new Set([...req.selection, ...(req.prefetch ?? [])].map((s) => s.animeId))]
     const { titles, resolved } = await buildTree(source, ids)
-    const t = await classifyTarget(req.target, req.name, userId(), pathExists)
+    const t = await classify(req.target, req)
     if (t.blocked) return { ok: false, reason: t.blocked }
+    const owner = account()
+    if (t.mode === 'metadata' && owner === null) return { ok: false, reason: LOG_IN_FOR_METADATA }
+    if (t.kind === 'upgrade' && !req.confirmTakeover) {
+      return { ok: false, reason: takeoverUnconfirmed(t.libraryName) }
+    }
+    // With metadata into a library that exists, the state step merges even
+    // when there is nothing new to copy.
+    const mergeOnly = t.mode === 'metadata' && t.manifest !== null
 
     const keys = [...new Set(req.selection.map((s) => itemKey(s)))]
     const manifestKeys = new Set((t.manifest?.items ?? []).map(itemKey))
@@ -647,7 +695,7 @@ export function createSharedLibraryExportService(
     const ready = keys.map((k) => resolved.get(k)).filter((r) => r !== undefined)
     const missing = keys.length - ready.length
     const notThere = ready.filter((r) => !present.has(r.key))
-    if (notThere.length === 0 && picks.length === 0) {
+    if (notThere.length === 0 && picks.length === 0 && !mergeOnly) {
       return { ok: false, reason: 'Nothing to copy: the library already has every selected item.' }
     }
     const notThereKeys = new Set(notThere.map((r) => r.key))
@@ -667,7 +715,7 @@ export function createSharedLibraryExportService(
     if (!pf.ok) return { ok: false, reason: pf.blockers.join(' ') }
     const skippedKeys = new Set(pf.skipped)
     const toCopy = notThere.filter((r) => !skippedKeys.has(r.key))
-    if (toCopy.length === 0 && picks.length === 0) {
+    if (toCopy.length === 0 && picks.length === 0 && notThere.length > 0) {
       return {
         ok: false,
         reason:
@@ -710,18 +758,45 @@ export function createSharedLibraryExportService(
     const named = pf.named
     const actor = deps.actor()
     let libraryId: string
-    if (t.kind === 'add') {
-      libraryId = t.manifest!.libraryId
+    if (t.manifest) {
+      const m = t.manifest
+      libraryId = m.libraryId
+      if (t.kind === 'upgrade') {
+        // The takeover (owner decision 9): one manifest write, `owner` from
+        // null to this user and `mode` to `metadata`; S5's writer accepts it
+        // only on a library with no owner. The state follows after the copy.
+        try {
+          await writeManifest(
+            t.root,
+            {
+              libraryId,
+              ...(m.name !== undefined ? { name: m.name } : {}),
+              owner,
+              mode: 'metadata',
+              titles: m.titles,
+              items: m.items,
+              ...(m.naming ? { naming: m.naming } : {})
+            },
+            actor,
+            m.generation,
+            { takeover: true }
+          )
+        } catch (err) {
+          const why = err instanceof Error ? err.message : String(err)
+          return { ok: false, reason: `Couldn’t take over '${t.libraryName}': ${why}.` }
+        }
+      }
     } else {
       libraryId = (deps.newId ?? randomUUID)()
-      // The identity is on the drive before the first file is copied.
+      // The identity is on the drive before the first file is copied: With
+      // metadata, an owned library with no state yet (`stateGeneration: null`).
       await createLibrary(
         t.root,
         {
           libraryId,
           name: t.libraryName,
-          owner: null,
-          mode: 'videos',
+          owner: t.mode === 'metadata' ? owner : null,
+          mode: t.mode,
           titles: [],
           items: []
         },
@@ -793,8 +868,11 @@ export function createSharedLibraryExportService(
           ? null
           : t.kind === 'foreign'
             ? `This drive has ${t.ownerNickname}'s library; this export went into a new library next to it.`
-            : `This drive has ${t.ownerNickname}'s library; this export added to '${t.libraryName}' next to it.`,
-      error: null
+            : t.kind === 'claimed'
+              ? `You use ${t.ownerNickname}'s library on this drive through a claim; this export went into a new library next to it.`
+              : `This drive has ${t.ownerNickname}'s library; this export added to '${t.libraryName}' next to it.`,
+      error: null,
+      ...(t.mode === 'metadata' ? { mode: 'metadata' as const, phase: 'copy' as const } : {})
     }
     await persist(rec)
     const job = makeJob(rec)

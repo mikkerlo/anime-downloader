@@ -2,12 +2,14 @@ import { test, expect, type Locator } from '@playwright/test'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { readLibrary } from '../src/main/lib/shared-library/read'
 import {
   assertNoDownloads,
   assertUserData,
   launchApp,
   makeProfile,
-  type LaunchedApp
+  type LaunchedApp,
+  type Profile
 } from './helpers/profile'
 
 /**
@@ -15,6 +17,7 @@ import {
  * `fixtures/test-pattern.mp4` registered as a downloaded episode. The folder
  * picker is stubbed in main to a temp "drive"; the export runs through the
  * Library's multi-select, and the files and the manifest are checked on disk.
+ * With metadata (#586) runs on a profile logged in by `shikimoriUser` alone.
  */
 
 const ANIME_ID = 5101
@@ -24,7 +27,12 @@ const FIXTURE = path.resolve(__dirname, 'fixtures', 'test-pattern.mp4')
 const sha256 = (file: string): string =>
   createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 
-test('exports a downloaded episode to a new Shared Library', async () => {
+/** A profile with the fixture as episode 1 of `TITLE`, and a temp "drive". */
+function seedProfile(config: Record<string, unknown> = {}): {
+  profile: Profile
+  drive: string
+  source: string
+} {
   const anime = {
     id: ANIME_ID,
     title: TITLE,
@@ -49,6 +57,7 @@ test('exports a downloaded episode to a new Shared Library', async () => {
       playerVolume: 0,
       playerMuted: true,
       workOffline: true,
+      prefetchNextEpisode: 'off',
       downloadDir: downloads,
       library: { [ANIME_ID]: anime },
       downloadedAnime: { [ANIME_ID]: anime },
@@ -59,14 +68,26 @@ test('exports a downloaded episode to a new Shared Library', async () => {
           quality: 720,
           translationId: 91
         }
-      }
+      },
+      ...config
     }),
     { mode: 0o600 }
   )
+  return { profile, drive, source }
+}
+
+// Nothing here needs the network: both API clients point at a closed local port.
+const NO_NETWORK = {
+  ANIME_DL_SMOTRET_API_BASE: 'http://127.0.0.1:9/api',
+  ANIME_DL_SHIKIMORI_ORIGIN: 'http://127.0.0.1:9'
+}
+
+test('exports a downloaded episode to a new Shared Library', async () => {
+  const { profile, drive, source } = seedProfile()
 
   let launched: LaunchedApp | undefined
   try {
-    launched = await launchApp(profile)
+    launched = await launchApp(profile, { env: NO_NETWORK })
     await assertUserData(launched.app, profile)
     await launched.app.evaluate(({ dialog }, dir) => {
       dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as never
@@ -121,6 +142,76 @@ test('exports a downloaded episode to a new Shared Library', async () => {
     expect(fs.existsSync(path.join(root, '.anime-dl', 'meta', `${ANIME_ID}.json`))).toBe(true)
     expect(fs.readdirSync(path.join(root, TITLE))).toEqual([`${TITLE} - 01 [Studio].mp4`])
     expect(fs.existsSync(path.join(profile.userData, 'export-jobs'))).toBe(true)
+  } finally {
+    try {
+      if (launched) assertNoDownloads(launched)
+    } finally {
+      await launched?.app.close()
+      profile.cleanup()
+    }
+  }
+})
+
+test('exports With metadata on a logged-in profile: state.json parses under the reader', async () => {
+  const USER = { id: 4242, nickname: 'e2e-user', avatar: '' }
+  const at = Date.now() - 3_600_000
+  const { profile, drive } = seedProfile({
+    shikimoriUser: USER,
+    watchProgress: {
+      [`${ANIME_ID}:1`]: { position: 600, duration: 1440, updatedAt: at, watched: false }
+    }
+  })
+
+  let launched: LaunchedApp | undefined
+  try {
+    launched = await launchApp(profile, { env: NO_NETWORK })
+    await assertUserData(launched.app, profile)
+    await launched.app.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as never
+    }, drive)
+    const page = await launched.app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+
+    const nav = (name: string): Locator =>
+      page.locator('.sidebar').getByRole('button', { name, exact: true })
+    await nav('Library').click()
+    await page.getByTestId('library-select-toggle').click()
+    await page.locator('.acard', { hasText: TITLE }).click()
+    await page.getByTestId('library-export-selected').click()
+
+    const dialog = page.getByTestId('export-dialog')
+    await expect(dialog.getByTestId('export-mode-metadata')).toBeEnabled()
+    await dialog.getByTestId('export-mode-metadata').check()
+    await expect(dialog.getByTestId('export-name')).toHaveValue('Anime Library (e2e-user)')
+    await dialog.getByTestId('export-pick').click()
+    await expect(dialog.getByTestId('export-target-line')).toHaveText(
+      "New library 'Anime Library (e2e-user)'"
+    )
+    await expect(dialog.getByTestId('export-start')).toBeEnabled()
+    await dialog.getByTestId('export-start').click()
+    await expect(dialog).toHaveCount(0)
+
+    await nav('Downloads').click()
+    await expect(page.getByTestId('export-job-completed')).toContainText(
+      'Exported to Anime Library (e2e-user) — 1 / 1 files'
+    )
+
+    const root = path.join(drive, 'Anime Library (e2e-user)')
+    expect(fs.existsSync(path.join(root, '.anime-dl', 'state.json'))).toBe(true)
+    const read = await readLibrary(root)
+    expect(read).toMatchObject({
+      status: 'ok',
+      mode: 'metadata',
+      stateInitialized: true,
+      torn: false,
+      manifest: { owner: { shikimoriId: USER.id, nickname: USER.nickname } }
+    })
+    if (read.status !== 'ok') return
+    expect(read.manifest.stateGeneration).toBe(read.state?.generation)
+    expect(Object.keys(read.state?.doc.titles ?? {})).toEqual([String(ANIME_ID)])
+    expect(read.state?.doc.titles?.[String(ANIME_ID)].watch?.['1'].position.value.position).toBe(
+      600
+    )
   } finally {
     try {
       if (launched) assertNoDownloads(launched)

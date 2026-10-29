@@ -1,27 +1,69 @@
 <script setup lang="ts">
 // The title → translation → episode tree of the export dialog (#574), with
 // tri-state checkboxes and per-node sizes. Missing and busy episodes are shown
-// greyed out and can't be selected.
-import { ref } from 'vue';
+// greyed out and can't be selected. Episodes that aren't downloaded at all can
+// be, while pre-fetch is on (#577): the export downloads them first, in the
+// translation picked for each.
+import { computed, ref } from 'vue';
 import { formatBytes } from '../../utils';
 import {
+  nodeKeys,
+  pickedOption,
+  prefetchKey,
   readyKeys,
   sizeOf,
   stateOf,
-  titleKeys,
   titleSize,
   toggle,
   type TriState
 } from './export-selection';
 
-const props = defineProps<{
-  titles: ExportTreeTitle[];
-  selected: Set<string>;
-  /** Keys the target already has: shown as "On the drive", not counted. */
-  present: string[];
+const props = withDefaults(
+  defineProps<{
+    titles: ExportTreeTitle[];
+    selected: Set<string>;
+    /** Keys the target already has: shown as "On the drive", not counted. */
+    present: string[];
+    /** Whether not-downloaded episodes can be pre-fetched (#577). */
+    prefetch?: ExportPrefetchGate;
+    /** The translation picked per not-downloaded episode, by its `pf:` key. */
+    choices?: Record<string, number>;
+  }>(),
+  { prefetch: 'unavailable', choices: () => ({}) }
+);
+
+const emit = defineEmits<{
+  'update:selected': [selected: Set<string>];
+  'update:choices': [choices: Record<string, number>];
 }>();
 
-const emit = defineEmits<{ 'update:selected': [selected: Set<string>] }>();
+const prefetchOn = computed(() => props.prefetch === 'ok');
+
+const GATE_NOTE: Record<ExportPrefetchGate, string | null> = {
+  ok: null,
+  offline: 'Needs internet to download',
+  'no-token': 'API token is required for downloads',
+  unavailable: null
+};
+
+function canPrefetch(e: ExportNotDownloaded): boolean {
+  return prefetchOn.value && e.options.length > 0;
+}
+
+function prefetchNote(t: ExportTreeTitle, e: ExportNotDownloaded): string {
+  const gate = GATE_NOTE[props.prefetch];
+  if (gate) return gate;
+  if (e.unavailable) return e.unavailable;
+  if (!prefetchOn.value) return 'Not downloaded';
+  const o = pickedOption(e, prefetchKey(t.animeId, e.episodeInt), props.choices);
+  const size = o?.sizeBytes == null ? 'size unknown' : `~${formatBytes(o.sizeBytes)}`;
+  return `Will be downloaded first (${size})`;
+}
+
+function choose(key: string, ev: Event): void {
+  const id = Number((ev.target as HTMLSelectElement).value);
+  emit('update:choices', { ...props.choices, [key]: id });
+}
 
 const collapsed = ref(new Set<string>());
 
@@ -67,10 +109,10 @@ function episodeNote(e: ExportTreeEpisode): string {
         <input
           type="checkbox"
           :data-testid="`tree-title-${t.animeId}`"
-          :checked="checkState(titleKeys(t)) === 'checked'"
-          :indeterminate="checkState(titleKeys(t)) === 'partial'"
-          :disabled="titleKeys(t).length === 0"
-          @change="click(titleKeys(t))"
+          :checked="checkState(nodeKeys(t, prefetchOn)) === 'checked'"
+          :indeterminate="checkState(nodeKeys(t, prefetchOn)) === 'partial'"
+          :disabled="nodeKeys(t, prefetchOn).length === 0"
+          @change="click(nodeKeys(t, prefetchOn))"
         />
         <span class="name">{{ t.name }}</span>
         <span class="size">{{ formatBytes(titleSize(t)) }}</span>
@@ -119,11 +161,31 @@ function episodeNote(e: ExportTreeEpisode): string {
         <div
           v-for="e in t.notDownloaded"
           :key="`nd-${e.episodeInt}`"
-          class="row episode unavailable"
+          class="row episode"
+          :class="{ unavailable: !canPrefetch(e) }"
+          :data-testid="`tree-missing-${t.animeId}-${e.episodeInt}`"
         >
-          <input type="checkbox" disabled />
+          <input
+            type="checkbox"
+            :data-testid="`tree-prefetch-${t.animeId}-${e.episodeInt}`"
+            :checked="selected.has(prefetchKey(t.animeId, e.episodeInt))"
+            :disabled="!canPrefetch(e)"
+            @change="click([prefetchKey(t.animeId, e.episodeInt)])"
+          />
+          <span v-if="canPrefetch(e)" class="cloud" aria-hidden="true">☁</span>
           <span class="name">{{ e.label }}</span>
-          <span class="size">Not downloaded</span>
+          <select
+            v-if="canPrefetch(e) && e.options.length > 1"
+            class="tr-pick"
+            :data-testid="`tree-prefetch-tr-${t.animeId}-${e.episodeInt}`"
+            :value="pickedOption(e, prefetchKey(t.animeId, e.episodeInt), choices)?.translationId"
+            @change="choose(prefetchKey(t.animeId, e.episodeInt), $event)"
+          >
+            <option v-for="o in e.options" :key="o.translationId" :value="o.translationId">
+              {{ o.author || 'Unknown' }} · {{ o.translationType }} · {{ o.height }}p
+            </option>
+          </select>
+          <span class="size">{{ prefetchNote(t, e) }}</span>
         </div>
       </div>
     </div>
@@ -184,6 +246,21 @@ function episodeNote(e: ExportTreeEpisode): string {
 
 .unavailable {
   opacity: 0.45;
+}
+
+.cloud {
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+.tr-pick {
+  max-width: 180px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text);
+  font-size: 0.75rem;
+  padding: 1px 4px;
 }
 
 .caret {

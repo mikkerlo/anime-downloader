@@ -42,6 +42,19 @@ export interface EpisodeCompletionFfmpegInfo {
 }
 
 /**
+ * Whether a completed group gets merged: the one predicate both tails below
+ * use, and the one the export's pre-fetch (#577) waits on, so the two can't
+ * disagree about whether a merge is coming.
+ */
+export function isMergeExpected(s: {
+  autoMerge: boolean
+  ffmpegInfo: EpisodeCompletionFfmpegInfo
+  ffmpegPath: string
+}): boolean {
+  return Boolean(s.autoMerge && s.ffmpegInfo.available && s.ffmpegPath)
+}
+
+/**
  * The store keys these tails touch. `downloadedEpisodes` is here so the object
  * also satisfies `DownloadedEpisodesStore`, which `persistDownloadedEpisode`
  * takes; the other four are settings reads.
@@ -164,7 +177,7 @@ export function createEpisodeCompletionHandlers(
     const ffmpegInfo = await ffmpegReady
     const autoMerge = store.get('autoMerge')
     const ffmpegPath = getFfmpegPath()
-    if (autoMerge && ffmpegInfo.available && ffmpegPath) {
+    if (isMergeExpected({ autoMerge, ffmpegInfo, ffmpegPath })) {
       const codec = store.get('videoCodec') || 'copy'
       // The merge-complete hook handles cold-move / notify / skip analysis.
       await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
@@ -267,7 +280,7 @@ export function createEpisodeCompletionHandlers(
     const ffmpegInfo = await ffmpegReady
     const autoMerge = store.get('autoMerge')
     const ffmpegPath = getFfmpegPath()
-    if (autoMerge && ffmpegInfo.available && ffmpegPath) {
+    if (isMergeExpected({ autoMerge, ffmpegInfo, ffmpegPath })) {
       const codec = store.get('videoCodec') || 'copy'
       await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
     } else {

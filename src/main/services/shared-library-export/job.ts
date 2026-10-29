@@ -11,9 +11,11 @@
 // file already copying finishes.
 
 import * as path from 'path'
+import type { MergeStatus } from '../../download-manager'
 import { itemKey } from '../../lib/shared-library/format'
 import { renderIndexHtml } from '../../lib/shared-library/index-html'
 import type { MountCandidates } from '../../lib/shared-library/mount-candidates'
+import { nameItems } from '../../lib/shared-library/naming'
 import { resolveWriteTarget } from '../../lib/shared-library/paths'
 import { LIBRARY_DIR, MANIFEST, readLibrary } from '../../lib/shared-library/read'
 import {
@@ -26,6 +28,7 @@ import {
 import { subtitleMeta } from '../../lib/subtitle-meta'
 import type { PlayerPresenceService } from '../player-presence'
 import {
+  FAT32_MAX_FILE_SIZE,
   MERGE_TMP_SUFFIX,
   TMP_SUFFIX,
   TOO_LARGE_REASON,
@@ -41,7 +44,16 @@ import {
 } from './copy'
 import { locateLibrary } from './locate'
 import type { ResolvedItem } from './plan'
+import {
+  evaluatePrefetchItem,
+  type PrefetchDecision,
+  type PrefetchMemory,
+  type PrefetchRow
+} from './prefetch-readiness'
 import { writeTitleSnapshot } from './snapshot'
+
+/** No room left on the target for a pre-fetched file, measured at its copy (#577). */
+export const NO_SPACE_ON_DRIVE = 'Not enough space on the drive'
 
 /** One planned item: its names on the drive are fixed at start, so a resume never renames. */
 export interface JobItem {
@@ -60,6 +72,46 @@ export interface JobItem {
   subtitleSize: number
   /** An unmerged pair merged into the `.mkv` at `path` (#576); `videoSize` is the pair's sum. */
   merge?: boolean
+  /** Planned from a pre-fetched item (#577) when it became ready; `pair` when it came unmerged. */
+  prefetch?: { pair: boolean }
+}
+
+/** A not-downloaded episode the job enqueued (#577); planned into `items` once it is ready. */
+export interface PrefetchRecord {
+  key: string
+  animeId: number
+  episodeInt: string
+  translationId: number
+  translationType: string
+  author: string
+  /** The download folder's name (`romaji || ru || title`), as enqueued. */
+  animeName: string
+  label: string
+  /** The estimate at start, or null when unknown. */
+  sizeEstimate: number | null
+  /** `planned`: in `items`, copied by the same step as a downloaded item. */
+  state: 'waiting' | 'planned'
+  /** When its downloads were first seen finished: the cancelled-merge grace counts from it. */
+  doneAt?: number
+  warning?: string
+}
+
+/** The download queue and merge state a pre-fetch waits on (#577). */
+export interface PrefetchJobDeps {
+  row: (id: string) => PrefetchRow | null
+  mergeStatus: (translationId: number) => MergeStatus | null
+  /** `isMergeExpected`, after `ffmpegReady`: re-read at every evaluation. */
+  mergeExpected: () => Promise<boolean>
+  /** `isMergeCycleActive() || hasHeldMerge()`; the job adds the player. */
+  mergeInFlight: () => boolean
+  /** Whether the item's `.mkv` and final `.mp4` are in the hot or cold root. */
+  files: (p: PrefetchRecord) => Promise<{ mkv: boolean; video: boolean }>
+  isOffline: () => boolean
+  now: () => number
+  /** Listener lists (#574): each returns its unsubscribe. */
+  onVideoDownloaded: (cb: () => void) => () => void
+  onMergeComplete: (cb: () => void) => () => void
+  tickMs: number
 }
 
 /** One export merge, as the job asks for it (#576); `DownloadManager.mergeForExport` runs it. */
@@ -112,6 +164,8 @@ export interface JobRecord {
   /** The file being copied, so a resume deletes its `.anime-dl-tmp`. */
   current: { key: string; rel: string } | null
   missing: number
+  /** Not-downloaded episodes this job enqueued (#577). */
+  prefetch?: PrefetchRecord[]
   /** Titles whose `meta` and poster this job already wrote. */
   snapshotted: number[]
   note: string | null
@@ -127,7 +181,7 @@ export interface JobDeps {
   presence: Pick<PlayerPresenceService, 'isOpen' | 'onRelease'>
   actor: () => SharedLibraryActor
   /** Re-resolves an item's source just before its copy (an auto-move may have moved it). */
-  resolve: (item: JobItem) => Promise<ResolvedItem | 'missing' | 'busy'>
+  resolve: (item: ExportSelectionItem) => Promise<ResolvedItem | 'missing' | 'busy'>
   snapshot: (animeId: number) => { meta: SharedLibraryMeta; posterFile: string | null }
   candidates: MountCandidates
   persist: (rec: JobRecord) => Promise<void>
@@ -141,6 +195,8 @@ export interface JobDeps {
   clearTimer: (handle: unknown) => void
   /** Runs `merge` items (#576); without it they fail. */
   merger?: ExportMerger
+  /** Pre-fetch (#577); without it, waiting items stay waiting. */
+  prefetch?: PrefetchJobDeps
 }
 
 class DriveGoneError extends Error {}
@@ -172,6 +228,10 @@ export class ExportJob {
   private signature: string | null = null
   private sinceCheckpoint = 0
   private mergeNow: ExportMergeState | null = null
+  // Pre-fetch (#577): what each waiting item carries between evaluations, and
+  // its last decision (for the card).
+  private prefetchMemo = new Map<string, PrefetchMemory>()
+  private prefetchLast = new Map<string, PrefetchDecision>()
 
   constructor(
     readonly rec: JobRecord,
@@ -608,6 +668,231 @@ export class ExportJob {
     }
   }
 
+  /** Pre-fetched items still waiting for their downloads or a merge (#577). */
+  private waitingPrefetch(): PrefetchRecord[] {
+    return (this.rec.prefetch ?? []).filter(
+      (p) => p.state === 'waiting' && !this.rec.failed[p.key] && !this.rec.skipped?.[p.key]
+    )
+  }
+
+  private prefetchOf(item: JobItem): PrefetchRecord | undefined {
+    return item.prefetch ? this.rec.prefetch?.find((p) => p.key === item.key) : undefined
+  }
+
+  /**
+   * `evaluatePrefetchItem` on the state read now: the awaited reads first (the
+   * merge predicate, after `ffmpegReady`, and the files), then the queue and
+   * merge state synchronously, so a status that changed meanwhile wins.
+   */
+  private async evaluate(p: PrefetchRecord): Promise<PrefetchDecision> {
+    const pf = this.deps.prefetch!
+    const mergeExpected = await pf.mergeExpected()
+    const files = await pf.files(p)
+    const memo =
+      this.prefetchMemo.get(p.key) ?? (p.doneAt !== undefined ? { doneAt: p.doneAt } : {})
+    const { decision, memory } = evaluatePrefetchItem(
+      {
+        video: pf.row(`video-${p.translationId}`),
+        subtitle: pf.row(`sub-${p.translationId}`),
+        mergeStatus: pf.mergeStatus(p.translationId),
+        mergeExpected,
+        mergeInFlight: pf.mergeInFlight() || this.deps.presence.isOpen(),
+        files,
+        offline: pf.isOffline(),
+        now: pf.now()
+      },
+      memo
+    )
+    this.prefetchMemo.set(p.key, memory)
+    if (memory.doneAt !== undefined) p.doneAt = memory.doneAt
+    this.prefetchLast.set(p.key, decision)
+    return decision
+  }
+
+  /**
+   * A ready item, planned exactly like a downloaded one: resolved on disk,
+   * named by S5's rule against the library and this job's other items, and
+   * appended to `items` for the same per-item step (#577).
+   */
+  private async planPrefetch(
+    p: PrefetchRecord,
+    d: Extract<PrefetchDecision, { kind: 'ready' }>
+  ): Promise<boolean> {
+    const r = await this.deps.resolve(p)
+    // A merge started since the decision: the next evaluation waits for it.
+    if (r === 'busy') return false
+    if (r === 'missing') {
+      this.rec.failed[p.key] = 'the source file is gone'
+      return false
+    }
+    if ((d.as === 'mkv') !== (r.ext === '.mkv')) return false
+    const merge = this.rec.unmerged === 'merge' && r.subtitlePath !== null
+    const reencode = merge && (this.rec.codec ?? 'copy') !== 'copy'
+    const size = merge ? r.videoSize + r.subtitleSize : Math.max(r.videoSize, r.subtitleSize)
+    if (this.rec.fsType === 'fat32' && size > FAT32_MAX_FILE_SIZE && !reencode) {
+      this.rec.skipped = {
+        ...this.rec.skipped,
+        [p.key]: { animeId: p.animeId, label: p.label, reason: TOO_LARGE_REASON }
+      }
+      return false
+    }
+    const taken = [
+      ...(this.base?.items ?? []).filter((i) => itemKey(i) !== p.key),
+      ...this.rec.items.filter((i) => i.key !== p.key)
+    ]
+    const [named] = nameItems(
+      [
+        {
+          animeId: p.animeId,
+          episodeInt: p.episodeInt,
+          translationId: p.translationId,
+          title: r.title,
+          author: r.author,
+          ext: merge ? '.mkv' : r.ext,
+          subtitle: !merge && r.subtitlePath !== null
+        }
+      ],
+      taken
+    )
+    this.rec.items.push({
+      key: p.key,
+      animeId: p.animeId,
+      episodeInt: p.episodeInt,
+      translationId: p.translationId,
+      translationType: r.translationType,
+      author: r.author,
+      quality: r.quality,
+      label: p.label,
+      path: named.path,
+      ...(named.subtitlePath !== undefined ? { subtitlePath: named.subtitlePath } : {}),
+      renamed: named.renamed,
+      ...(merge
+        ? { videoSize: r.videoSize + r.subtitleSize, subtitleSize: 0, merge: true }
+        : { videoSize: r.videoSize, subtitleSize: r.subtitleSize }),
+      prefetch: { pair: d.as === 'pair' }
+    })
+    p.state = 'planned'
+    if (d.warning) p.warning = d.warning
+    return true
+  }
+
+  /** Puts a planned item back to waiting, deleting what it copied (#577): a merge started under it. */
+  private async unplan(item: JobItem): Promise<void> {
+    for (const rel of [item.path, item.subtitlePath]) {
+      if (rel === undefined) continue
+      delete this.rec.doneFiles[rel]
+      const dest = await resolveWriteTarget(this.rec.root, rel).catch(() => 'escapes' as const)
+      if (dest !== 'escapes') await unlinkQuiet(this.deps.xfs, dest).catch(() => {})
+    }
+    if (this.rec.sources?.[item.key]) {
+      const rest = { ...this.rec.sources }
+      delete rest[item.key]
+      this.rec.sources = rest
+    }
+    this.rec.items = this.rec.items.filter((i) => i !== item)
+    const p = this.prefetchOf(item)
+    if (p) p.state = 'waiting'
+    this.prefetchMemo.set(item.key, { doneAt: p?.doneAt })
+    this.rec.current = null
+    await this.deps.persist(this.rec)
+  }
+
+  /**
+   * Evaluates every waiting pre-fetch item and plans the ready ones (#577).
+   * Waits one tick when nothing became ready; false once nothing waits.
+   */
+  private async prefetchStep(): Promise<boolean> {
+    const waiting = this.waitingPrefetch()
+    if (waiting.length === 0 || !this.deps.prefetch) return false
+    let planned = false
+    // Saved only when something changed: an item waiting for hours is evaluated every tick.
+    let dirty = false
+    for (const p of waiting) {
+      if (this.stop) return true
+      const doneAt = p.doneAt
+      const d = await this.evaluate(p)
+      if (d.kind !== 'wait' || p.doneAt !== doneAt) dirty = true
+      if (d.kind === 'failed') this.rec.failed[p.key] = d.reason
+      else if (d.kind === 'ready' && (await this.planPrefetch(p, d))) planned = true
+    }
+    if (dirty) await this.deps.persist(this.rec)
+    this.deps.update(this.rec, this.bytesDone())
+    if (planned) return true
+    if (this.waitingPrefetch().length === 0) return false
+    await this.prefetchTick()
+    return true
+  }
+
+  /** One tick: `tickMs`, cut short by a download or merge event, the player's release, or a stop. */
+  private prefetchTick(): Promise<void> {
+    if (this.stop) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const timer = this.deps.setTimer(() => {
+        this.wake = null
+        resolve()
+      }, this.deps.prefetch!.tickMs)
+      this.wake = () => {
+        this.wake = null
+        this.deps.clearTimer(timer)
+        resolve()
+      }
+    })
+  }
+
+  /** The events only make the next evaluation sooner: they wake the tick (#577). */
+  private subscribePrefetch(): () => void {
+    const pf = this.deps.prefetch
+    if (!pf || !this.rec.prefetch?.some((p) => !this.rec.done.includes(p.key))) return () => {}
+    const wake = (): void => this.wake?.()
+    const offs = [pf.onVideoDownloaded(wake), pf.onMergeComplete(wake)]
+    return () => offs.forEach((off) => off())
+  }
+
+  /**
+   * At boot (#577): the same evaluation for every waiting item, so the card
+   * shows where each one is and a download that failed or left the queue fails
+   * its item. Plans nothing, and stops if a run started meanwhile.
+   */
+  async refreshPrefetch(): Promise<void> {
+    if (!this.deps.prefetch || this.current) return
+    const decisions: [PrefetchRecord, PrefetchDecision][] = []
+    for (const p of this.waitingPrefetch()) {
+      const d = await this.evaluate(p)
+      if (this.current) return
+      decisions.push([p, d])
+    }
+    for (const [p, d] of decisions) if (d.kind === 'failed') this.rec.failed[p.key] = d.reason
+    await this.deps.persist(this.rec)
+    this.deps.update(this.rec, this.bytesDone())
+  }
+
+  /** The pre-fetched items as the card shows them (#577). */
+  prefetchView(): ExportPrefetchView[] {
+    const done = new Set(this.rec.done)
+    return (this.rec.prefetch ?? []).map((p) => {
+      const base = { key: p.key, label: p.label, percent: 0, warning: p.warning ?? null }
+      if (done.has(p.key)) return { ...base, state: 'done' as const }
+      if (this.rec.failed[p.key] || this.rec.skipped?.[p.key]) {
+        return { ...base, state: 'failed' as const }
+      }
+      if (p.state === 'planned') return { ...base, state: 'copying' as const }
+      const d = this.prefetchLast.get(p.key)
+      if (d?.kind !== 'wait' || d.on === 'download') {
+        const row = this.deps.prefetch?.row(`video-${p.translationId}`)
+        if (row?.status === 'downloading') {
+          const percent =
+            row.totalBytes > 0 ? Math.floor((row.bytesReceived / row.totalBytes) * 100) : 0
+          return { ...base, state: 'downloading' as const, percent }
+        }
+        return { ...base, state: 'waiting-download' as const }
+      }
+      return {
+        ...base,
+        state: d.on === 'connection' ? ('waiting-connection' as const) : ('waiting-merge' as const)
+      }
+    })
+  }
+
   /** Deletes the `.anime-dl-tmp` (or a merge's `.anime-dl-tmp.mkv`) a crash or a kill left behind. */
   private async dropLeftoverTmp(): Promise<void> {
     const cur = this.rec.current
@@ -623,6 +908,132 @@ export class ExportJob {
       }
     }
     this.rec.current = null
+  }
+
+  /** Copies (or merges) every planned item not yet done; `quit` when the app quit under a merge. */
+  private async copyPlanned(): Promise<'quit' | 'stopped' | 'done'> {
+    const done = new Set(this.rec.done)
+    for (const item of [...this.rec.items]) {
+      // Only a pre-fetched item can leave `items` (`unplan`).
+      if (item.prefetch && !this.rec.items.includes(item)) continue
+      if (done.has(item.key) || this.rec.failed[item.key] || this.rec.skipped?.[item.key]) continue
+      await this.holdWhilePlayerOpen()
+      if (this.stop) return 'stopped'
+      if (this.rec.status !== 'running') await this.setStatus('running')
+      if (!(await this.identityOk())) throw new DriveGoneError('the library is not at its root')
+      const pre = this.prefetchOf(item)
+      // A pre-fetched pair is checked again just before its copy: a merge may
+      // have started on it since it was planned (#577).
+      if (pre && item.prefetch?.pair && this.deps.prefetch) {
+        const d = await this.evaluate(pre)
+        if (this.stop) return 'stopped'
+        if (d.kind !== 'ready' || d.as !== 'pair') {
+          await this.unplan(item)
+          continue
+        }
+      }
+      let source = await this.deps.resolve(item)
+      if (source === 'busy' && pre) {
+        await this.unplan(item)
+        continue
+      }
+      if (source === 'missing' || source === 'busy') {
+        this.rec.failed[item.key] =
+          source === 'busy' ? 'busy merging or downloading' : 'the source file is gone'
+        continue
+      }
+      if (pre && !(await this.roomFor(item, source))) {
+        this.rec.failed[item.key] = NO_SPACE_ON_DRIVE
+        continue
+      }
+      await this.snapshotTitle(item.animeId)
+      try {
+        try {
+          if (item.merge) await this.mergeItem(item, source)
+          else await this.copyItem(item, source)
+        } catch (err) {
+          // A pre-fetched source an auto-move took to cold mid-copy: found
+          // again and copied once more (#577).
+          if (!pre || errnoOf(err) !== 'ENOENT' || (await this.sourceThere(source))) throw err
+          const again = await this.deps.resolve(item)
+          if (typeof again !== 'object') throw err
+          source = again
+          if (item.merge) await this.mergeItem(item, source)
+          else await this.copyItem(item, source)
+        }
+      } catch (err) {
+        // Quit (#576): `destroy()` killed the merge and deleted its output.
+        // Nothing is recorded; the next boot shows the job paused.
+        if ((err as Error).name === 'MergeQuitError') return 'quit'
+        if ((err as Error).name === 'AbortError') {
+          this.inFlight = 0
+          this.copyAbort = null
+          return 'stopped'
+        }
+        if (err instanceof EscapeError) {
+          console.warn(`[export] skipped ${item.key}: ${err.message}`)
+          this.rec.failed[item.key] = err.message
+          continue
+        }
+        if (err instanceof TooLargeError) {
+          console.warn(`[export] skipped ${item.key}, too large for the drive: ${err.message}`)
+          this.rec.skipped = {
+            ...this.rec.skipped,
+            [item.key]: { animeId: item.animeId, label: item.label, reason: TOO_LARGE_REASON }
+          }
+          this.rec.current = null
+          continue
+        }
+        if (!(await this.identityOk())) throw new DriveGoneError((err as Error).message)
+        this.rec.failed[item.key] =
+          err instanceof VerifyError ? `verify failed: ${err.message}` : (err as Error).message
+        this.rec.current = null
+        continue
+      }
+      // After a pre-fetched pair's copy and before the manifest has it: a merge
+      // that started meanwhile unlinks the pair, so its files leave the target
+      // and the item waits for the `.mkv` (#577).
+      if (pre && item.prefetch?.pair && this.deps.prefetch) {
+        const status = this.deps.prefetch.mergeStatus(item.translationId)
+        if (status === 'merging' || status === 'completed' || !(await this.sourceThere(source))) {
+          await this.unplan(item)
+          continue
+        }
+      }
+      this.rec.done.push(item.key)
+      done.add(item.key)
+      this.sinceCheckpoint++
+      if (this.sinceCheckpoint >= this.deps.checkpointEvery) await this.checkpoint()
+    }
+    return 'done'
+  }
+
+  /** Whether the source's files are all still on this PC. */
+  private async sourceThere(source: ResolvedItem): Promise<boolean> {
+    for (const p of [source.videoPath, source.subtitlePath]) {
+      if (p === null) continue
+      try {
+        await this.deps.xfs.stat(p)
+      } catch {
+        return false
+      }
+    }
+    return true
+  }
+
+  /** A pre-fetched item's real size against the target's free space, just before its copy (#577). */
+  private async roomFor(item: JobItem, source: ResolvedItem): Promise<boolean> {
+    let need = 0
+    if (!this.rec.doneFiles[item.path]) {
+      need += item.merge ? source.videoSize + source.subtitleSize : source.videoSize
+    }
+    if (item.subtitlePath && !this.rec.doneFiles[item.subtitlePath]) need += source.subtitleSize
+    try {
+      const s = await this.deps.xfs.statfs(this.rec.root)
+      return need <= s.bavail * s.bsize
+    } catch {
+      return true
+    }
   }
 
   private async loop(): Promise<void> {
@@ -653,57 +1064,18 @@ export class ExportJob {
       await this.dropLeftoverTmp()
       await this.setStatus('running')
 
-      const done = new Set(this.rec.done)
-      for (const item of this.rec.items) {
-        if (done.has(item.key) || this.rec.failed[item.key] || this.rec.skipped?.[item.key])
-          continue
-        await this.holdWhilePlayerOpen()
-        if (this.stop) break
-        if (this.rec.status !== 'running') await this.setStatus('running')
-        if (!(await this.identityOk())) throw new DriveGoneError('the library is not at its root')
-        const source = await this.deps.resolve(item)
-        if (source === 'missing' || source === 'busy') {
-          this.rec.failed[item.key] =
-            source === 'busy' ? 'busy merging or downloading' : 'the source file is gone'
-          continue
+      // Downloaded items first; then, while pre-fetched ones (#577) wait, each
+      // one that becomes ready is planned and goes through the same step.
+      const offPrefetch = this.subscribePrefetch()
+      try {
+        for (;;) {
+          if ((await this.copyPlanned()) === 'quit') return
+          if (this.stop) break
+          if (!(await this.prefetchStep())) break
+          if (this.stop) break
         }
-        await this.snapshotTitle(item.animeId)
-        try {
-          if (item.merge) await this.mergeItem(item, source)
-          else await this.copyItem(item, source)
-        } catch (err) {
-          // Quit (#576): `destroy()` killed the merge and deleted its output.
-          // Nothing is recorded; the next boot shows the job paused.
-          if ((err as Error).name === 'MergeQuitError') return
-          if ((err as Error).name === 'AbortError') {
-            this.inFlight = 0
-            this.copyAbort = null
-            break
-          }
-          if (err instanceof EscapeError) {
-            console.warn(`[export] skipped ${item.key}: ${err.message}`)
-            this.rec.failed[item.key] = err.message
-            continue
-          }
-          if (err instanceof TooLargeError) {
-            console.warn(`[export] skipped ${item.key}, too large for the drive: ${err.message}`)
-            this.rec.skipped = {
-              ...this.rec.skipped,
-              [item.key]: { animeId: item.animeId, label: item.label, reason: TOO_LARGE_REASON }
-            }
-            this.rec.current = null
-            continue
-          }
-          if (!(await this.identityOk())) throw new DriveGoneError((err as Error).message)
-          this.rec.failed[item.key] =
-            err instanceof VerifyError ? `verify failed: ${err.message}` : (err as Error).message
-          this.rec.current = null
-          continue
-        }
-        this.rec.done.push(item.key)
-        done.add(item.key)
-        this.sinceCheckpoint++
-        if (this.sinceCheckpoint >= this.deps.checkpointEvery) await this.checkpoint()
+      } finally {
+        offPrefetch()
       }
       await this.dropLeftoverTmp()
       await this.checkpoint()

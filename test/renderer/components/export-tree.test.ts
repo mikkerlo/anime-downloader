@@ -50,7 +50,7 @@ const TITLES: ExportTreeTitle[] = [
         episodes: [ep(1, 12, '1', 1000)]
       }
     ],
-    notDownloaded: [{ episodeInt: '4', label: 'Episode 4' }]
+    notDownloaded: [{ episodeInt: '4', label: 'Episode 4', options: [], unavailable: null }]
   },
   {
     animeId: 2,

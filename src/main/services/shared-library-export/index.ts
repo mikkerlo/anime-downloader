@@ -12,6 +12,7 @@ import {
   requiredBytes,
   type ExportMergeChoice
 } from '@shared/shared-library-export'
+import type { MergeStatus } from '../../download-manager'
 import type { FileCheckResult } from '../../lib/episode-file-scan'
 import type { DownloadedEpisodesMap } from '../../lib/downloaded-episodes'
 import { CAPS, itemKey } from '../../lib/shared-library/format'
@@ -24,7 +25,15 @@ import { createLibrary } from '../../lib/shared-library/write'
 import type { PlayerPresenceService } from '../player-presence'
 import { TOO_LARGE_REASON, nodeFs, type ExportFs } from './copy'
 import { createFsTypeProbe, type FsTypeProbe } from './fs-type-probe'
-import { ExportJob, jobFiles, type ExportMerger, type JobItem, type JobRecord } from './job'
+import {
+  ExportJob,
+  jobFiles,
+  type ExportMerger,
+  type JobItem,
+  type JobRecord,
+  type PrefetchJobDeps,
+  type PrefetchRecord
+} from './job'
 import {
   createWriteProbe,
   preflight,
@@ -40,15 +49,39 @@ import {
   displayName,
   presence,
   presentKeys,
+  STALE_EPISODE_LIST,
+  type PlanCacheEntry,
   type PlanSource,
   type ResolvedItem
 } from './plan'
+import { PREFETCH_TICK_MS, type PrefetchRow } from './prefetch-readiness'
+import {
+  NEEDS_INTERNET,
+  TOKEN_REQUIRED,
+  enqueuePrefetch,
+  prefetchAnime,
+  prefetchGate,
+  type PrefetchPick
+} from './prefetch-request'
 import { buildMeta } from './snapshot'
 
 export const JOBS_DIR = 'export-jobs'
 
 export interface ExportStore {
   get(key: string): unknown
+  /** Pre-fetch (#577) writes `downloadedAnime`. */
+  set(key: string, value: unknown): void
+}
+
+/** The download queue a pre-fetch (#577) enqueues into and waits on. */
+export interface ExportDownloads {
+  enqueue: (requests: DownloadRequest[]) => Promise<void>
+  getItem: (id: string) => PrefetchRow | null
+  isMergeCycleActive: () => boolean
+  hasHeldMerge: () => boolean
+  /** Listener lists (#574): each returns its unsubscribe. */
+  onVideoDownloaded: (cb: () => void) => () => void
+  onMergeComplete: (cb: () => void) => () => void
 }
 
 export interface SharedLibraryExportDeps {
@@ -67,6 +100,16 @@ export interface SharedLibraryExportDeps {
   ffmpegCheck?: () => Promise<{ available: boolean; encoders: string[] }>
   /** The download manager's merge (#576); without it, Merge into MKV is off. */
   merger?: ExportMerger
+  /** The download queue (#577); without it, not-downloaded episodes can't be pre-fetched. */
+  downloads?: ExportDownloads
+  /** `isMergeExpected` after `ffmpegReady` (#577), read at every evaluation. */
+  mergeExpected?: () => Promise<boolean>
+  /** The offline service (#567): offline, nothing is pre-fetched. */
+  isOffline?: () => boolean
+  /** The download roots, hot first (#577): where pre-fetched files land and are looked for. */
+  downloadRoots?: () => string[]
+  /** The pre-fetch tick (#577); 3 s by default. */
+  prefetchTickMs?: number
   candidates?: MountCandidates
   xfs?: Partial<ExportFs>
   /** The target's filesystem type (#575); the per-OS commands by default. */
@@ -140,11 +183,55 @@ export function createSharedLibraryExportService(
     scanEpisodeFiles: deps.scanEpisodeFiles,
     sanitizeFilename: deps.sanitizeFilename,
     mergeStatus: deps.mergeStatus,
-    fileSize
+    fileSize,
+    cache: (id) => {
+      const e = get<Record<string, Partial<PlanCacheEntry> | undefined>>('animeCache')?.[id]
+      return e ? { episodes: e.episodes ?? {}, qualityProbes: e.qualityProbes ?? {} } : null
+    }
   }
   const pathExists = async (p: string): Promise<boolean> => (await fileSize(p)) !== null
   const userId = (): number | null =>
     get<{ id?: number } | null>('shikimoriUser')?.id ?? deps.actor().shikimoriUserId
+
+  // Pre-fetch (#577): online, with a token, and with a download queue to enqueue into.
+  const gate = (): ExportPrefetchGate =>
+    prefetchGate({
+      canEnqueue: deps.downloads !== undefined,
+      offline: deps.isOffline?.() ?? false,
+      token: get('token')
+    })
+  const GATE_REASON: Record<Exclude<ExportPrefetchGate, 'ok'>, string> = {
+    offline: `${NEEDS_INTERNET}: the episodes that aren’t downloaded can’t be fetched now.`,
+    'no-token': TOKEN_REQUIRED,
+    unavailable: 'This PC can’t download episodes for an export.'
+  }
+  const hotRoot = (): string | null => deps.downloadRoots?.()[0] ?? null
+
+  /** Where a pre-fetched item's files are, by the names `enqueue` gives them. */
+  async function prefetchFiles(p: PrefetchRecord): Promise<{ mkv: boolean; video: boolean }> {
+    const base = `${deps.sanitizeFilename(`${p.animeName} - ${p.episodeInt.padStart(2, '0')}`)} [${deps.sanitizeFilename(p.author)}]`
+    const out = { mkv: false, video: false }
+    for (const root of deps.downloadRoots?.() ?? []) {
+      const dir = path.join(root, deps.sanitizeFilename(p.animeName))
+      if (!out.mkv && (await pathExists(path.join(dir, `${base}.mkv`)))) out.mkv = true
+      if (!out.video && (await pathExists(path.join(dir, `${base}.mp4`)))) out.video = true
+    }
+    return out
+  }
+
+  const downloads = deps.downloads
+  const prefetchDeps: PrefetchJobDeps | undefined = downloads && {
+    row: (id) => downloads.getItem(id),
+    mergeStatus: (tr) => deps.mergeStatus(tr) as MergeStatus | null,
+    mergeExpected: deps.mergeExpected ?? (async () => false),
+    mergeInFlight: () => downloads.isMergeCycleActive() || downloads.hasHeldMerge(),
+    files: prefetchFiles,
+    isOffline: () => deps.isOffline?.() ?? false,
+    now,
+    onVideoDownloaded: (cb) => downloads.onVideoDownloaded(cb),
+    onMergeComplete: (cb) => downloads.onMergeComplete(cb),
+    tickMs: deps.prefetchTickMs ?? PREFETCH_TICK_MS
+  }
 
   const preflightDeps: PreflightDeps = {
     xfs,
@@ -271,7 +358,8 @@ export function createSharedLibraryExportService(
     const files = jobFiles(rec)
     const titleName = new Map(rec.titles.map((t) => [t.animeId, t.name]))
     const label = (key: string): string => {
-      const item = rec.items.find((i) => i.key === key)
+      // A pre-fetched item is in `items` only once it is planned (#577).
+      const item = rec.items.find((i) => i.key === key) ?? rec.prefetch?.find((p) => p.key === key)
       if (!item) return key
       return `${titleName.get(item.animeId) ?? item.animeId} — ${item.label}`
     }
@@ -299,6 +387,7 @@ export function createSharedLibraryExportService(
         reason: s.reason
       })),
       missing: rec.missing,
+      prefetch: job.prefetchView().map((p) => ({ ...p, label: label(p.key) })),
       note: rec.note,
       error: rec.error,
       createdAt: rec.createdAt
@@ -330,7 +419,7 @@ export function createSharedLibraryExportService(
 
   // A fresh resolver (and scan) per file: the source is re-resolved just
   // before its copy, so a hot → cold auto-move during the job is followed.
-  const resolve = (item: JobItem): ReturnType<ReturnType<typeof createResolver>> =>
+  const resolve = (item: ExportSelectionItem): ReturnType<ReturnType<typeof createResolver>> =>
     createResolver(source)(item)
 
   function makeJob(rec: JobRecord): ExportJob {
@@ -352,6 +441,7 @@ export function createSharedLibraryExportService(
       checkpointEvery: deps.checkpointEvery ?? 10,
       onLibraryWritten: deps.onLibraryWritten,
       merger: deps.merger,
+      ...(prefetchDeps ? { prefetch: prefetchDeps } : {}),
       retryMs: deps.retryMs ?? 10_000,
       setTimer: deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms)),
       clearTimer: deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))
@@ -375,7 +465,9 @@ export function createSharedLibraryExportService(
   async function plan(req: ExportPlanRequest): Promise<ExportPlan> {
     const { titles, resolved } = await buildTree(source, req.animeIds)
     const merge = await mergeSupport()
-    if (!req.target) return { titles, target: null, preflight: null, merge }
+    const hot = hotRoot()
+    const prefetch = { prefetch: gate(), localFree: hot === null ? null : await freeBytes(hot) }
+    if (!req.target) return { titles, target: null, preflight: null, merge, ...prefetch }
     const t = await classifyTarget(req.target, req.name, userId(), pathExists)
     const there = presence(t.manifest, resolved)
     const present = [...there.keys()]
@@ -398,6 +490,7 @@ export function createSharedLibraryExportService(
     return {
       titles,
       merge,
+      ...prefetch,
       preflight: pf,
       target: {
         dir: req.target,
@@ -416,17 +509,45 @@ export function createSharedLibraryExportService(
   async function start(req: ExportStartRequest): Promise<ExportStartResult> {
     const other = busyJob()
     if (other) return { ok: false, reason: `Another export is running (${other.rec.libraryName}).` }
-    const ids = [...new Set(req.selection.map((s) => s.animeId))]
-    const { resolved } = await buildTree(source, ids)
+    const ids = [...new Set([...req.selection, ...(req.prefetch ?? [])].map((s) => s.animeId))]
+    const { titles, resolved } = await buildTree(source, ids)
     const t = await classifyTarget(req.target, req.name, userId(), pathExists)
     if (t.blocked) return { ok: false, reason: t.blocked }
 
-    const present = new Set(presentKeys(t.manifest, resolved))
     const keys = [...new Set(req.selection.map((s) => itemKey(s)))]
+    // Pre-fetch (#577): each not-downloaded episode, in the cached translation picked.
+    const picks: PrefetchPick[] = []
+    const picked = new Set<string>()
+    for (const p of req.prefetch ?? []) {
+      const key = itemKey(p)
+      if (picked.has(key) || keys.includes(key)) continue
+      picked.add(key)
+      // Downloaded since the dialog opened: exported like any downloaded item.
+      if (resolved.has(key)) {
+        keys.push(key)
+        continue
+      }
+      const title = titles.find((x) => x.animeId === p.animeId)
+      const ep = title?.notDownloaded.find((e) => e.episodeInt === p.episodeInt)
+      const option = ep?.options.find((o) => o.translationId === p.translationId)
+      if (!ep || !option || !prefetchAnime(get, p.animeId)) {
+        return {
+          ok: false,
+          reason: `${title?.name ?? `Anime ${p.animeId}`} — ${ep?.label ?? `Episode ${p.episodeInt}`}: ${STALE_EPISODE_LIST}.`
+        }
+      }
+      picks.push({ animeId: p.animeId, episodeInt: p.episodeInt, label: ep.label, option })
+    }
+    if (picks.length > 0) {
+      const g = gate()
+      if (g !== 'ok') return { ok: false, reason: GATE_REASON[g] }
+    }
+
+    const present = new Set(presentKeys(t.manifest, resolved))
     const ready = keys.map((k) => resolved.get(k)).filter((r) => r !== undefined)
     const missing = keys.length - ready.length
     const notThere = ready.filter((r) => !present.has(r.key))
-    if (notThere.length === 0) {
+    if (notThere.length === 0 && picks.length === 0) {
       return { ok: false, reason: 'Nothing to copy: the library already has every selected item.' }
     }
     const notThereKeys = new Set(notThere.map((r) => r.key))
@@ -446,21 +567,26 @@ export function createSharedLibraryExportService(
     if (!pf.ok) return { ok: false, reason: pf.blockers.join(' ') }
     const skippedKeys = new Set(pf.skipped)
     const toCopy = notThere.filter((r) => !skippedKeys.has(r.key))
-    if (toCopy.length === 0) {
+    if (toCopy.length === 0 && picks.length === 0) {
       return {
         ok: false,
         reason:
           'Nothing to copy: every selected file is over 4 GB, which this FAT32 drive can’t hold.'
       }
     }
-    const bytes = toCopy.reduce(
-      (n, r) =>
-        n +
-        (merges(r, choice)
-          ? mergedBytes(r.videoSize + r.subtitleSize, choice.reencode)
-          : r.videoSize + r.subtitleSize),
-      0
-    )
+    // A pre-fetched item counts with its estimate, on the target and on this
+    // PC; one of unknown size counts nowhere, and its copy checks the real size.
+    const prefetchBytes = picks.reduce((n, p) => n + (p.option.sizeBytes ?? 0), 0)
+    const bytes =
+      prefetchBytes +
+      toCopy.reduce(
+        (n, r) =>
+          n +
+          (merges(r, choice)
+            ? mergedBytes(r.videoSize + r.subtitleSize, choice.reencode)
+            : r.videoSize + r.subtitleSize),
+        0
+      )
     const free = await freeBytes(req.target)
     if (!fitsFreeSpace(bytes, free)) {
       return {
@@ -468,7 +594,15 @@ export function createSharedLibraryExportService(
         reason: `Not enough free space: the export needs ${requiredBytes(bytes)} bytes, the drive has ${free}.`
       }
     }
-    if (existing.length + toCopy.length > CAPS.items) {
+    const hot = hotRoot()
+    const localFree = picks.length > 0 && hot !== null ? await freeBytes(hot) : null
+    if (!fitsFreeSpace(prefetchBytes, localFree)) {
+      return {
+        ok: false,
+        reason: `Not enough free space on this PC: the downloads need ${requiredBytes(prefetchBytes)} bytes, ${hot} has ${localFree}.`
+      }
+    }
+    if (existing.length + toCopy.length + picks.length > CAPS.items) {
       return { ok: false, reason: `A library holds at most ${CAPS.items} items.` }
     }
 
@@ -511,6 +645,24 @@ export function createSharedLibraryExportService(
         ? { videoSize: r.videoSize + r.subtitleSize, subtitleSize: 0, merge: true }
         : { videoSize: r.videoSize, subtitleSize: r.subtitleSize })
     }))
+    // Through the existing download path; they stay on this PC afterwards,
+    // and cancelling the export leaves them queued.
+    const enqueued =
+      picks.length > 0 && downloads
+        ? await enqueuePrefetch({ store: deps.store, enqueue: downloads.enqueue }, picks)
+        : []
+    const prefetch: PrefetchRecord[] = enqueued.map(({ pick, request }) => ({
+      key: itemKey(request),
+      animeId: request.animeId,
+      episodeInt: request.episodeInt,
+      translationId: request.translationId,
+      translationType: request.translationType,
+      author: request.author,
+      animeName: request.animeName,
+      label: pick.label,
+      sizeEstimate: pick.option.sizeBytes,
+      state: 'waiting'
+    }))
     const rec: JobRecord = {
       version: 1,
       jobId: (deps.newId ?? randomUUID)(),
@@ -534,6 +686,7 @@ export function createSharedLibraryExportService(
       ...(choice.merge ? { codec: choice.codec } : {}),
       current: null,
       missing,
+      ...(prefetch.length > 0 ? { prefetch } : {}),
       snapshotted: [],
       note:
         t.ownerNickname === undefined
@@ -566,7 +719,14 @@ export function createSharedLibraryExportService(
           rec.status = 'paused'
           await persist(rec)
         }
-        emit(makeJob(rec))
+        const job = makeJob(rec)
+        emit(job)
+        // Where each pre-fetched item is, by the same evaluation a run makes (#577).
+        if (!TERMINAL.has(rec.status)) {
+          void job
+            .refreshPrefetch()
+            .catch((err) => console.warn('[export] pre-fetch check failed:', err))
+        }
       } catch (err) {
         console.warn(`[export] skipped an unreadable job file ${name}:`, err)
       }

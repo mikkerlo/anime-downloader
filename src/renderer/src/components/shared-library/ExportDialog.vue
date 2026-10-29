@@ -19,7 +19,7 @@ import {
 import { formatBytes } from '../../utils';
 import { useExportStore } from '../../stores/export';
 import ExportTree from './ExportTree.vue';
-import { allKeys, toSelection } from './export-selection';
+import { allKeys, prefetchEstimate, toPrefetch, toSelection } from './export-selection';
 
 const props = defineProps<{
   /** The titles to show; null for every downloaded title. */
@@ -101,12 +101,23 @@ const mergedThere = computed(
 const notReencoded = computed(() =>
   choice.value.merge && choice.value.reencode ? mergedThere.value : 0
 );
+// Pre-fetch (#577): not-downloaded episodes are downloaded first. Their
+// estimates count twice, on this PC and on the drive; one of unknown size
+// counts nowhere, and shows as "+ N of unknown size".
+const prefetchGate = ref<ExportPrefetchGate>('unavailable');
+const localFree = ref<number | null>(null);
+const choices = ref<Record<string, number>>({});
+const pre = computed(() => prefetchEstimate(titles.value, selected.value, choices.value));
+const totalBytes = computed(() => estimate.value.bytes + pre.value.bytes);
 const free = computed(() => target.value?.free ?? null);
-const fits = computed(() => fitsFreeSpace(estimate.value.bytes, free.value));
+const fits = computed(() => fitsFreeSpace(totalBytes.value, free.value));
+const localFits = computed(() => fitsFreeSpace(pre.value.bytes, localFree.value));
 const barPercent = computed(() => {
   if (free.value === null || free.value <= 0) return 0;
-  return Math.min(100, (requiredBytes(estimate.value.bytes) / free.value) * 100);
+  return Math.min(100, (requiredBytes(totalBytes.value) / free.value) * 100);
 });
+const unknownNote = (n: number): string =>
+  `+ ${n} ${n === 1 ? 'episode' : 'episodes'} of unknown size`;
 
 const targetLine = computed(() => {
   const t = target.value;
@@ -134,8 +145,9 @@ const blockedReason = computed(() => {
   if (planning.value) return 'Checking the folder…';
   if (target.value?.blocked) return target.value.blocked;
   if (preflight.value && !preflight.value.ok) return preflight.value.blockers.join(' ');
-  if (estimate.value.items === 0) return 'Nothing to copy.';
+  if (estimate.value.items === 0 && pre.value.items === 0) return 'Nothing to copy.';
   if (!fits.value) return 'The selection doesn’t fit on the drive.';
+  if (!localFits.value) return 'The episodes to download don’t fit on this PC.';
   if (exportStore.activeJob) return 'Another export is running.';
   return null;
 });
@@ -171,6 +183,8 @@ onMounted(async () => {
       name: name.value
     });
     titles.value = plan.titles;
+    prefetchGate.value = plan.prefetch ?? 'unavailable';
+    localFree.value = plan.localFree ?? null;
     if (props.preselect) selected.value = new Set(allKeys(plan.titles));
     if (plan.merge) mergeSupport.value = plan.merge;
     unmerged.value = mergeSupport.value.available ? 'merge' : 'copy-as-is';
@@ -205,8 +219,10 @@ async function startExport(): Promise<void> {
   starting.value = true;
   error.value = '';
   try {
+    const prefetch = toPrefetch(titles.value, selected.value, choices.value);
     const result = await exportStore.start({
       selection: toSelection(titles.value, selected.value),
+      ...(prefetch.length > 0 ? { prefetch } : {}),
       target: dir.value,
       name: name.value,
       unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
@@ -236,7 +252,10 @@ async function startExport(): Promise<void> {
         :titles="titles"
         :selected="selected"
         :present="present"
+        :prefetch="prefetchGate"
+        :choices="choices"
         @update:selected="selected = $event"
+        @update:choices="choices = $event"
       />
 
       <div class="field">
@@ -332,12 +351,25 @@ async function startExport(): Promise<void> {
           <div class="fill" :style="{ width: `${barPercent}%` }"></div>
         </div>
         <div class="space-text">
-          {{ formatBytes(estimate.bytes) }} to copy ({{ estimate.items }} episodes)
+          {{ pre.items > 0 ? '~' : '' }}{{ formatBytes(totalBytes) }} to copy ({{
+            estimate.items + pre.items
+          }}
+          episodes)
           <template v-if="free !== null"> · {{ formatBytes(free) }} free</template>
           <template v-if="estimate.alreadyThere > 0">
             · {{ estimate.alreadyThere }} already on the drive</template
           >
           <template v-if="sizeWillChange"> · size will change</template>
+          <template v-if="pre.unknown > 0"> · {{ unknownNote(pre.unknown) }}</template>
+        </div>
+        <div v-if="pre.items > 0" class="space-text" data-testid="export-local-space">
+          Downloads first on this PC: ~{{ formatBytes(pre.bytes) }} ({{ pre.items }} episodes)
+          <template v-if="localFree !== null"> · {{ formatBytes(localFree) }} free</template>
+          <template v-if="pre.unknown > 0"> · {{ unknownNote(pre.unknown) }}</template>
+        </div>
+        <div v-if="pre.items > 0" class="hint" data-testid="export-prefetch-hint">
+          Episodes that aren’t downloaded are downloaded first and stay on this PC. Cancelling the
+          export doesn’t cancel those downloads.
         </div>
       </div>
 

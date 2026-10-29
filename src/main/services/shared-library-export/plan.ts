@@ -26,7 +26,19 @@ export interface PlanSource {
   mergeStatus: (translationId: number) => string | null
   /** A file's size, or null when it isn't there. */
   fileSize: (p: string) => Promise<number | null>
+  /** The cached episode data (`animeCache[animeId]`), for pre-fetch (#577). */
+  cache?: (animeId: number) => PlanCacheEntry | null
 }
+
+/** What pre-fetch (#577) reads from `animeCache[animeId]`. */
+export interface PlanCacheEntry {
+  /** By episode id. */
+  episodes: Record<number, EpisodeDetail>
+  /** Probed video heights by translation id: never sizes. */
+  qualityProbes: Record<number, number>
+}
+
+export const STALE_EPISODE_LIST = 'Open the title once online to refresh'
 
 /** One selected item, resolved on disk. */
 export interface ResolvedItem {
@@ -198,9 +210,23 @@ export async function buildTree(
       })
     }
     const downloaded = new Set(sels.map((s) => s.episodeInt))
+    const cache = src.cache?.(animeId) ?? null
+    const siblings = [...resolved.values()].filter((r) => r.animeId === animeId)
+    const durations = translationDurations(cache)
+    const preferred = preferredTranslation(
+      sels.map((s) => src.downloadedEpisodes()[itemKey(s)]).filter((e) => e !== undefined)
+    )
     const notDownloaded = (detail?.episodes ?? [])
       .filter((e) => !downloaded.has(e.episodeInt))
-      .map((e) => ({ episodeInt: e.episodeInt, label: e.episodeFull || `Episode ${e.episodeInt}` }))
+      .map((e): ExportNotDownloaded => {
+        const options = prefetchOptions(cache, e.id, preferred, siblings, durations)
+        return {
+          episodeInt: e.episodeInt,
+          label: e.episodeFull || `Episode ${e.episodeInt}`,
+          options,
+          unavailable: options.length === 0 ? STALE_EPISODE_LIST : null
+        }
+      })
     if (translations.size === 0 && notDownloaded.length === 0) continue
     titles.push({
       animeId,
@@ -211,6 +237,111 @@ export async function buildTree(
   }
   if (!animeIds) titles.sort((a, b) => a.name.localeCompare(b.name))
   return { titles, resolved }
+}
+
+/** Seconds from a cached `Translation.duration`; null when it isn't a positive number. */
+function seconds(duration: string | undefined): number | null {
+  const n = Number(duration)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** Every cached translation's duration, by translation id. */
+function translationDurations(cache: PlanCacheEntry | null): Map<number, number> {
+  const out = new Map<number, number>()
+  for (const ep of Object.values(cache?.episodes ?? {})) {
+    for (const tr of ep.translations ?? []) {
+      const s = seconds(tr.duration)
+      if (s !== null) out.set(tr.id, s)
+    }
+  }
+  return out
+}
+
+/** The title's downloaded translation (`type` + author), the most common one. */
+function preferredTranslation(
+  entries: { translationType: string; author: string }[]
+): { type: string; author: string } | null {
+  const counts = new Map<string, { type: string; author: string; n: number }>()
+  for (const e of entries) {
+    const k = `${e.translationType}\u0000${e.author}`
+    const c = counts.get(k) ?? { type: e.translationType, author: e.author, n: 0 }
+    c.n++
+    counts.set(k, c)
+  }
+  let best: { type: string; author: string; n: number } | null = null
+  for (const c of counts.values()) if (!best || c.n > best.n) best = c
+  return best ? { type: best.type, author: best.author } : null
+}
+
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 === 1 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2)
+}
+
+/**
+ * A not-downloaded episode's size in `author`'s translation (#577), from the
+ * title's downloaded episodes by the same author: their bytes per second times
+ * this one's duration, else their median size, else unknown. `qualityProbes`
+ * holds heights and is never read here.
+ */
+export function estimatePrefetchSize(
+  author: string,
+  duration: number | null,
+  siblings: readonly ResolvedItem[],
+  durations: ReadonlyMap<number, number>
+): number | null {
+  const same = siblings.filter((r) => r.author === author)
+  if (same.length === 0) return null
+  const timed = same.filter((r) => durations.has(r.translationId))
+  if (duration !== null && timed.length > 0) {
+    let bytes = 0
+    let secs = 0
+    for (const r of timed) {
+      bytes += r.videoSize + r.subtitleSize
+      secs += durations.get(r.translationId)!
+    }
+    return Math.round((bytes / secs) * duration)
+  }
+  return median(same.map((r) => r.videoSize + r.subtitleSize))
+}
+
+/**
+ * The cached translations a not-downloaded episode can be pre-fetched in
+ * (#577), one per type and author, at its best height; the title's downloaded
+ * translation (by type and author, as the detail page picks) first.
+ */
+export function prefetchOptions(
+  cache: PlanCacheEntry | null,
+  episodeId: number,
+  preferred: { type: string; author: string } | null,
+  siblings: readonly ResolvedItem[],
+  durations: ReadonlyMap<number, number>
+): ExportPrefetchOption[] {
+  const ep = cache?.episodes?.[episodeId]
+  if (!ep) return []
+  const height = (tr: Translation): number => cache?.qualityProbes?.[tr.id] ?? tr.height
+  const best = new Map<string, Translation>()
+  for (const tr of ep.translations ?? []) {
+    if (tr.isActive !== 1) continue
+    const k = `${tr.type}\u0000${tr.authorsSummary}`
+    const had = best.get(k)
+    if (!had || height(tr) > height(had)) best.set(k, tr)
+  }
+  const rank = (tr: Translation): number => {
+    if (!preferred) return 2
+    if (tr.type === preferred.type && tr.authorsSummary === preferred.author) return 0
+    return tr.type === preferred.type ? 1 : 2
+  }
+  return [...best.values()]
+    .sort((a, b) => rank(a) - rank(b) || height(b) - height(a))
+    .map((tr) => ({
+      translationId: tr.id,
+      translationType: tr.type,
+      author: tr.authorsSummary,
+      height: height(tr),
+      sizeBytes: estimatePrefetchSize(tr.authorsSummary, seconds(tr.duration), siblings, durations)
+    }))
 }
 
 /** The target classification, by the table in docs/shared-library.md. */

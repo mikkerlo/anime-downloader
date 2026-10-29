@@ -3,6 +3,7 @@ import * as path from 'path'
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
+import { addDownloadedAnime } from '../lib/downloaded-anime'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
@@ -12,11 +13,9 @@ export function register({
   animeCacheService,
   skipAnalysisService
 }: AppDeps): void {
-  ipcMain.handle(CHANNELS.DOWNLOADED_ANIME_ADD, (_event, anime: AnimeSearchResult) => {
-    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-    downloaded[String(anime.id)] = anime
-    store.set('downloadedAnime', downloaded)
-  })
+  ipcMain.handle(CHANNELS.DOWNLOADED_ANIME_ADD, (_event, anime: AnimeSearchResult) =>
+    addDownloadedAnime(store, anime)
+  )
 
   ipcMain.handle(CHANNELS.DOWNLOADED_ANIME_DELETE, (_event, animeId: number, animeName: string) => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>

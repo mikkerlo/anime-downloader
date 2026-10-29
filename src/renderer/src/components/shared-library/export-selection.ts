@@ -40,6 +40,76 @@ export function titleSize(title: ExportTreeTitle): number {
   return title.translations.reduce((n, t) => n + sizeOf(t.episodes), 0)
 }
 
+// Pre-fetch (#577): a not-downloaded episode is selected by its own key in the
+// same set, `pf:<animeId>:<episodeInt>`, and downloaded in the translation
+// picked for it (the first option until the user picks another).
+
+export function prefetchKey(animeId: number, episodeInt: string): string {
+  return `pf:${animeId}:${episodeInt}`
+}
+
+/** The not-downloaded episodes of `title` that can be pre-fetched, as keys. */
+export function prefetchKeys(title: ExportTreeTitle): string[] {
+  return title.notDownloaded
+    .filter((e) => e.options.length > 0)
+    .map((e) => prefetchKey(title.animeId, e.episodeInt))
+}
+
+/** A title node's keys: its ready episodes, plus its pre-fetchable ones when pre-fetch is on. */
+export function nodeKeys(title: ExportTreeTitle, prefetch: boolean): string[] {
+  return prefetch ? [...titleKeys(title), ...prefetchKeys(title)] : titleKeys(title)
+}
+
+/** The option picked for a not-downloaded episode: `choices[key]`, else the default (first). */
+export function pickedOption(
+  e: ExportNotDownloaded,
+  key: string,
+  choices: Readonly<Record<string, number>>
+): ExportPrefetchOption | null {
+  const id = choices[key]
+  return e.options.find((o) => o.translationId === id) ?? e.options[0] ?? null
+}
+
+/** The selected not-downloaded episodes as the IPC `prefetch` list. */
+export function toPrefetch(
+  titles: readonly ExportTreeTitle[],
+  selected: ReadonlySet<string>,
+  choices: Readonly<Record<string, number>>
+): ExportSelectionItem[] {
+  const out: ExportSelectionItem[] = []
+  for (const t of titles) {
+    for (const e of t.notDownloaded) {
+      const key = prefetchKey(t.animeId, e.episodeInt)
+      if (!selected.has(key)) continue
+      const o = pickedOption(e, key, choices)
+      if (o)
+        out.push({ animeId: t.animeId, episodeInt: e.episodeInt, translationId: o.translationId })
+    }
+  }
+  return out
+}
+
+/** The selected pre-fetch: how many, their estimated bytes, and how many have no estimate. */
+export function prefetchEstimate(
+  titles: readonly ExportTreeTitle[],
+  selected: ReadonlySet<string>,
+  choices: Readonly<Record<string, number>>
+): { items: number; bytes: number; unknown: number } {
+  const out = { items: 0, bytes: 0, unknown: 0 }
+  for (const t of titles) {
+    for (const e of t.notDownloaded) {
+      const key = prefetchKey(t.animeId, e.episodeInt)
+      if (!selected.has(key)) continue
+      const o = pickedOption(e, key, choices)
+      if (!o) continue
+      out.items++
+      if (o.sizeBytes === null) out.unknown++
+      else out.bytes += o.sizeBytes
+    }
+  }
+  return out
+}
+
 /** The selected keys as the IPC selection. */
 export function toSelection(
   titles: readonly ExportTreeTitle[],

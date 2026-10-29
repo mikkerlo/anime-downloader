@@ -52,6 +52,26 @@ const step = computed(() => {
   return 'Copying';
 });
 
+// Pre-fetched items (#577): downloaded first, then copied as they complete.
+const prefetching = computed(() =>
+  (props.job.prefetch ?? []).filter((p) => p.state !== 'done' && p.state !== 'failed')
+);
+const waitingDownloads = computed(
+  () => prefetching.value.filter((p) => p.state !== 'copying').length
+);
+const PREFETCH_STATE: Record<ExportPrefetchView['state'], string> = {
+  'waiting-download': 'Waiting for download',
+  downloading: 'Downloading',
+  'waiting-connection': 'Waiting for connection',
+  'waiting-merge': 'Waiting for merge',
+  copying: 'Copying',
+  done: 'Done',
+  failed: 'Failed'
+};
+function prefetchState(p: ExportPrefetchView): string {
+  return p.state === 'downloading' ? `Downloading ${p.percent}%` : PREFETCH_STATE[p.state];
+}
+
 const percent = computed(() =>
   props.job.bytesTotal > 0 ? Math.min(100, (props.job.bytesDone / props.job.bytesTotal) * 100) : 0
 );
@@ -96,6 +116,34 @@ const percent = computed(() =>
       data-testid="export-job-step"
     >
       {{ step }}: {{ job.current }}
+    </div>
+    <div
+      v-else-if="job.status === 'running' && waitingDownloads > 0"
+      class="current"
+      data-testid="export-job-waiting-downloads"
+    >
+      Waiting for {{ waitingDownloads }} {{ waitingDownloads === 1 ? 'download' : 'downloads' }}
+    </div>
+    <details
+      v-if="prefetching.length > 0 && !finished"
+      class="prefetch"
+      data-testid="export-job-prefetch"
+    >
+      <summary>
+        Downloading {{ prefetching.length }}
+        {{ prefetching.length === 1 ? 'episode' : 'episodes' }} before copying
+      </summary>
+      <div v-for="p in prefetching" :key="p.key" :data-testid="`export-prefetch-${p.key}`">
+        {{ p.label }}: {{ prefetchState(p)
+        }}<template v-if="p.warning"> · {{ p.warning }}</template>
+      </div>
+    </details>
+    <div
+      v-for="p in (job.prefetch ?? []).filter((x) => x.state === 'done' && x.warning)"
+      :key="`w-${p.key}`"
+      class="note"
+    >
+      {{ p.label }}: {{ p.warning }}
     </div>
     <div v-if="exportStore.locateErrors[job.jobId]" class="error">
       {{ exportStore.locateErrors[job.jobId] }}
@@ -174,7 +222,8 @@ const percent = computed(() =>
   color: var(--st-red);
 }
 
-.failed {
+.failed,
+.prefetch {
   font-size: 0.78rem;
   color: var(--text-3);
 }

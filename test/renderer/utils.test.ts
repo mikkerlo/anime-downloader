@@ -546,4 +546,22 @@ describe('getPosterSrc', () => {
     expect(getPosterSrc(null, 'https://x/p.jpg', new Set([0]))).toBe('https://x/p.jpg')
     expect(getPosterSrc(undefined, '', new Set())).toBe('')
   })
+
+  it('returns anime-poster://<id> for an uncached id on a drive (#629)', () => {
+    expect(getPosterSrc(7, 'https://x/p.jpg', new Set(), true)).toBe('anime-poster://7')
+  })
+
+  it('returns the remote URL for an uncached id with onDrive false or left out (#629)', () => {
+    expect(getPosterSrc(7, 'https://x/p.jpg', new Set(), false)).toBe('https://x/p.jpg')
+    expect(getPosterSrc(7, 'https://x/p.jpg', new Set())).toBe('https://x/p.jpg')
+  })
+
+  it('returns anime-poster://<id> for a cached id whatever onDrive is (#629)', () => {
+    expect(getPosterSrc(7, 'https://x/p.jpg', new Set([7]), true)).toBe('anime-poster://7')
+    expect(getPosterSrc(7, 'https://x/p.jpg', new Set([7]), false)).toBe('anime-poster://7')
+  })
+
+  it('returns the remote URL for an entry with no id, even on a drive (#629)', () => {
+    expect(getPosterSrc(null, 'https://x/p.jpg', new Set(), true)).toBe('https://x/p.jpg')
+  })
 })

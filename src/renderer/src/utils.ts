@@ -377,14 +377,16 @@ export const POSTER_SCHEME = 'anime-poster://'
 
 /**
  * The poster from main's disk cache when it has one (#570), so it shows
- * offline; `remoteUrl` otherwise.
+ * offline; `remoteUrl` otherwise. `onDrive` asks for the bare form for an
+ * uncached title too, which main serves from an attached library (#629).
  */
 export function getPosterSrc(
   animeId: number | null | undefined,
   remoteUrl: string,
-  cachedIds: ReadonlySet<number>
+  cachedIds: ReadonlySet<number>,
+  onDrive = false
 ): string {
-  if (animeId != null && cachedIds.has(animeId)) return `${POSTER_SCHEME}${animeId}`
+  if (animeId != null && (onDrive || cachedIds.has(animeId))) return `${POSTER_SCHEME}${animeId}`
   return remoteUrl
 }
 

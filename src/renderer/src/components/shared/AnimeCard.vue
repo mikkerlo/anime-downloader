@@ -17,13 +17,16 @@ const props = withDefaults(
     // An attached title whose drive is unplugged (#582): dimmed, with the reason.
     unavailable?: boolean;
     unavailableTitle?: string;
+    // The title is also on an attached library: ask for its poster (#629).
+    onDrive?: boolean;
   }>(),
   {
     prioritized: false,
     selectable: false,
     selected: false,
     unavailable: false,
-    unavailableTitle: ''
+    unavailableTitle: '',
+    onDrive: false
   }
 );
 
@@ -34,8 +37,8 @@ const emit = defineEmits<{
 }>();
 
 const libraryStore = useLibraryStore();
-// A cached poster that fails to load (deleted since the id list was read)
-// falls back to the remote URL once.
+// A local poster that fails to load (deleted since the id list was read, or
+// none on the drive) falls back to the remote URL once.
 const localFailed = ref(false);
 watch(
   () => props.anime.id,
@@ -46,7 +49,12 @@ watch(
 const posterSrc = computed(() =>
   localFailed.value
     ? props.anime.posterUrlSmall
-    : getPosterSrc(props.anime.id, props.anime.posterUrlSmall, libraryStore.posterIds)
+    : getPosterSrc(
+        props.anime.id,
+        props.anime.posterUrlSmall,
+        libraryStore.posterIds,
+        props.onDrive
+      )
 );
 
 function onPosterError(): void {

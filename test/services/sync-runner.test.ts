@@ -1509,3 +1509,46 @@ describe('the Shikimori leg never writes back a stale queue (#628 review)', () =
     expect(queue(pc).filter((q) => q.malId === MAL)).toHaveLength(1)
   })
 })
+
+describe('a user edit of the same title during the leg (#628 manual run)', () => {
+  it("is queued after the leg's entry, so the drain sends the user's edit", async () => {
+    const { pc } = await ownerSetup({
+      base: { score: 6 },
+      drive: { score: 8 },
+      server: { score: 6, episodes: 3 },
+      shikiBase: { score: 6 }
+    })
+    const kicked = vi.spyOn(pc.sync, 'syncShikimoriQueue').mockResolvedValue(undefined)
+    const real = fs.promises.rename.bind(fs.promises)
+    let done = false
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (!done && String(to).includes('shikimori-')) {
+        done = true
+        // The detail page's edit falls back to the queue mid-leg: newer than the leg's entry.
+        const cur = pc.store.get('shikimoriUpdateQueue') as unknown[]
+        pc.store.set('shikimoriUpdateQueue', [
+          ...cur,
+          {
+            malId: MAL,
+            rateId: MAL * 10,
+            before: vals({ episodes: 3, score: 6 }),
+            after: vals({ episodes: 5, score: 6 }),
+            queuedAt: pc.clock.t + 1000
+          }
+        ])
+      }
+      return real(from, to)
+    })
+    await pc.runner.runAll('manual')
+    spy.mockRestore()
+    kicked.mockRestore()
+    expect(queue(pc).map((q) => q.queuedAt)).toEqual([pc.clock.t, pc.clock.t + 1000])
+    await settleDrain(pc)
+    // The user's edit reached Shikimori; the library's 8 stays pending for the next leg.
+    expect(server.get(MAL)).toMatchObject({ episodes: 5 })
+    expect((await pending(pc))[MAL].score.value).toBe(8)
+    await pc.runner.runAll('manual')
+    await settleDrain(pc)
+    expect(server.get(MAL)).toMatchObject({ episodes: 5, score: 8 })
+  })
+})

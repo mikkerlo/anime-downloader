@@ -40,7 +40,7 @@ import { isRollback, rollbackAdjust } from '../../lib/sync-merge/rollback'
 import { computeRaise, type WatchFlip } from '../../lib/sync-merge/raise'
 import { reconcileLeg, type LegConflict } from '../../lib/sync-merge/conflicts'
 import { NO_RATE_BEFORE, rateValues, type RateValues } from '../../lib/shikimori-rate'
-import type { QueuedShikimoriUpdate } from '../../lib/shikimori-queue'
+import { mergeQueues, type QueuedShikimoriUpdate } from '../../lib/shikimori-queue'
 import type { CachedRateEntry } from '../../lib/shikimori-rate-cache'
 import type { StorageService } from '../../store/types'
 import type { AttachedLibraryService } from '../attached-library'
@@ -885,10 +885,12 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     out.resolvedElsewhere = conv.resolvedElsewhere
     if (additions.length > 0) {
       // Re-read: a user edit or a drain may have written the queue during the awaits above.
-      const queue = [
-        ...(store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []),
-        ...additions
-      ]
+      // In `queuedAt` order: a user edit made during the leg is newer than the
+      // leg's entries, and `consolidateQueue` takes the last entry's `after`.
+      const queue = mergeQueues(
+        store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? [],
+        additions
+      )
       store.set('shikimoriUpdateQueue', queue)
       deps.broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
       deps.sync.startSyncTimer()

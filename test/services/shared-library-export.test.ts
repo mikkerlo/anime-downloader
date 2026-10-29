@@ -16,7 +16,6 @@ import { nameItems } from '../../src/main/lib/shared-library/naming'
 import { LIBRARY_DIR, readMeta } from '../../src/main/lib/shared-library/read'
 import { nodeFs } from '../../src/main/services/shared-library-export/copy'
 import {
-  BLOCKED_OWN_METADATA,
   STALE_EPISODE_LIST,
   classifyTarget
 } from '../../src/main/services/shared-library-export/plan'
@@ -154,15 +153,83 @@ describe('the target table', () => {
     }
   })
 
-  it('an own With metadata library: blocked', async () => {
+  it('an own With metadata library: routed to With metadata in either mode (#586)', async () => {
     env = makeExportEnv()
     await seedLibrary(path.join(env.drive, 'Trip'), {
       libraryId: OTHER_LIB,
       name: 'Trip',
       owner: { shikimoriId: ME, nickname: 'me' }
     })
-    const t = await classifyTarget(env.drive, 'Trip', ME, exists)
-    expect(t).toMatchObject({ kind: 'own-metadata', blocked: BLOCKED_OWN_METADATA })
+    for (const mode of ['videos', 'metadata'] as const) {
+      const t = await classifyTarget(env.drive, 'Trip', ME, exists, { mode })
+      expect(t).toMatchObject({ kind: 'own-metadata', mode: 'metadata', blocked: null })
+      expect(t.manifest?.libraryId).toBe(OTHER_LIB)
+    }
+  })
+
+  it('a Videos-only library With metadata: an upgrade, for any logged-in user (#586)', async () => {
+    env = makeExportEnv()
+    await seedLibrary(path.join(env.drive, 'Trip'), { libraryId: OTHER_LIB, name: 'Trip' })
+    const t = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    expect(t).toMatchObject({ kind: 'upgrade', mode: 'metadata', blocked: null })
+    expect(t.manifest?.libraryId).toBe(OTHER_LIB)
+  })
+
+  it('a library this PC claimed: never written, in either mode; a sibling (#586)', async () => {
+    env = makeExportEnv()
+    await seedLibrary(path.join(env.drive, 'Trip'), {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: { shikimoriId: 777, nickname: 'friend' }
+    })
+    const claimed = (id: string): boolean => id === OTHER_LIB
+    for (const [who, mode] of [
+      [null, 'videos'],
+      [ME, 'metadata']
+    ] as const) {
+      const t = await classifyTarget(env.drive, 'Trip', who, exists, { mode, claimed })
+      expect(t).toMatchObject({
+        kind: 'claimed',
+        mode,
+        ownerNickname: 'friend',
+        root: path.join(env.drive, 'Trip (2)'),
+        manifest: null
+      })
+    }
+    // Not claimed here: foreign.
+    const t = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    expect(t.kind).toBe('foreign')
+  })
+
+  it('With metadata next to a foreign library: an earlier own sibling is added to, a Videos-only one upgraded (#586)', async () => {
+    env = makeExportEnv()
+    await seedLibrary(path.join(env.drive, 'Trip'), {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: { shikimoriId: 777, nickname: 'friend' }
+    })
+    await seedLibrary(path.join(env.drive, 'Trip (2)'), {
+      libraryId: '2a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
+      name: 'Trip',
+      owner: { shikimoriId: ME, nickname: 'me' }
+    })
+    const own = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    expect(own).toMatchObject({
+      kind: 'own-metadata',
+      root: path.join(env.drive, 'Trip (2)'),
+      ownerNickname: 'friend'
+    })
+    // In Videos only, the own sibling is skipped as before (#574).
+    const videos = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'videos' })
+    expect(videos).toMatchObject({ kind: 'foreign', root: path.join(env.drive, 'Trip (3)') })
+
+    fs.rmSync(path.join(env.drive, 'Trip (2)'), { recursive: true })
+    await seedLibrary(path.join(env.drive, 'Trip (2)'), {
+      libraryId: '2a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
+      name: 'Trip'
+    })
+    const up = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    expect(up).toMatchObject({ kind: 'upgrade', root: path.join(env.drive, 'Trip (2)') })
   })
 
   it('a With metadata library with any other owner (or seen logged out): a sibling', async () => {

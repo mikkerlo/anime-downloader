@@ -507,6 +507,8 @@ const sharedLibraryExport = createSharedLibraryExportService({
   }),
   broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
   onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root),
+  // With metadata (#586): the state step is S9's library leg.
+  writeLibraryState: (target) => syncRunner!.runExport(target),
   // Merge into MKV on export (#576): the queue's ffmpeg, behind its mutex.
   ffmpegCheck: () => checkFfmpeg(),
   merger: {

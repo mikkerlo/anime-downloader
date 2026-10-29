@@ -7,7 +7,10 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { addDownloadedAnime } from '../../src/main/lib/downloaded-anime'
-import { STALE_EPISODE_LIST } from '../../src/main/services/shared-library-export/plan'
+import {
+  STALE_EPISODE_LIST,
+  durationSeconds
+} from '../../src/main/services/shared-library-export/plan'
 import {
   TOKEN_REQUIRED,
   downloadName,
@@ -143,6 +146,18 @@ describe('size estimates (#577)', () => {
     seedSiblings(rig, [1000, 3000], ['100', '300'], [ep3('250')])
     // (1000 + 3000 bytes + their .ass-less 0) / (100 + 300 s) × 250 s
     expect(missing(await planOf(rig), '3').options[0].sizeBytes).toBe(2500)
+  })
+
+  it('durations in the clock form the API fixtures carry ("24:00") count the same', async () => {
+    rig = makePrefetchRig()
+    seedSiblings(rig, [1000, 3000], ['01:40', '5:00'], [ep3('04:10')])
+    expect(missing(await planOf(rig), '3').options[0].sizeBytes).toBe(2500)
+    expect(durationSeconds('24:00')).toBe(1440)
+    expect(durationSeconds('1:02:03')).toBe(3723)
+    expect(durationSeconds('1420.5')).toBe(1420.5)
+    for (const bad of ['', '0', '0:00', 'abc', '1::2', '-5', undefined]) {
+      expect(durationSeconds(bad)).toBeNull()
+    }
   })
 
   it('siblings with no durations: their median size', async () => {

@@ -10,9 +10,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { itemKey } from '../../src/main/lib/shared-library/format'
-import { LIBRARY_DIR } from '../../src/main/lib/shared-library/read'
+import { LIBRARY_DIR, readLibrary } from '../../src/main/lib/shared-library/read'
+import { writeManifest } from '../../src/main/lib/shared-library/write'
 import { JOBS_DIR } from '../../src/main/services/shared-library-export'
-import type { JobRecord } from '../../src/main/services/shared-library-export/job'
+import {
+  ALREADY_ON_DRIVE,
+  NO_MERGED_FILE,
+  type JobRecord
+} from '../../src/main/services/shared-library-export/job'
 import {
   DOWNLOAD_CANCELLED,
   MERGE_GRACE_MS,
@@ -758,6 +763,220 @@ describe('pre-fetch (#577) — Merge into MKV with auto-merge off', () => {
     expect(fs.existsSync(hotFile(rig, '2', 'ass'))).toBe(true)
     expect(rig.mergeCalls.n).toBe(0)
     expect(rig.dm.getMergeStatus(12)).toBeNull()
+  })
+})
+
+describe('pre-fetch (#577) — the drive already has it (review of 8f2dacb4)', () => {
+  /** Export episode 2 by pre-fetch, then free the space here: its files and entry go. */
+  async function exportedThenDeleted(r: PrefetchRig, a1: string): Promise<{ file: string }> {
+    const first = await start(r, [a1], [pf('2', 12)])
+    await r.svc.settled(first)
+    await r.svc.cancel(first) // dismiss the finished card
+    for (const ext of ['mp4', 'ass']) fs.rmSync(hotFile(r, '2', ext))
+    const entries = r.env.store.get('downloadedEpisodes') as Record<string, unknown>
+    delete entries[keyOf('2', 12)]
+    r.env.store.set('downloadedEpisodes', entries)
+    return { file: path.join(root(r), TITLE, `${TITLE} - 02 [Studio].mp4`) }
+  }
+
+  it('the trip flow: an episode on the drive but no longer here is "on the drive" in the plan, and never downloaded again or written', async () => {
+    rig = makePrefetchRig()
+    const { a1 } = seedAlpha(rig)
+    const { file } = await exportedThenDeleted(rig, a1)
+    const before = { sha: sha256(file), mtimeMs: fs.statSync(file).mtimeMs }
+    const enqueues = rig.enqueued.length
+
+    const plan = await rig.svc.plan({ animeIds: [ALPHA], target: rig.env.drive, name: 'Trip' })
+    expect(plan.titles[0].notDownloaded.find((e) => e.episodeInt === '2')).toBeDefined()
+    expect(plan.target?.presentMissing).toEqual([keyOf('2', 12)])
+
+    // Picked alone: nothing to do.
+    const alone = await rig.svc.start({
+      selection: [],
+      prefetch: [pf('2', 12)],
+      target: rig.env.drive,
+      name: 'Trip'
+    })
+    expect(alone).toMatchObject({ ok: false, reason: expect.stringMatching(/^Nothing to copy/) })
+    // Picked with another missing episode: only that one is downloaded.
+    const jobId = await start(rig, [], [pf('2', 12), pf('3', 13)])
+    await rig.svc.settled(jobId)
+    expect(
+      rig.enqueued
+        .slice(enqueues)
+        .flat()
+        .map((q) => q.translationId)
+    ).toEqual([13])
+    expect(jobOf(rig, jobId).prefetch?.map((p) => p.key)).toEqual([keyOf('3', 13)])
+    expect(fs.existsSync(hotFile(rig, '2', 'mp4'))).toBe(false)
+    expect({ sha: sha256(file), mtimeMs: fs.statSync(file).mtimeMs }).toEqual(before)
+    expect(manifestKeys(rig)).toEqual([a1, keyOf('2', 12), keyOf('3', 13)].sort())
+  })
+
+  it('a key another PC added after the start is never written over: the item fails "Already on the drive"', async () => {
+    rig = makePrefetchRig()
+    const { a1 } = seedAlpha(rig)
+    rig.net.hold(12)
+    const jobId = await start(rig, [a1], [pf('2', 12)])
+    await until(() => jobOf(rig, jobId).filesDone === 1, 'the downloaded item')
+    // Another PC exports episode 2 into the same library meanwhile.
+    const theirs = path.join(root(rig), TITLE, `${TITLE} - 02 [Studio].mp4`)
+    fs.writeFileSync(theirs, 'their copy')
+    const r = await readLibrary(root(rig))
+    if (r.status !== 'ok') throw new Error(r.status)
+    await writeManifest(
+      root(rig),
+      {
+        libraryId: r.manifest.libraryId,
+        name: r.manifest.name,
+        owner: r.manifest.owner,
+        mode: r.manifest.mode,
+        titles: r.manifest.titles,
+        items: [
+          ...r.manifest.items,
+          {
+            animeId: ALPHA,
+            episodeInt: '2',
+            translationId: 12,
+            translationType: 'subRu',
+            author: 'Studio',
+            quality: 720,
+            path: `${TITLE}/${TITLE} - 02 [Studio].mp4`,
+            size: 10,
+            sha256: sha256(theirs)
+          }
+        ],
+        naming: r.manifest.naming
+      },
+      { installId: 'pc-other', appVersion: '5.0.37', shikimoriUserId: null, claim: null },
+      r.manifest.generation
+    )
+    rig.net.release(12)
+    await rig.svc.settled(jobId)
+    const job = jobOf(rig, jobId)
+    expect(job.status).toBe('completed')
+    expect(job.failed.map((f) => [f.key, f.reason])).toEqual([[keyOf('2', 12), ALREADY_ON_DRIVE]])
+    expect(fs.readFileSync(theirs, 'utf8')).toBe('their copy')
+  })
+})
+
+describe('pre-fetch (#577) — a key another PC adds after the item was planned (review of 8f2dacb4)', () => {
+  it('is checked again just before the copy: the item fails "Already on the drive" and their file stays', async () => {
+    rig = makePrefetchRig()
+    const { a1 } = seedAlpha(rig)
+    rig.net.hold(12)
+    const jobId = await start(rig, [a1], [pf('2', 12)])
+    await until(() => jobOf(rig, jobId).filesDone === 1, 'the downloaded item')
+    // The player opens: the pair is planned, and its copy waits for the player.
+    rig.env.presence.open = true
+    rig.net.release(12)
+    await untilPrefetch(rig, jobId, keyOf('2', 12), 'copying')
+    await until(() => jobOf(rig, jobId).status === 'held', 'the hold')
+    const theirs = path.join(root(rig), TITLE, `${TITLE} - 02 [Studio] (theirs).mp4`)
+    fs.writeFileSync(theirs, 'their copy')
+    const r = await readLibrary(root(rig))
+    if (r.status !== 'ok') throw new Error(r.status)
+    await writeManifest(
+      root(rig),
+      {
+        libraryId: r.manifest.libraryId,
+        name: r.manifest.name,
+        owner: r.manifest.owner,
+        mode: r.manifest.mode,
+        titles: r.manifest.titles,
+        items: [
+          ...r.manifest.items,
+          {
+            animeId: ALPHA,
+            episodeInt: '2',
+            translationId: 12,
+            translationType: 'subRu',
+            author: 'Studio',
+            quality: 720,
+            path: `${TITLE}/${TITLE} - 02 [Studio] (theirs).mp4`,
+            size: 10,
+            sha256: sha256(theirs)
+          }
+        ],
+        naming: r.manifest.naming
+      },
+      { installId: 'pc-other', appVersion: '5.0.37', shikimoriUserId: null, claim: null },
+      r.manifest.generation
+    )
+    rig.env.presence.open = false
+    rig.env.presence.release.emit()
+    await rig.svc.settled(jobId)
+    const job = jobOf(rig, jobId)
+    expect(job.failed.map((f) => [f.key, f.reason])).toEqual([[keyOf('2', 12), ALREADY_ON_DRIVE]])
+    expect(driveFiles(rig)).not.toContain(`${TITLE}/${TITLE} - 02 [Studio].mp4`)
+    const m = JSON.parse(
+      fs.readFileSync(path.join(root(rig), LIBRARY_DIR, 'manifest.json'), 'utf8')
+    )
+    expect(
+      m.items
+        .filter((i: SharedLibraryItem) => itemKey(i) === keyOf('2', 12))
+        .map((i: SharedLibraryItem) => i.path)
+    ).toEqual([`${TITLE}/${TITLE} - 02 [Studio] (theirs).mp4`])
+  })
+})
+
+describe('pre-fetch (#577) — the decision and the files agree (review of 8f2dacb4)', () => {
+  it('a merged .mkv here with a stray pair in the cold root: the .mkv is copied, the job ends', async () => {
+    rig = makePrefetchRig({ autoMerge: true })
+    const { a1 } = seedAlpha(rig)
+    const jobId = await start(rig, [a1], [pf('2', 12)])
+    await until(() => rig.ff.commands.length === 1, 'the merge')
+    await rig.svc.pause(jobId)
+    rig.ff.commands[0].finish('mkv-bytes')
+    await until(() => rig.dm.getMergeStatus(12) === 'completed', 'the merge')
+    // A stray pair in the cold root: the folder scan keeps the cold entry last.
+    const coldDir = path.join(rig.env.cold, TITLE)
+    fs.mkdirSync(coldDir, { recursive: true })
+    fs.writeFileSync(path.join(coldDir, `${TITLE} - 02 [Studio].mp4`), 'stray')
+    fs.writeFileSync(path.join(coldDir, `${TITLE} - 02 [Studio].ass`), 'stray')
+    await rig.svc.resume(jobId)
+    await rig.svc.settled(jobId)
+    expect(jobOf(rig, jobId).status).toBe('completed')
+    expect(driveFiles(rig)).toContain(`${TITLE}/${TITLE} - 02 [Studio].mkv`)
+    expect(rig.reads.filter((p) => p.endsWith(' - 02 [Studio].mp4'))).toEqual([])
+  })
+
+  it('a downloaded item whose downloadedEpisodes entry a kill lost is still found and copied (manual run)', async () => {
+    rig = makePrefetchRig()
+    const { a1 } = seedAlpha(rig)
+    rig.net.hold(12)
+    const jobId = await start(rig, [a1], [pf('2', 12)])
+    await until(() => jobOf(rig, jobId).filesDone === 1, 'the downloaded item')
+    await rig.svc.pause(jobId)
+    rig.net.release(12)
+    await until(() => rig.dm.getItem('sub-12')?.status === 'completed', 'the downloads')
+    await until(() => rig.dm.getItem('video-12')?.status === 'completed', 'the downloads')
+    // The store's coalesced write never reached the disk: the entry is gone after the restart.
+    await rig.boot(() => {
+      const entries = rig.env.store.get('downloadedEpisodes') as Record<string, unknown>
+      delete entries[keyOf('2', 12)]
+      rig.env.store.set('downloadedEpisodes', entries)
+    })
+    await rig.svc.resume(jobId)
+    await rig.svc.settled(jobId)
+    expect(jobOf(rig, jobId).failed).toEqual([])
+    expect(manifestKeys(rig)).toEqual([a1, keyOf('2', 12)].sort())
+  })
+
+  it("'completed' with only the pair on disk: the item fails after a few evaluations instead of waiting forever", async () => {
+    rig = makePrefetchRig()
+    const { a1 } = seedAlpha(rig)
+    rig.net.hold(12)
+    const jobId = await start(rig, [a1], [pf('2', 12)])
+    await until(() => jobOf(rig, jobId).filesDone === 1, 'the downloaded item')
+    // A status that outranks the disk: merged, but no .mkv here.
+    const internals = rig.dm as unknown as { mergeStatuses: Map<number, { status: string }> }
+    internals.mergeStatuses.set(12, { status: 'completed' })
+    rig.net.release(12)
+    await rig.svc.settled(jobId)
+    const job = jobOf(rig, jobId)
+    expect(job.status).toBe('completed')
+    expect(job.failed.map((f) => [f.key, f.reason])).toEqual([[keyOf('2', 12), NO_MERGED_FILE]])
   })
 })
 

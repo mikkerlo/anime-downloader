@@ -475,6 +475,12 @@ interface ExportTarget {
   present: string[]
   /** Of `present`, the unmerged pairs the library has as an `.mkv` an export merged (#623). */
   presentMerged: string[]
+  /**
+   * Not-downloaded episodes the library already has (#577), as the item keys of
+   * their translations it holds: shown as on the drive, never pre-fetched.
+   * Absent means none.
+   */
+  presentMissing?: string[]
 }
 
 interface ExportPlanRequest {

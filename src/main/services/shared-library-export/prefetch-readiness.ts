@@ -25,6 +25,8 @@ export interface PrefetchRow {
   error?: string
   bytesReceived: number
   totalBytes: number
+  /** The stream height the download used. */
+  quality?: number
 }
 
 export interface PrefetchState {

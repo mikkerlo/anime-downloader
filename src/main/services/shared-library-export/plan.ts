@@ -239,11 +239,24 @@ export async function buildTree(
   return { titles, resolved }
 }
 
-/** Seconds from a cached `Translation.duration`; null when it isn't a positive number. */
-function seconds(duration: string | undefined): number | null {
-  const n = Number(duration)
-  return Number.isFinite(n) && n > 0 ? n : null
+/**
+ * Seconds from a cached `Translation.duration`: plain seconds (`"1420.5"`) or
+ * a clock (`"24:00"`, `"1:02:03"`, the API fixtures' form); null when it's
+ * neither, or not positive.
+ */
+export function durationSeconds(duration: string | undefined): number | null {
+  if (typeof duration !== 'string' || duration.trim() === '') return null
+  const parts = duration.trim().split(':')
+  if (parts.length > 3) return null
+  let n = 0
+  for (const p of parts) {
+    const v = Number(p)
+    if (p.trim() === '' || !Number.isFinite(v) || v < 0) return null
+    n = n * 60 + v
+  }
+  return n > 0 ? n : null
 }
+const seconds = durationSeconds
 
 /** Every cached translation's duration, by translation id. */
 function translationDurations(cache: PlanCacheEntry | null): Map<number, number> {

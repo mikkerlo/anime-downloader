@@ -107,7 +107,12 @@ const notReencoded = computed(() =>
 const prefetchGate = ref<ExportPrefetchGate>('unavailable');
 const localFree = ref<number | null>(null);
 const choices = ref<Record<string, number>>({});
-const pre = computed(() => prefetchEstimate(titles.value, selected.value, choices.value));
+// Not-downloaded episodes the drive already has: shown as on it, never pre-fetched.
+const onDrive = computed(() => target.value?.presentMissing ?? []);
+const onDriveSet = computed(() => new Set(onDrive.value));
+const pre = computed(() =>
+  prefetchEstimate(titles.value, selected.value, choices.value, onDriveSet.value)
+);
 const totalBytes = computed(() => estimate.value.bytes + pre.value.bytes);
 const free = computed(() => target.value?.free ?? null);
 const fits = computed(() => fitsFreeSpace(totalBytes.value, free.value));
@@ -219,7 +224,7 @@ async function startExport(): Promise<void> {
   starting.value = true;
   error.value = '';
   try {
-    const prefetch = toPrefetch(titles.value, selected.value, choices.value);
+    const prefetch = toPrefetch(titles.value, selected.value, choices.value, onDriveSet.value);
     const result = await exportStore.start({
       selection: toSelection(titles.value, selected.value),
       ...(prefetch.length > 0 ? { prefetch } : {}),
@@ -254,6 +259,7 @@ async function startExport(): Promise<void> {
         :present="present"
         :prefetch="prefetchGate"
         :choices="choices"
+        :on-drive="onDrive"
         @update:selected="selected = $event"
         @update:choices="choices = $event"
       />

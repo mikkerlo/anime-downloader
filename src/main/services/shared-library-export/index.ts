@@ -208,15 +208,79 @@ export function createSharedLibraryExportService(
   const hotRoot = (): string | null => deps.downloadRoots?.()[0] ?? null
 
   /** Where a pre-fetched item's files are, by the names `enqueue` gives them. */
-  async function prefetchFiles(p: PrefetchRecord): Promise<{ mkv: boolean; video: boolean }> {
+  // A pre-fetched item's files (#577): the one place both the readiness
+  // decision and the copy learn what is on disk, so the two can't disagree.
+  // An `.mkv` in either root wins (step 4); else the `.mp4`, hot first, with
+  // the `.ass` beside it. No `downloadedEpisodes` entry is needed.
+  async function findPrefetchFiles(p: PrefetchRecord): Promise<{
+    mkv: { path: string; size: number } | null
+    mp4: { path: string; size: number; ass: { path: string; size: number } | null } | null
+  }> {
     const base = `${deps.sanitizeFilename(`${p.animeName} - ${p.episodeInt.padStart(2, '0')}`)} [${deps.sanitizeFilename(p.author)}]`
-    const out = { mkv: false, video: false }
+    let mkv: { path: string; size: number } | null = null
+    let mp4: { path: string; size: number; ass: { path: string; size: number } | null } | null =
+      null
     for (const root of deps.downloadRoots?.() ?? []) {
       const dir = path.join(root, deps.sanitizeFilename(p.animeName))
-      if (!out.mkv && (await pathExists(path.join(dir, `${base}.mkv`)))) out.mkv = true
-      if (!out.video && (await pathExists(path.join(dir, `${base}.mp4`)))) out.video = true
+      const at = (ext: string): string => path.join(dir, `${base}.${ext}`)
+      if (!mkv) {
+        const size = await fileSize(at('mkv'))
+        if (size !== null) mkv = { path: at('mkv'), size }
+      }
+      if (!mp4) {
+        const size = await fileSize(at('mp4'))
+        if (size !== null) {
+          const assSize = await fileSize(at('ass'))
+          mp4 = {
+            path: at('mp4'),
+            size,
+            ass: assSize === null ? null : { path: at('ass'), size: assSize }
+          }
+        }
+      }
     }
-    return out
+    return { mkv, mp4 }
+  }
+
+  async function resolvePrefetch(p: PrefetchRecord): Promise<ResolvedItem | 'missing' | 'busy'> {
+    if (['merging', 'deferred'].includes(deps.mergeStatus(p.translationId) ?? '')) return 'busy'
+    const { mkv, mp4 } = await findPrefetchFiles(p)
+    const quality =
+      deps.downloads?.getItem(`video-${p.translationId}`)?.quality ??
+      source.downloadedEpisodes()[p.key]?.quality ??
+      0
+    const common = {
+      key: p.key,
+      animeId: p.animeId,
+      episodeInt: p.episodeInt,
+      translationId: p.translationId,
+      translationType: p.translationType,
+      author: p.author,
+      quality,
+      title: p.animeName,
+      label: p.label
+    }
+    if (mkv) {
+      return {
+        ...common,
+        videoPath: mkv.path,
+        ext: '.mkv',
+        videoSize: mkv.size,
+        subtitlePath: null,
+        subtitleSize: 0
+      }
+    }
+    if (mp4) {
+      return {
+        ...common,
+        videoPath: mp4.path,
+        ext: '.mp4',
+        videoSize: mp4.size,
+        subtitlePath: mp4.ass?.path ?? null,
+        subtitleSize: mp4.ass?.size ?? 0
+      }
+    }
+    return 'missing'
   }
 
   const downloads = deps.downloads
@@ -225,7 +289,11 @@ export function createSharedLibraryExportService(
     mergeStatus: (tr) => deps.mergeStatus(tr) as MergeStatus | null,
     mergeExpected: deps.mergeExpected ?? (async () => false),
     mergeInFlight: () => downloads.isMergeCycleActive() || downloads.hasHeldMerge(),
-    files: prefetchFiles,
+    files: async (p) => {
+      const { mkv, mp4 } = await findPrefetchFiles(p)
+      return { mkv: mkv !== null, video: mp4 !== null }
+    },
+    resolve: resolvePrefetch,
     isOffline: () => deps.isOffline?.() ?? false,
     now,
     onVideoDownloaded: (cb) => downloads.onVideoDownloaded(cb),
@@ -501,9 +569,37 @@ export function createSharedLibraryExportService(
         blocked: t.blocked,
         free: await freeBytes(req.target),
         present,
-        presentMerged: present.filter((k) => there.get(k) === 'merged')
+        presentMerged: present.filter((k) => there.get(k) === 'merged'),
+        presentMissing: onDriveMissing(titles, t.manifest)
       }
     }
+  }
+
+  /**
+   * Not-downloaded episodes the library already has (#577), as the item keys
+   * of their options it holds. The key alone decides: there is no local file
+   * to compare sizes with, which is what `presence` does for a downloaded one.
+   */
+  function onDriveMissing(
+    titles: readonly ExportTreeTitle[],
+    manifest: SharedLibraryManifest | null
+  ): string[] {
+    if (!manifest) return []
+    const there = new Set(manifest.items.map(itemKey))
+    const out: string[] = []
+    for (const t of titles) {
+      for (const e of t.notDownloaded) {
+        for (const o of e.options) {
+          const key = itemKey({
+            animeId: t.animeId,
+            episodeInt: e.episodeInt,
+            translationId: o.translationId
+          })
+          if (there.has(key)) out.push(key)
+        }
+      }
+    }
+    return out
   }
 
   async function start(req: ExportStartRequest): Promise<ExportStartResult> {
@@ -515,6 +611,7 @@ export function createSharedLibraryExportService(
     if (t.blocked) return { ok: false, reason: t.blocked }
 
     const keys = [...new Set(req.selection.map((s) => itemKey(s)))]
+    const manifestKeys = new Set((t.manifest?.items ?? []).map(itemKey))
     // Pre-fetch (#577): each not-downloaded episode, in the cached translation picked.
     const picks: PrefetchPick[] = []
     const picked = new Set<string>()
@@ -522,6 +619,9 @@ export function createSharedLibraryExportService(
       const key = itemKey(p)
       if (picked.has(key) || keys.includes(key)) continue
       picked.add(key)
+      // Already on the drive (exported earlier, deleted here since): never
+      // downloaded again, counted or written over.
+      if (manifestKeys.has(key)) continue
       // Downloaded since the dialog opened: exported like any downloaded item.
       if (resolved.has(key)) {
         keys.push(key)

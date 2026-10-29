@@ -54,6 +54,12 @@ import { writeTitleSnapshot } from './snapshot'
 
 /** No room left on the target for a pre-fetched file, measured at its copy (#577). */
 export const NO_SPACE_ON_DRIVE = 'Not enough space on the drive'
+/** A pre-fetched key the drive got after the start (#577): never written over. */
+export const ALREADY_ON_DRIVE = 'Already on the drive'
+/** Merged by its status, but only the unmerged pair is on this PC (#577). */
+export const NO_MERGED_FILE = 'Merged, but its .mkv isn’t on this PC'
+/** Evaluations that may say `.mkv` while only the pair is on disk before the item fails. */
+export const PREFETCH_MISMATCH_LIMIT = 3
 
 /** One planned item: its names on the drive are fixed at start, so a resume never renames. */
 export interface JobItem {
@@ -106,6 +112,8 @@ export interface PrefetchJobDeps {
   mergeInFlight: () => boolean
   /** Whether the item's `.mkv` and final `.mp4` are in the hot or cold root. */
   files: (p: PrefetchRecord) => Promise<{ mkv: boolean; video: boolean }>
+  /** The item on disk, from the same files as `files`: its `.mkv` if there is one, else the pair. */
+  resolve: (p: PrefetchRecord) => Promise<ResolvedItem | 'missing' | 'busy'>
   isOffline: () => boolean
   now: () => number
   /** Listener lists (#574): each returns its unsubscribe. */
@@ -232,6 +240,7 @@ export class ExportJob {
   // its last decision (for the card).
   private prefetchMemo = new Map<string, PrefetchMemory>()
   private prefetchLast = new Map<string, PrefetchDecision>()
+  private mismatches = new Map<string, number>()
 
   constructor(
     readonly rec: JobRecord,
@@ -641,7 +650,7 @@ export class ExportJob {
         continue
       }
       if (outcome === 'gone') {
-        const again = await this.deps.resolve(item)
+        const again = await this.resolveFor(item)
         if (typeof again !== 'object' || ++gone > 2) throw new Error('the source file is gone')
         source = again
         continue
@@ -718,14 +727,27 @@ export class ExportJob {
     p: PrefetchRecord,
     d: Extract<PrefetchDecision, { kind: 'ready' }>
   ): Promise<boolean> {
-    const r = await this.deps.resolve(p)
+    // The manifest as it is now (read again if it changed), so the name below
+    // avoids an entry another PC added meanwhile. A lost drive shows at the copy.
+    await this.identityOk()
+    const r = await this.deps.prefetch!.resolve(p)
     // A merge started since the decision: the next evaluation waits for it.
     if (r === 'busy') return false
     if (r === 'missing') {
       this.rec.failed[p.key] = 'the source file is gone'
       return false
     }
-    if ((d.as === 'mkv') !== (r.ext === '.mkv')) return false
+    // The decision and the copy read the same files (`resolve`), so they
+    // disagree only when a status outranks the disk: `'completed'` with no
+    // `.mkv` there. An `.mkv` on disk is planned whatever the decision said;
+    // the other way is given up on after a few evaluations, so the job ends.
+    if (d.as === 'mkv' && r.ext !== '.mkv') {
+      const n = (this.mismatches.get(p.key) ?? 0) + 1
+      this.mismatches.set(p.key, n)
+      if (n >= PREFETCH_MISMATCH_LIMIT) this.rec.failed[p.key] = NO_MERGED_FILE
+      return false
+    }
+    this.mismatches.delete(p.key)
     const merge = this.rec.unmerged === 'merge' && r.subtitlePath !== null
     const reencode = merge && (this.rec.codec ?? 'copy') !== 'copy'
     const size = merge ? r.videoSize + r.subtitleSize : Math.max(r.videoSize, r.subtitleSize)
@@ -736,10 +758,9 @@ export class ExportJob {
       }
       return false
     }
-    const taken = [
-      ...(this.base?.items ?? []).filter((i) => itemKey(i) !== p.key),
-      ...this.rec.items.filter((i) => i.key !== p.key)
-    ]
+    // Every library item, its own key's included: an entry another PC added is
+    // never named over (the copy step then fails the item).
+    const taken = [...(this.base?.items ?? []), ...this.rec.items.filter((i) => i.key !== p.key)]
     const [named] = nameItems(
       [
         {
@@ -769,7 +790,7 @@ export class ExportJob {
       ...(merge
         ? { videoSize: r.videoSize + r.subtitleSize, subtitleSize: 0, merge: true }
         : { videoSize: r.videoSize, subtitleSize: r.subtitleSize }),
-      prefetch: { pair: d.as === 'pair' }
+      prefetch: { pair: r.ext !== '.mkv' }
     })
     p.state = 'planned'
     if (d.warning) p.warning = d.warning
@@ -922,6 +943,14 @@ export class ExportJob {
       if (this.rec.status !== 'running') await this.setStatus('running')
       if (!(await this.identityOk())) throw new DriveGoneError('the library is not at its root')
       const pre = this.prefetchOf(item)
+      // Another PC added this key since the start (`start` leaves out a key the
+      // drive has): never written over. Planning names it against every library
+      // item, so another PC's entry has another path; the same path is this
+      // job's own, from a run a kill cut short.
+      if (pre && this.base?.items.some((i) => itemKey(i) === item.key && i.path !== item.path)) {
+        this.rec.failed[item.key] = ALREADY_ON_DRIVE
+        continue
+      }
       // A pre-fetched pair is checked again just before its copy: a merge may
       // have started on it since it was planned (#577).
       if (pre && item.prefetch?.pair && this.deps.prefetch) {
@@ -932,8 +961,13 @@ export class ExportJob {
           continue
         }
       }
-      let source = await this.deps.resolve(item)
-      if (source === 'busy' && pre) {
+      let source = await this.resolveFor(item)
+      // A merge started, or finished, since it was planned: planned again.
+      if (
+        pre &&
+        (source === 'busy' ||
+          (typeof source === 'object' && (source.ext === '.mkv') === !!item.prefetch?.pair))
+      ) {
         await this.unplan(item)
         continue
       }
@@ -955,7 +989,7 @@ export class ExportJob {
           // A pre-fetched source an auto-move took to cold mid-copy: found
           // again and copied once more (#577).
           if (!pre || errnoOf(err) !== 'ENOENT' || (await this.sourceThere(source))) throw err
-          const again = await this.deps.resolve(item)
+          const again = await this.resolveFor(item)
           if (typeof again !== 'object') throw err
           source = again
           if (item.merge) await this.mergeItem(item, source)
@@ -1006,6 +1040,12 @@ export class ExportJob {
       if (this.sinceCheckpoint >= this.deps.checkpointEvery) await this.checkpoint()
     }
     return 'done'
+  }
+
+  /** An item's source now: a pre-fetched one from the files its readiness reads (#577). */
+  private resolveFor(item: JobItem): Promise<ResolvedItem | 'missing' | 'busy'> {
+    const p = this.prefetchOf(item)
+    return p && this.deps.prefetch ? this.deps.prefetch.resolve(p) : this.deps.resolve(item)
   }
 
   /** Whether the source's files are all still on this PC. */

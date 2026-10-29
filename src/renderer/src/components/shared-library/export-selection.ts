@@ -48,16 +48,37 @@ export function prefetchKey(animeId: number, episodeInt: string): string {
   return `pf:${animeId}:${episodeInt}`
 }
 
+const NONE: ReadonlySet<string> = new Set()
+
+/**
+ * Whether the target already has `e` (`ExportTarget.presentMissing`): one of
+ * its options' item keys is in `onDrive`. It is never pre-fetched.
+ */
+export function missingOnDrive(
+  animeId: number,
+  e: ExportNotDownloaded,
+  onDrive: ReadonlySet<string>
+): boolean {
+  return e.options.some((o) => onDrive.has(`${animeId}:${e.episodeInt}:${o.translationId}`))
+}
+
 /** The not-downloaded episodes of `title` that can be pre-fetched, as keys. */
-export function prefetchKeys(title: ExportTreeTitle): string[] {
+export function prefetchKeys(
+  title: ExportTreeTitle,
+  onDrive: ReadonlySet<string> = NONE
+): string[] {
   return title.notDownloaded
-    .filter((e) => e.options.length > 0)
+    .filter((e) => e.options.length > 0 && !missingOnDrive(title.animeId, e, onDrive))
     .map((e) => prefetchKey(title.animeId, e.episodeInt))
 }
 
 /** A title node's keys: its ready episodes, plus its pre-fetchable ones when pre-fetch is on. */
-export function nodeKeys(title: ExportTreeTitle, prefetch: boolean): string[] {
-  return prefetch ? [...titleKeys(title), ...prefetchKeys(title)] : titleKeys(title)
+export function nodeKeys(
+  title: ExportTreeTitle,
+  prefetch: boolean,
+  onDrive: ReadonlySet<string> = NONE
+): string[] {
+  return prefetch ? [...titleKeys(title), ...prefetchKeys(title, onDrive)] : titleKeys(title)
 }
 
 /** The option picked for a not-downloaded episode: `choices[key]`, else the default (first). */
@@ -74,13 +95,15 @@ export function pickedOption(
 export function toPrefetch(
   titles: readonly ExportTreeTitle[],
   selected: ReadonlySet<string>,
-  choices: Readonly<Record<string, number>>
+  choices: Readonly<Record<string, number>>,
+  onDrive: ReadonlySet<string> = NONE
 ): ExportSelectionItem[] {
   const out: ExportSelectionItem[] = []
   for (const t of titles) {
     for (const e of t.notDownloaded) {
       const key = prefetchKey(t.animeId, e.episodeInt)
-      if (!selected.has(key)) continue
+      // Selected before the folder was picked, but the drive has it.
+      if (!selected.has(key) || missingOnDrive(t.animeId, e, onDrive)) continue
       const o = pickedOption(e, key, choices)
       if (o)
         out.push({ animeId: t.animeId, episodeInt: e.episodeInt, translationId: o.translationId })
@@ -93,13 +116,14 @@ export function toPrefetch(
 export function prefetchEstimate(
   titles: readonly ExportTreeTitle[],
   selected: ReadonlySet<string>,
-  choices: Readonly<Record<string, number>>
+  choices: Readonly<Record<string, number>>,
+  onDrive: ReadonlySet<string> = NONE
 ): { items: number; bytes: number; unknown: number } {
   const out = { items: 0, bytes: 0, unknown: 0 }
   for (const t of titles) {
     for (const e of t.notDownloaded) {
       const key = prefetchKey(t.animeId, e.episodeInt)
-      if (!selected.has(key)) continue
+      if (!selected.has(key) || missingOnDrive(t.animeId, e, onDrive)) continue
       const o = pickedOption(e, key, choices)
       if (!o) continue
       out.items++

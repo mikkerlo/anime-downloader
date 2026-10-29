@@ -82,6 +82,20 @@ describe('pre-fetch selection helpers (#577)', () => {
     expect(nodeKeys(TITLES[0], true)).toEqual(['1:1:11', PF2, PF3])
   })
 
+  it('an episode the drive has, in any of its translations, is left out of the node, the list and the estimate (review)', () => {
+    const onDrive = new Set(['1:2:92'])
+    expect(nodeKeys(TITLES[0], true, onDrive)).toEqual(['1:1:11', PF3])
+    const selected = new Set([PF2, PF3])
+    expect(toPrefetch(TITLES, selected, {}, onDrive)).toEqual([
+      { animeId: 1, episodeInt: '3', translationId: 13 }
+    ])
+    expect(prefetchEstimate(TITLES, selected, {}, onDrive)).toEqual({
+      items: 1,
+      bytes: 0,
+      unknown: 1
+    })
+  })
+
   it('sends the picked translation (the first by default), and counts unknown sizes apart', () => {
     const selected = new Set([PF2, PF3])
     expect(toPrefetch(TITLES, selected, {})).toEqual([
@@ -149,7 +163,13 @@ describe('ExportTree.vue missing episodes (#577)', () => {
 describe('ExportDialog.vue pre-fetch (#577)', () => {
   let api: Record<string, ReturnType<typeof vi.fn> | (() => () => void)>
 
-  async function open(free: number, localFree: number | null, prefetch: ExportPrefetchGate = 'ok') {
+  async function open(
+    free: number,
+    localFree: number | null,
+    prefetch: ExportPrefetchGate = 'ok',
+    presentMissing: string[] = [],
+    beforePick?: (w: ReturnType<typeof mount>) => Promise<void>
+  ) {
     api = {
       exportPlan: vi.fn(async (req: ExportPlanRequest) => ({
         titles: TITLES,
@@ -166,7 +186,8 @@ describe('ExportDialog.vue pre-fetch (#577)', () => {
               blocked: null,
               free,
               present: [],
-              presentMerged: []
+              presentMerged: [],
+              presentMissing
             }
           : null
       })),
@@ -178,10 +199,32 @@ describe('ExportDialog.vue pre-fetch (#577)', () => {
     ;(window as unknown as { api: unknown }).api = api
     const w = mount(ExportDialog, { props: { animeIds: [1], preselect: true } })
     await flushPromises()
+    await beforePick?.(w)
     await w.find('[data-testid="export-pick"]').trigger('click')
     await flushPromises()
     return w
   }
+
+  it('an episode the drive already has: "On the drive", out of the title node, never sent — even if picked before the folder (review)', async () => {
+    const w = await open(1024 ** 3, 2 * 1024 ** 3, 'ok', ['1:2:12'], async (x) => {
+      // Before a folder is picked, the title node takes every missing episode.
+      await x.find('[data-testid="tree-title-1"]').trigger('change')
+      await flushPromises()
+    })
+    const row = w.find('[data-testid="tree-missing-1-2"]')
+    expect(row.text()).toContain('On the drive')
+    expect((w.find('[data-testid="tree-prefetch-1-2"]').element as HTMLInputElement).disabled).toBe(
+      true
+    )
+    // Only episode 3 is downloaded first: none of episode 2's 350 MB is counted.
+    expect(w.find('[data-testid="export-local-space"]').text()).toContain('(1 episodes)')
+    expect(w.find('[data-testid="export-local-space"]').text()).not.toContain('350')
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(
+      expect.objectContaining({ prefetch: [{ animeId: 1, episodeInt: '3', translationId: 13 }] })
+    )
+  })
 
   it('counts the estimate on the drive and on this PC, notes the unknown ones, and sends the pre-fetch', async () => {
     const w = await open(1024 ** 3, 2 * 1024 ** 3)

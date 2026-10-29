@@ -112,6 +112,16 @@ function badgesOf(a: LocalSearchResult): LocalSource[] {
   return starredIds.has(a.id) ? [{ kind: 'starred' }, ...rest] : rest;
 }
 
+// A title on this PC and on a drive asks for the bare poster form, which main
+// serves from the drive on a poster-cache miss (#629). A drive-only result
+// already points at its library's own poster.
+function posterOnDrive(a: LocalSearchResult): boolean {
+  return (
+    a.localSources.some((s) => s.kind === 'shared') &&
+    !a.posterUrlSmall.startsWith(`${POSTER_SCHEME}shared/`)
+  );
+}
+
 function clearLocal(): void {
   localGeneration++;
   localAll.value = [];
@@ -373,6 +383,7 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
               :anime="anime"
               :starred="starredIds.has(anime.id)"
               :prioritized="priorityIds.has(anime.id)"
+              :on-drive="posterOnDrive(anime)"
               @toggle-star="toggleStar(plain(anime))"
               @toggle-priority="togglePriority(plain(anime))"
               @click="libraryStore.openAnime(anime.id)"

@@ -603,3 +603,70 @@ describe('SearchView — titles on an attached Shared Library (#583)', () => {
     expect(cardIds(wrapper, '.remote-grid')).toEqual([7])
   })
 })
+
+describe('SearchView — a title on this PC and on a drive asks for the bare poster (#629)', () => {
+  const LIB = '5d7c1f3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f'
+  const stick: LocalSource = { kind: 'shared', libraryId: LIB, libraryName: 'Stick' }
+  const REMOTE = 'https://example.invalid/7.jpg'
+
+  async function posterOf(
+    results: LocalSearchResult[],
+    mode: 'online' | 'offline-manual' = 'offline-manual'
+  ): Promise<{ wrapper: VueWrapper; src: () => string | undefined }> {
+    stubApi(
+      {
+        searchLocal: vi.fn().mockResolvedValue({ results, corpusSize: results.length }),
+        getCachedPosterIds: vi.fn().mockResolvedValue([])
+      },
+      mode
+    )
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await submit(wrapper, 'anime')
+    return {
+      wrapper,
+      src: () => wrapper.find('[data-testid="local-card"] img.poster').attributes('src')
+    }
+  }
+
+  it('offline, starred here and on a drive, uncached: the bare anime-poster://<id>', async () => {
+    const { src } = await posterOf([local(7, ['starred', stick])])
+    expect(src()).toBe('anime-poster://7')
+  })
+
+  it('online too: the drive poster replaces the remote one in "In your library"', async () => {
+    const { wrapper, src } = await posterOf([local(7, ['starred', stick])], 'online')
+    expect(wrapper.find('[data-testid="local-section"] h3').text()).toBe('In your library')
+    expect(src()).toBe('anime-poster://7')
+  })
+
+  it('a starred-only title with an uncached id keeps the remote URL', async () => {
+    const { src } = await posterOf([local(7, ['starred'])])
+    expect(src()).toBe(REMOTE)
+  })
+
+  it('a drive-only title keeps its anime-poster://shared/... URL', async () => {
+    const { src } = await posterOf([
+      local(7, [stick], { posterUrlSmall: `anime-poster://shared/${LIB}/7` })
+    ])
+    expect(src()).toBe(`anime-poster://shared/${LIB}/7`)
+  })
+
+  it('a record already storing the bare anime-poster://<id> renders exactly that', async () => {
+    const { src } = await posterOf([
+      local(7, ['starred', stick], { posterUrlSmall: 'anime-poster://7' })
+    ])
+    expect(src()).toBe('anime-poster://7')
+  })
+
+  it('an error on the bare form falls back to the remote URL once, and stays there', async () => {
+    const { wrapper, src } = await posterOf([local(7, ['starred', stick])])
+    const img = (): ReturnType<VueWrapper['find']> =>
+      wrapper.find('[data-testid="local-card"] img.poster')
+    expect(src()).toBe('anime-poster://7')
+    await img().trigger('error')
+    expect(src()).toBe(REMOTE)
+    await img().trigger('error')
+    expect(src()).toBe(REMOTE)
+  })
+})

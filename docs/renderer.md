@@ -126,12 +126,12 @@ Tests: one component test per view under `offline: true` and `offline: false` in
 
 ### Search over local titles (#571)
 
-`SearchView` calls `window.api.searchLocal` (`search:local`, see [IPC](./ipc.md)); the matcher and corpus stay in main. A query under 2 code points runs no local search: offline the view shows "Type at least 2 characters" and calls nothing, online only the remote search runs. Each local hit renders as the usual `AnimeCard` (local poster via `libraryStore.loadPosterIds()` + `getPosterSrc`) in a `.local-card` wrapper with a badge per `LocalSource` kind (Starred / Downloaded / Watching); a starred source fills the star without `libraryHas`, starring from a local card stores the plain `AnimeSearchResult`, and the Starred badge follows `starredIds` (`badgesOf`) rather than the search snapshot.
+`SearchView` calls `window.api.searchLocal` (`search:local`, see [IPC](./ipc.md)); the matcher and corpus stay in main. A query under 2 code points runs no local search: offline the view shows "Type at least 2 characters" and calls nothing, online only the remote search runs. Each local hit renders as the usual `AnimeCard` (local poster via `libraryStore.loadPosterIds()` + `getPosterSrc`) in a `.local-card` wrapper with a badge per `LocalSource` (Starred / Downloaded / Watching, and "On <library name>" with a drive icon for each available attached Shared Library holding the title, #583, see [Shared Library](./shared-library.md#search-583)); a starred source fills the star without `libraryHas`, starring from a local card stores the plain `AnimeSearchResult`, and the Starred badge follows `starredIds` (`badgesOf`) rather than the search snapshot.
 
 - **Offline:** the local hits replace the results, uncapped, with genre and status (`listStatus`) chips built from the unfiltered hits; a chip re-queries main with `{ genre, status }`. A filter only refines the landed query: chips are inert while a newer search is in flight, and a filter in flight yields to any search submitted after it (its own `filterGeneration` counter, checked against `localGeneration`). No hits: "Nothing saved on this PC matches"; an empty corpus: the `OfflineNotice`.
 - **Online:** the local query starts first and its **In your library** section (6 cards, "Show all") renders above the remote results, which drop any id the section shows. A failed local search leaves the remote one untouched.
 
-Tests: `test/renderer/components/search-view-local.test.ts`, and the Search step of `e2e/offline-library.spec.ts`.
+Tests: `test/renderer/components/search-view-local.test.ts`, the Search step of `e2e/offline-library.spec.ts`, and the drive-title Search steps of `e2e/shared-library-open.spec.ts`.
 
 ## Composables
 

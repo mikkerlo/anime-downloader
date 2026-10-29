@@ -11,7 +11,8 @@ export function register({
   animeCacheService,
   rememberAnimeMeta,
   offlineService,
-  recentWatch
+  recentWatch,
+  attachedLibraryService
 }: AppDeps): void {
   // Shared cache read for the cache-first channel + the network-first
   // error-fallback (#196) so the two reads can't drift: id → cached episode
@@ -32,7 +33,10 @@ export function register({
 
   // Local search (#571): one read of each key per call, so one clone of
   // `animeCache` per search. Fine on submit; an as-you-type search would need a
-  // corpus cached in main and invalidated on writes to these keys.
+  // corpus cached in main and invalidated on writes to these keys. Attached
+  // Shared Libraries (#583) come from the service's in-memory manifests, taken
+  // fresh each call, so a library S7c (#581) marks unavailable drops out on
+  // the next query; nothing here reads the drive.
   ipcMain.handle(
     CHANNELS.SEARCH_LOCAL,
     (_event, query: string, filters?: LocalSearchFilters): LocalSearchResponse => {
@@ -46,7 +50,8 @@ export function register({
         shikimoriAnimeDetails: store.get(
           'shikimoriAnimeDetails'
         ) as LocalSearchSnapshot['shikimoriAnimeDetails'],
-        isRecentlyWatched: (animeId) => recentWatch.has(animeId)
+        isRecentlyWatched: (animeId) => recentWatch.has(animeId),
+        attached: attachedLibraryService.availableSnapshots()
       })
       return { results: searchLocal(corpus, query, filters), corpusSize: corpus.length }
     }

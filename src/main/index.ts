@@ -789,7 +789,8 @@ async function bootstrap(): Promise<void> {
     'anime-poster',
     createAnimePosterHandler({
       posterDir: animeCacheService.getPosterCacheDir(),
-      attachedPoster: (id) => attachedLibraryService.posterFor(id)
+      attachedPoster: (id) => attachedLibraryService.posterFor(id),
+      libraryPoster: (libraryId, id) => attachedLibraryService.libraryPosterFor(libraryId, id)
     })
   )
 

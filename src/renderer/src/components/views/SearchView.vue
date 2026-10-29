@@ -5,6 +5,7 @@ import AnimeCard from '../shared/AnimeCard.vue';
 import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
+import { POSTER_SCHEME } from '../../utils';
 
 const libraryStore = useLibraryStore();
 const { isOffline } = storeToRefs(useOfflineStore());
@@ -57,11 +58,20 @@ const STATUS_CHIPS: { id: ShikiUserRateStatus; label: string }[] = [
   { id: 'on_hold', label: 'On hold' },
   { id: 'dropped', label: 'Dropped' }
 ];
-const SOURCE_LABELS: Record<LocalSource['kind'], string> = {
+const SOURCE_LABELS: Record<Exclude<LocalSource['kind'], 'shared'>, string> = {
   starred: 'Starred',
   downloaded: 'Downloaded',
   watching: 'Watching'
 };
+
+// A drive title (#583) names its library; the name is drive input, rendered as text.
+function badgeLabel(s: LocalSource): string {
+  return s.kind === 'shared' ? `On ${s.libraryName}` : SOURCE_LABELS[s.kind];
+}
+
+function badgeKey(s: LocalSource): string {
+  return s.kind === 'shared' ? `shared:${s.libraryId}` : s.kind;
+}
 
 // `localAll` is the unfiltered hit list the chips are built from; the chips
 // re-query main with `genre` / `status`.
@@ -211,9 +221,14 @@ async function search(): Promise<void> {
 }
 
 // A local hit without its search-only fields, so starring it from here stores
-// the same record a remote card would.
+// the same record a remote card would. A drive title's poster is stored as
+// `anime-poster://<id>`, as the Shared Libraries tab stars it: that form keeps
+// serving from the snapshot cache once the drive is unplugged (#582).
 function plain(a: LocalSearchResult): AnimeSearchResult {
-  const { id, title, titles, posterUrlSmall, numberOfEpisodes, type, typeTitle, year, season } = a;
+  const { id, title, titles, numberOfEpisodes, type, typeTitle, year, season } = a;
+  const posterUrlSmall = a.posterUrlSmall.startsWith(`${POSTER_SCHEME}shared/`)
+    ? `${POSTER_SCHEME}${id}`
+    : a.posterUrlSmall;
   return { id, title, titles, posterUrlSmall, numberOfEpisodes, type, typeTitle, year, season };
 }
 
@@ -365,10 +380,27 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
             <div class="local-badges">
               <span
                 v-for="s in badgesOf(anime)"
-                :key="s.kind"
+                :key="badgeKey(s)"
                 class="local-badge"
                 :class="`src-${s.kind}`"
-                >{{ SOURCE_LABELS[s.kind] }}</span
+                :data-testid="s.kind === 'shared' ? 'drive-badge' : undefined"
+                :title="s.kind === 'shared' ? badgeLabel(s) : undefined"
+                ><svg
+                  v-if="s.kind === 'shared'"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="11"
+                  height="11"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M4 14h16v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5zm0 0l2.5-9h11L20 14M8 17h.01"
+                  /></svg
+                ><span class="badge-text">{{ badgeLabel(s) }}</span></span
               >
             </div>
           </div>
@@ -591,6 +623,7 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
   position: absolute;
   top: 8px;
   left: 8px;
+  right: 40px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -618,6 +651,24 @@ async function togglePriority(anime: AnimeSearchResult): Promise<void> {
 
 .local-badge.src-watching {
   color: var(--st-blue);
+}
+
+.local-badge.src-shared {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  color: var(--st-purple);
+}
+
+.local-badge.src-shared svg {
+  flex-shrink: 0;
+}
+
+.local-badge.src-shared .badge-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-text {

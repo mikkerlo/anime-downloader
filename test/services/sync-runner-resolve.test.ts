@@ -461,6 +461,47 @@ describe('a claim PC', () => {
     expect(fs.existsSync(path.join(pc.userData, 'sync-pending'))).toBe(false)
   })
 
+  it('a library with nothing to put the choice on (no rate on the drive, here or in its base) is left as it is, and the note says so', async () => {
+    const { root, libraryId } = await makeLibrary({
+      doc: titleDoc({ watch: { '1': watch(true, T0, 0, 'pc-other') } })
+    })
+    const pc = makePc({ user: null, installId: 'pc-claim' })
+    await pc.attach(root, { claim: true })
+    await seedBase(
+      pc,
+      libraryId,
+      root,
+      titleDoc({ watch: { '1': watch(true, T0, 0, 'pc-other') } })
+    )
+    seedConflicts(pc, [
+      {
+        id: 'c-bare',
+        ownerScope: OWNER.id,
+        animeId: ID,
+        fieldPath: 'rate.score',
+        parties: { local: 7, [`library:${libraryId}`]: 8 },
+        bases: { [`library:${libraryId}`]: 6 },
+        at: {},
+        suggestion: null,
+        reason: 'changed on both sides, to different values',
+        firstSeenRunId: 'r1',
+        lastSeenRunId: 'r1'
+      }
+    ])
+    const gen = await driveGeneration(root)
+    const res = await pc.runner.resolve(['c-bare'], { 'c-bare': keep('local') })
+    expect(res.resolved).toEqual(['c-bare'])
+    expect(res.notes).toEqual([
+      {
+        id: 'c-bare',
+        text: `${pc.attached.get(libraryId)!.name} has no entry for this field yet, so the choice wasn't written there.`
+      }
+    ])
+    expect(await driveGeneration(root)).toBe(gen)
+    expect((await driveDoc(root))!.titles![ID].rate).toBeUndefined()
+    expect(queue(pc)).toEqual([])
+  })
+
   it('a watched conflict (unwatched here, re-watched on the drive): Combine keeps the re-watch here and on the drive', async () => {
     const { root, libraryId } = await makeLibrary({
       doc: titleDoc({ watch: { '1': watch(true, T0 + 200, 0, 'pc-other') } })

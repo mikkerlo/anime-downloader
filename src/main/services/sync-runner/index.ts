@@ -1413,6 +1413,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       const fallback = local?.titles[animeId!] ?? base?.doc.titles[animeId!]
       if (!putField(doc, animeId!, rec, value, clock, fallback)) {
         await holdForNextRun(lib)
+        notes.push(
+          `${lib.name} has no entry for this field yet, so the choice wasn't written there.`
+        )
         continue
       }
       let stateGeneration: number

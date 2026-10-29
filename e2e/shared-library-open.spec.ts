@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -184,6 +185,122 @@ test('a library found on a drive, unplugged, re-plugged at a new path, then forg
       'No Shared Library is open.'
     )
     expect(tree(relettered)).toEqual(before)
+  } finally {
+    try {
+      if (launched) assertNoDownloads(launched)
+    } finally {
+      await launched?.app.close()
+      profile.cleanup()
+    }
+  }
+})
+
+/**
+ * A drive pulled mid-episode (#582). Renaming the library dir doesn't break the
+ * ffmpeg run that is already reading (its fd stays open), so the spec seeks
+ * past what the player has buffered: the respawn on the gone file fails, main
+ * classifies it as `drive-disconnected`, and the player shows the overlay
+ * instead of an error or a hang. Renamed back, Retry re-resolves the episode
+ * and reopens it at the position saved when the drive went away.
+ *
+ * The `.mkv` is a 140 s synthetic file at about 15 Mbit/s (noise doesn't
+ * compress). Main stops sending 64 MB past what the player has appended, which
+ * is then about 35 s of it, so 130 s has not reached the renderer: the seek
+ * must respawn ffmpeg. A small file would be sent whole, and the seek would
+ * land in the append queue instead.
+ */
+test('a drive disconnected mid-episode: the overlay, then Retry once it is back', async () => {
+  const profile = makeProfile({
+    prefix: 'anime-dl-shared-disconnect-',
+    config: { playerMode: 'builtin' }
+  })
+  const drive = path.join(profile.root, 'drive', 'Fixture library')
+  fs.cpSync(FIXTURE, drive, { recursive: true })
+  const mkv = path.join(drive, 'Dungeon Meshi', 'Dungeon Meshi - 01 [AniLibria].mkv')
+  const built = spawnSync(
+    'ffmpeg',
+    [
+      ...['-hide_banner', '-loglevel', 'error', '-y'],
+      ...['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24'],
+      ...['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000'],
+      ...['-t', '140', '-vf', 'noise=alls=30:allf=t', '-c:v', 'libx264'],
+      ...['-preset', 'ultrafast', '-crf', '26', '-g', '48', '-threads', '4'],
+      ...['-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '32k', mkv]
+    ],
+    { encoding: 'utf-8' }
+  )
+  expect(built.status, built.stderr).toBe(0)
+  const away = path.join(profile.root, 'unplugged')
+
+  let launched: LaunchedApp | undefined
+  try {
+    launched = await launchApp(profile)
+    const { app } = launched
+    await assertUserData(app, profile)
+    await app.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as never
+    }, path.dirname(drive))
+    const page = await app.firstWindow()
+    // The player's own lines, for the failure message.
+    const playerLog: string[] = []
+    page.on('console', (m) => {
+      if (m.text().startsWith('[player]')) playerLog.push(m.text())
+    })
+    await page.waitForLoadState('domcontentloaded')
+    const focus = (): Promise<void> =>
+      app.evaluate(({ app: electronApp }) => {
+        electronApp.emit('browser-window-focus')
+      })
+
+    await page.locator('.sidebar').getByRole('button', { name: 'Library', exact: true }).click()
+    await page.locator('.library-view').getByTestId('open-shared-library').click()
+    await page.getByTestId('use-videos').click()
+    await page.getByTestId('show-library').click()
+    const cards = page.getByTestId('drive-title')
+    await playAndWait(page, cards.filter({ hasText: 'Dungeon Meshi' }))
+    const video = page.locator('video').first()
+    const time = (): Promise<number> => video.evaluate((v) => (v as HTMLVideoElement).currentTime)
+    const buffered = (): Promise<number> =>
+      video.evaluate((v) => {
+        const b = (v as HTMLVideoElement).buffered
+        return b.length ? b.end(b.length - 1) : 0
+      })
+
+    // Unplugged mid-episode, then a seek outside the buffer: the next open fails.
+    // Paused first, as the @mkv-sync spec does, so no timeupdate pumps the
+    // append queue during the respawn's debounce.
+    await video.evaluate((v) => (v as HTMLVideoElement).pause())
+    await page.waitForTimeout(500)
+    expect(await buffered()).toBeLessThan(120)
+    fs.renameSync(drive, away)
+    await video.evaluate((v) => {
+      ;(v as HTMLVideoElement).currentTime = 130
+    })
+    const overlay = page.getByTestId('drive-disconnected')
+    await expect(overlay)
+      .toContainText('The drive was disconnected. Reconnect it to continue.', { timeout: 20_000 })
+      .catch((err: Error) => {
+        throw new Error(`${err.message}\n--- player log ---\n${playerLog.join('\n')}`)
+      })
+    await expect(
+      page.locator('.remux-error-title', { hasText: 'Failed to prepare MKV' })
+    ).toHaveCount(0)
+
+    // The poller sees it gone: Retry stays off until the drive is back.
+    await focus()
+    const retry = overlay.getByTestId('drive-retry')
+    await expect(retry).toBeDisabled({ timeout: 15_000 })
+    fs.renameSync(away, drive)
+    await focus()
+    await expect(retry).toBeEnabled({ timeout: 15_000 })
+    await retry.click()
+    await expect(overlay).toHaveCount(0, { timeout: 15_000 })
+    await expect
+      .poll(() => video.evaluate((v) => (v as HTMLVideoElement).readyState), { timeout: 30_000 })
+      .toBeGreaterThanOrEqual(2)
+    // Back at the position saved when the drive went away.
+    await expect.poll(time, { timeout: 15_000 }).toBeGreaterThanOrEqual(129)
+    await page.locator('.close-btn').first().click()
   } finally {
     try {
       if (launched) assertNoDownloads(launched)

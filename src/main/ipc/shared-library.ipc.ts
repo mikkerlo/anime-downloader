@@ -48,8 +48,11 @@ export function register({ attachedLibraryService, sharedLibraryExport }: AppDep
     }
   )
 
-  ipcMain.handle(CHANNELS.SHARED_LIBRARY_LIST, (): AttachedLibraryInfo[] =>
-    attachedLibraryService.list()
+  // An unplugged library lists from the snapshot cache; a claim PC's rates come
+  // from the library base (#582).
+  ipcMain.handle(
+    CHANNELS.SHARED_LIBRARY_LIST,
+    (): Promise<AttachedLibraryInfo[]> => attachedLibraryService.listWithRates()
   )
 
   ipcMain.handle(CHANNELS.SHARED_LIBRARY_GET_TITLE, (_event, libraryId: string, animeId: number) =>

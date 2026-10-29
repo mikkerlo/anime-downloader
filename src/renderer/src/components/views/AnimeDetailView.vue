@@ -23,7 +23,7 @@ import ShikimoriPanel from '../detail/ShikimoriPanel.vue';
 import SkipDetectionPanel from '../detail/SkipDetectionPanel.vue';
 import EpisodeList from '../detail/EpisodeList.vue';
 import DriveEpisodes from '../shared-library/DriveEpisodes.vue';
-import { useSharedLibrariesStore } from '../../stores/shared-libraries';
+import { rateText, useSharedLibrariesStore } from '../../stores/shared-libraries';
 import {
   ShikimoriKey,
   SkipDetectionKey,
@@ -56,6 +56,15 @@ const sharedStore = useSharedLibrariesStore();
 const driveTitles = ref<AttachedTitleDetail[]>([]);
 const attachedOnly = ref(false);
 const attachedAnime = computed(() => driveTitles.value[0]?.anime ?? null);
+// Every drive holding it is unplugged (#582): the attached form greys out and
+// renders from the snapshot.
+const attachedUnplugged = computed(
+  () =>
+    driveTitles.value.length > 0 &&
+    driveTitles.value.every((t) => sharedStore.isAvailable(t.libraryId) === false)
+);
+// A claim PC's rate, from the library base (#582).
+const attachedRate = computed(() => driveTitles.value.find((t) => t.rate)?.rate ?? null);
 const localEpisodeInts = computed(
   () =>
     new Set(
@@ -900,7 +909,9 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
     <div
       v-else-if="attachedOnly && attachedAnime"
       class="body attached-form"
+      :class="{ unplugged: attachedUnplugged }"
       data-testid="attached-detail"
+      :data-unplugged="attachedUnplugged || undefined"
     >
       <div class="detail-hero">
         <div class="detail-top">
@@ -920,6 +931,9 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
             </div>
             <div class="detail-tags">
               <span class="chip neutral">On a Shared Library</span>
+              <span v-if="attachedUnplugged" class="chip neutral" data-testid="detail-unplugged"
+                >Drive not connected</span
+              >
               <span v-if="attachedAnime.typeTitle" class="chip neutral">{{
                 attachedAnime.typeTitle
               }}</span>
@@ -928,6 +942,10 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
               <div v-if="attachedAnime.year" class="fact">
                 <span class="f-label">Year</span
                 ><span class="f-value">{{ attachedAnime.year }}</span>
+              </div>
+              <div v-if="attachedRate" class="fact" data-testid="detail-rate">
+                <span class="f-label">My rate</span
+                ><span class="f-value">{{ rateText(attachedRate) }}</span>
               </div>
             </div>
           </div>
@@ -1332,5 +1350,10 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
   color: var(--text-faint);
   font-size: 1.05rem;
   padding-top: 100px;
+}
+
+.attached-form.unplugged .detail-poster img {
+  opacity: 0.45;
+  filter: grayscale(0.8);
 }
 </style>

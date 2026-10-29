@@ -234,17 +234,18 @@ interface Api {
   /** Report a player view mounted/unmounted — holds new merges while any is open (#516). */
   playerViewOpened: () => Promise<void>
   playerViewClosed: () => Promise<void>
+  /** A failure's `reason` is `drive-disconnected` for a file on an unplugged attached drive (#582). */
   playerRemuxMkv: (
     mkvPath: string
-  ) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
+  ) => Promise<{ mp4Path: string; subtitleContent?: string } | PlayerOpenError>
   playerRemuxMkvStream: (
     mkvPath: string,
     initialSeek?: number
-  ) => Promise<MseOpenResult | { requiresTranscode: true } | { error: string }>
+  ) => Promise<MseOpenResult | { requiresTranscode: true } | PlayerOpenError>
   playerRemuxMkvStreamTranscode: (
     mkvPath: string,
     initialSeek?: number
-  ) => Promise<MseOpenResult | { error: string }>
+  ) => Promise<MseOpenResult | PlayerOpenError>
   playerStreamStart: (sessionId: string) => Promise<void>
   playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
   playerStreamSeek: (
@@ -267,9 +268,8 @@ interface Api {
     callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void
   ) => Unsubscribe
   onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => Unsubscribe
-  onPlayerStreamError: (
-    callback: (data: { sessionId: string; error: string }) => void
-  ) => Unsubscribe
+  /** `reason` is set when main classified the ffmpeg exit (#582). */
+  onPlayerStreamError: (callback: (data: PlayerStreamErrorPayload) => void) => Unsubscribe
   onPlayerStreamProgress: (
     callback: (data: {
       sessionId: string

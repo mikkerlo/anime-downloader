@@ -161,6 +161,17 @@ export function register({
   getFfprobePath,
   attachedLibraryService
 }: AppDeps): void {
+  // `{ reason: 'drive-disconnected' }` when an open failed because `filePath`
+  // is under an attached Shared Library root that can't be read now (#582).
+  const driveReason = async (filePath: string): Promise<{ reason?: PlayerFailureReason }> => {
+    try {
+      const reason = await attachedLibraryService.classifyMissing(filePath)
+      return reason ? { reason } : {}
+    } catch {
+      return {}
+    }
+  }
+
   // Watch-while-downloading (#63): the renderer reports which local file it
   // has open so DownloadManager defers the .part rename + merge meanwhile.
   ipcMain.handle(CHANNELS.PLAYER_OPENED, (_event, filePath: string) => {
@@ -255,7 +266,7 @@ export function register({
             /* ignore */
           }
         }
-        return { filePath: hit.path, subtitleContent }
+        return { filePath: hit.path, subtitleContent, libraryId: hit.libraryId }
       }
 
       // Two-way lock (#63): while ffmpeg is merging this translation, the
@@ -387,11 +398,12 @@ export function register({
     async (
       _event,
       filePath: string
-    ): Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }> => {
+    ): Promise<{ mp4Path: string; subtitleContent?: string } | PlayerOpenError> => {
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(filePath)) return { error: 'File not found' }
+      if (!fs.existsSync(filePath))
+        return { error: 'File not found', ...(await driveReason(filePath)) }
       // ffmpeg's file argument: `\\?\` under an attached root on Windows (#578).
       const mkvPath = attachedLibraryService.spawnPathFor(filePath)
 
@@ -400,6 +412,7 @@ export function register({
       const stamp = Date.now()
       const baseName = path.basename(mkvPath, path.extname(mkvPath))
       const mp4Path = path.join(streamingService.tmpDir, `${baseName}-${stamp}.mp4`)
+      const assPath = path.join(streamingService.tmpDir, `${baseName}-${stamp}.ass`)
 
       Ffmpeg.setFfmpegPath(ffmpegPath)
 
@@ -418,20 +431,27 @@ export function register({
           .run()
       })
 
-      const subtitlePromise = extractFirstSubtitle(
-        ffmpegPath,
-        ffprobePath,
-        mkvPath,
-        path.join(streamingService.tmpDir, `${baseName}-${stamp}.ass`)
-      )
+      const subtitlePromise = extractFirstSubtitle(ffmpegPath, ffprobePath, mkvPath, assPath)
 
-      try {
-        const [, subtitleContent] = await Promise.all([remuxPromise, subtitlePromise])
+      // Both settle before a failure is answered, so the extraction can't
+      // write its `.ass` after the cleanup below.
+      const [remux, subtitles] = await Promise.allSettled([remuxPromise, subtitlePromise])
+      if (remux.status === 'fulfilled') {
+        const subtitleContent = subtitles.status === 'fulfilled' ? subtitles.value : undefined
         return { mp4Path, ...(subtitleContent ? { subtitleContent } : {}) }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        return { error: msg }
       }
+      // A failed remux (its input gone mid-copy, #582) leaves no partial output
+      // behind in the tmpDir, which would otherwise outlive the drive.
+      for (const partial of [mp4Path, assPath]) {
+        try {
+          await fs.promises.unlink(partial)
+        } catch {
+          /* never written */
+        }
+      }
+      const err = remux.reason
+      const msg = err instanceof Error ? err.message : String(err)
+      return { error: msg, ...(await driveReason(filePath)) }
     }
   )
 
@@ -444,7 +464,7 @@ export function register({
       event,
       filePath: string,
       initialSeek?: number
-    ): Promise<MseOpenResult | { requiresTranscode: true } | { error: string }> => {
+    ): Promise<MseOpenResult | { requiresTranscode: true } | PlayerOpenError> => {
       // Captured at handler *entry*, not module load: every legitimate
       // cleanup-then-open sequence in the renderer awaits `playerCleanupRemux`
       // before opening the next session, so the bump always lands before this
@@ -453,13 +473,17 @@ export function register({
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(filePath)) return { error: 'File not found' }
+      // A drive already gone when the session opens (#582).
+      if (!fs.existsSync(filePath))
+        return { error: 'File not found', ...(await driveReason(filePath)) }
       // The session's ffmpeg / ffprobe argument, for this spawn and every
       // respawn: `\\?\` under an attached root on Windows (#578).
       const mkvPath = attachedLibraryService.spawnPathFor(filePath)
 
       const probe = await streamingService.probeMkvForMse(mkvPath)
-      if (!probe || !probe.streamCopyMimeType) return { error: 'Codecs not supported for MSE' }
+      if (!probe || !probe.streamCopyMimeType) {
+        return { error: 'Codecs not supported for MSE', ...(await driveReason(filePath)) }
+      }
       // `hevcTranscodeOnPlay === 'always'` never plays the copy session — the
       // renderer used to discover that only after this handler had probed,
       // spawned ffmpeg, and kicked off subtitle extraction, then SIGKILLed it
@@ -485,6 +509,7 @@ export function register({
         prelude: [],
         endPending: false,
         mkvPath,
+        inputPath: filePath,
         generation: 0,
         videoCodec: probe.videoCodec,
         transcode: false,
@@ -610,16 +635,17 @@ export function register({
       event,
       filePath: string,
       initialSeek?: number
-    ): Promise<MseOpenResult | { error: string }> => {
+    ): Promise<MseOpenResult | PlayerOpenError> => {
       const openedAtGeneration = cleanupGeneration
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(filePath)) return { error: 'File not found' }
+      if (!fs.existsSync(filePath))
+        return { error: 'File not found', ...(await driveReason(filePath)) }
       const mkvPath = attachedLibraryService.spawnPathFor(filePath)
 
       const probe = await streamingService.probeMkvForMse(mkvPath)
-      if (!probe) return { error: 'Probe failed' }
+      if (!probe) return { error: 'Probe failed', ...(await driveReason(filePath)) }
 
       fs.mkdirSync(streamingService.tmpDir, { recursive: true })
 
@@ -648,6 +674,7 @@ export function register({
         prelude: [],
         endPending: false,
         mkvPath,
+        inputPath: filePath,
         generation: 0,
         videoCodec: probe.videoCodec,
         transcode: true,

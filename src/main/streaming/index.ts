@@ -16,6 +16,8 @@ export interface MseSession {
   prelude: Buffer[]
   endPending: boolean
   mkvPath: string
+  /** The file as the renderer named it; `mkvPath` may be its `\\?\` form (#578). */
+  inputPath?: string
   generation: number
   videoCodec: 'h264' | 'hevc'
   transcode: boolean
@@ -85,6 +87,12 @@ export interface StreamingServiceDeps {
    * the main-process console is invisible — can still retrieve the log.
    */
   playerDiagSink?: (line: string) => void
+  /**
+   * Why ffmpeg exited non-zero, when it can be told (#582): main wires
+   * `attachedLibraryService.classifyMissing`, which says `drive-disconnected`
+   * for an input under an attached root that can no longer be `stat`ed.
+   */
+  classifyExit?: (inputPath: string) => Promise<PlayerFailureReason | null>
   channels: {
     streamChunk: string
     streamEnd: string
@@ -885,9 +893,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
 
     proc.stdout?.on('pause', flushBatch)
 
-    proc.stdout?.on('end', () => {
-      if (procGen !== session.generation) return
-      if (session.done) return
+    const finishEnd = (): void => {
       flushBatch()
       session.done = true
       // Like the chunks, the end waits for `player:stream-start` to flush the
@@ -900,6 +906,22 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
       if (sender && !sender.isDestroyed()) {
         sender.send(channels.streamEnd, { sessionId })
       }
+    }
+
+    // stdout ends before `exit` fires, even for a run that failed to open its
+    // input, so the `exit` error below never saw a respawn whose drive was gone:
+    // the session just ended. With a classifier wired (#582), an end that comes
+    // first waits for the exit code. Only a failed run that `classifyExit`
+    // names becomes an error; every other run ends exactly as before.
+    let endAwaitsExit = false
+    proc.stdout?.on('end', () => {
+      if (procGen !== session.generation) return
+      if (session.done) return
+      if (deps.classifyExit && proc.exitCode === null && proc.signalCode === null) {
+        endAwaitsExit = true
+        return
+      }
+      finishEnd()
     })
 
     proc.on('error', (err) => {
@@ -917,16 +939,42 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     proc.on('exit', (code, signal) => {
       if (procGen !== session.generation) return
       if (signal === 'SIGKILL') return
-      if (code !== 0 && !session.done) {
-        const msg = `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
+      if (session.done) return
+      if (code === 0) {
+        if (endAwaitsExit) finishEnd()
+        return
+      }
+      const msg = `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
+      const sendError = (reason: PlayerFailureReason | null): void => {
         session.error = msg
-        session.done = true
         console.error('[remux-stream]', msg)
         const sender = event.sender
         if (sender && !sender.isDestroyed()) {
-          sender.send(channels.streamError, { sessionId, error: msg })
+          const payload: PlayerStreamErrorPayload = { sessionId, error: msg }
+          if (reason) payload.reason = reason
+          sender.send(channels.streamError, payload)
         }
       }
+      // Held from here, so a late stdout end can't slip in while classifying.
+      session.done = true
+      if (!deps.classifyExit) {
+        sendError(null)
+        return
+      }
+      // ffmpeg gives no errno: an input under an attached root that is gone
+      // now is a disconnected drive (#582). Copy and transcode both land here.
+      const endedFirst = endAwaitsExit
+      void deps
+        .classifyExit(session.inputPath ?? session.mkvPath)
+        .catch(() => null)
+        .then((reason) => {
+          // A seek respawned meanwhile: this run is no longer the session's.
+          if (procGen !== session.generation) return
+          if (reason) sendError(reason)
+          // Unclassified, the run that ended first still just ends, as it always did.
+          else if (endedFirst) finishEnd()
+          else sendError(null)
+        })
     })
 
     return proc

@@ -14,6 +14,12 @@ export interface AnimeVideoHandlerDeps {
   getActiveDownload: (filePath: string) => ActiveDownloadInfo | null
   /** Poll interval while waiting for a growing `.part` to gain bytes. */
   pollIntervalMs?: number
+  /**
+   * A file that couldn't be `stat`ed or whose read stream failed (#582). Main
+   * logs `drive-disconnected` when it is under an attached root; the response
+   * is the same either way, and the renderer classifies.
+   */
+  onUnreadable?: (filePath: string, err: unknown) => void
 }
 
 const PART_SUFFIX = '.part'
@@ -110,6 +116,19 @@ function createTailStream(
 export function createAnimeVideoHandler(
   deps: AnimeVideoHandlerDeps
 ): (request: Request) => Promise<Response> {
+  const unreadable = (filePath: string, err: unknown): void => {
+    try {
+      deps.onUnreadable?.(filePath, err)
+    } catch {
+      // Logging only: never the response's concern.
+    }
+  }
+  const readStream = (filePath: string, opts?: { start: number; end: number }): ReadableStream => {
+    const nodeStream = fs.createReadStream(filePath, opts)
+    nodeStream.on('error', (err) => unreadable(filePath, err))
+    return Readable.toWeb(nodeStream) as ReadableStream
+  }
+
   return async (request: Request): Promise<Response> => {
     const raw = request.url.replace('anime-video://', '')
     let filePath = decodeURIComponent(raw)
@@ -117,7 +136,7 @@ export function createAnimeVideoHandler(
     let stat: fs.Stats
     try {
       stat = fs.statSync(filePath)
-    } catch {
+    } catch (err) {
       // Post-finalize edge: the .part was renamed to the final file between
       // the player resolving the path and this range request.
       if (filePath.endsWith(PART_SUFFIX)) {
@@ -125,10 +144,12 @@ export function createAnimeVideoHandler(
         try {
           stat = fs.statSync(finalPath)
           filePath = finalPath
-        } catch {
+        } catch (finalErr) {
+          unreadable(finalPath, finalErr)
           return new Response('File not found', { status: 404 })
         }
       } else {
+        unreadable(filePath, err)
         return new Response('File not found', { status: 404 })
       }
     }
@@ -167,9 +188,7 @@ export function createAnimeVideoHandler(
           })
         }
 
-        const nodeStream = fs.createReadStream(filePath, { start, end })
-        const webStream = Readable.toWeb(nodeStream) as ReadableStream
-        return new Response(webStream, { status: 206, headers })
+        return new Response(readStream(filePath, { start, end }), { status: 206, headers })
       }
     }
 
@@ -184,8 +203,6 @@ export function createAnimeVideoHandler(
         headers
       })
     }
-    const nodeStream = fs.createReadStream(filePath)
-    const webStream = Readable.toWeb(nodeStream) as ReadableStream
-    return new Response(webStream, { status: 200, headers })
+    return new Response(readStream(filePath), { status: 200, headers })
   }
 }

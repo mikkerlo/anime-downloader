@@ -45,6 +45,8 @@ export type PlayerPayload = {
   episodeIndex: number
   animeId: number
   malId: number
+  // The attached Shared Library `filePath` is on, for the disconnect overlay (#582).
+  attachedLibraryId?: string
 }
 
 export type AnimePrefs = { translationType?: string; author?: string }

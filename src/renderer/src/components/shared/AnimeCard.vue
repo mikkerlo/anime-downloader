@@ -14,8 +14,17 @@ const props = withDefaults(
     prioritized?: boolean;
     selectable?: boolean;
     selected?: boolean;
+    // An attached title whose drive is unplugged (#582): dimmed, with the reason.
+    unavailable?: boolean;
+    unavailableTitle?: string;
   }>(),
-  { prioritized: false, selectable: false, selected: false }
+  {
+    prioritized: false,
+    selectable: false,
+    selected: false,
+    unavailable: false,
+    unavailableTitle: ''
+  }
 );
 
 const emit = defineEmits<{
@@ -46,8 +55,31 @@ function onPosterError(): void {
 </script>
 
 <template>
-  <div class="acard" :class="{ selected: selectable && selected }">
+  <div
+    class="acard"
+    :class="{ selected: selectable && selected, unavailable }"
+    :data-unavailable="unavailable || undefined"
+    :title="unavailable ? unavailableTitle || undefined : undefined"
+  >
     <div class="poster-wrap">
+      <span v-if="unavailable" class="unplugged" data-testid="drive-not-connected">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          width="14"
+          height="14"
+          aria-hidden="true"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M9 3v4m6-4v4M7 7h10v4a5 5 0 01-10 0V7zm5 9v5M4 4l16 16"
+          />
+        </svg>
+        Drive not connected
+      </span>
       <input
         v-if="selectable"
         type="checkbox"
@@ -129,5 +161,29 @@ function onPosterError(): void {
 .acard.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent);
+}
+
+.acard.unavailable .poster,
+.acard.unavailable .acard-info {
+  opacity: 0.45;
+  filter: grayscale(0.8);
+}
+
+.unplugged {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text-2);
+  font-size: 0.7rem;
+  font-weight: 700;
+  pointer-events: none;
 }
 </style>

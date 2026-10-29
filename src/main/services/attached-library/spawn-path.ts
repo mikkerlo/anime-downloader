@@ -12,7 +12,8 @@ export type SpawnPathImpl = Pick<
   'resolve' | 'relative' | 'isAbsolute' | 'toNamespacedPath' | 'sep'
 >
 
-function isUnder(p: SpawnPathImpl, root: string, abs: string): boolean {
+/** `abs` is strictly below `root`. */
+export function isUnder(p: SpawnPathImpl, root: string, abs: string): boolean {
   const rel = p.relative(p.resolve(root), p.resolve(abs))
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${p.sep}`) && !p.isAbsolute(rel)
 }

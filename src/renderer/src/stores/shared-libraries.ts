@@ -7,7 +7,7 @@
 // missing-ffmpeg banner clears once ffmpeg is installed.
 
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { formatAgo } from '../utils'
 
 export const FFMPEG_MISSING_REASON =
@@ -29,6 +29,37 @@ export const ROLE_BADGE: Record<AttachedLibraryRole, string> = {
   foreign: 'Videos only',
   owner: 'Owner',
   claim: 'Claimed'
+}
+
+/** The read-only badge (#582) and its tooltip, one per reason. */
+export const READ_ONLY_BADGE = 'Read-only on this computer'
+export const READ_ONLY_REASON: Record<AttachedLibraryAccessReason, string> = {
+  mount: 'The drive is mounted read-only on this computer.',
+  'write-failed':
+    "A write to the drive failed, so it's treated as read-only until it's connected again.",
+  version: "The library's format is newer than this app.",
+  size: 'This library is larger than this version can open.',
+  interrupted: 'This library was interrupted while being written.'
+}
+
+export function readOnlyTitle(lib: Pick<AttachedLibraryInfo, 'accessReason'>): string {
+  return lib.accessReason ? READ_ONLY_REASON[lib.accessReason] : READ_ONLY_BADGE
+}
+
+/** An unplugged library's titles (#582): the tooltip names the library and when it was last seen. */
+export const DRIVE_NOT_CONNECTED = 'Drive not connected'
+export function notConnectedTitle(
+  lib: Pick<AttachedLibraryInfo, 'name' | 'lastSeenAt'>,
+  now = Date.now()
+): string {
+  return `${lib.name}: drive not connected. Last seen ${formatAgo(lib.lastSeenAt, now)}.`
+}
+
+/** A claim PC's rate of an attached title, from the library base (#582). */
+export function rateText(rate: AttachedTitleRate): string {
+  const parts = [rate.status, `${rate.episodes} ep`]
+  if (rate.score > 0) parts.unshift(`★ ${rate.score}`)
+  return parts.join(' · ')
 }
 
 /** "never" until S9 (#584) records a sync. */
@@ -134,6 +165,39 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
     return ffmpegAvailable.value ? title.play.any : title.play.withoutFfmpeg
   }
 
+  /** Whether the library is connected; null when it isn't attached (#582). */
+  function isAvailable(libraryId: string): boolean | null {
+    return libraries.value.find((l) => l.libraryId === libraryId)?.available ?? null
+  }
+
+  /**
+   * Resolves true once the library is reported unavailable: at once when the
+   * store already says so, else on the next `shared-libraries:changed` that
+   * does, within `timeoutMs` (one poll interval). False when it stays
+   * available, so a sleeping drive that wakes up is not a disconnect (#582).
+   */
+  function waitForUnavailable(libraryId: string, timeoutMs: number): Promise<boolean> {
+    if (isAvailable(libraryId) === false) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      let done = false
+      const finish = (v: boolean): void => {
+        if (done) return
+        done = true
+        stop()
+        clearTimeout(timer)
+        resolve(v)
+      }
+      const stop = watch(
+        libraries,
+        () => {
+          if (isAvailable(libraryId) === false) finish(true)
+        },
+        { flush: 'sync' }
+      )
+      const timer = setTimeout(() => finish(false), timeoutMs)
+    })
+  }
+
   void window.api.onSharedLibrariesChanged(() => {
     void refresh().catch(() => {})
   })
@@ -157,6 +221,8 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
     refresh,
     checkFfmpeg,
     playTarget,
+    isAvailable,
+    waitForUnavailable,
     addFound,
     dropFound,
     openFound,

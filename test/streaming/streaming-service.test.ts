@@ -682,3 +682,119 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
     expect(fs.existsSync(argsFile)).toBe(false)
   })
 })
+
+describe('StreamingService exit classification (#582)', () => {
+  const channels = {
+    streamChunk: 'sc',
+    streamEnd: 'se',
+    streamError: 'sx',
+    streamProgress: 'sp'
+  }
+
+  let dir: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-exit-classify-'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** A fake ffmpeg: `endFirst` closes stdout before exiting, as a run that can't open its input does. */
+  function fakeFfmpeg(code: number, endFirst: boolean): string {
+    const file = path.join(dir, `ffmpeg-${code}-${endFirst}`)
+    // Exit first: a background child keeps stdout open past the exit.
+    const body = endFirst ? `printf x\nexit ${code}\n` : `(sleep 0.3) &\nexit ${code}\n`
+    fs.writeFileSync(file, `#!/bin/sh\n${body}`, { mode: 0o755 })
+    return file
+  }
+
+  async function run(
+    ffmpeg: string,
+    classifyExit?: (input: string) => Promise<PlayerFailureReason | null>,
+    ready = true
+  ): Promise<{ sent: [string, unknown][]; session: MseSession; inputs: string[] }> {
+    const sent: [string, unknown][] = []
+    const inputs: string[] = []
+    const event = {
+      sender: {
+        isDestroyed: (): boolean => false,
+        send: (ch: string, payload: unknown): void => void sent.push([ch, payload])
+      }
+    }
+    const svc = createStreamingService({
+      getFfmpegPath: () => ffmpeg,
+      getFfprobePath: () => '/bin/ffprobe',
+      channels,
+      ...(classifyExit
+        ? {
+            classifyExit: (input: string) => {
+              inputs.push(input)
+              return classifyExit(input)
+            }
+          }
+        : {})
+    })
+    const session = mkSession({ ready, inputPath: '/drive/show.mkv', mkvPath: '\\\\?\\X' })
+    const proc = svc.spawnFfmpegForSession(session, event, 'sid', 0)
+    await new Promise<void>((res) => proc.on('close', () => res()))
+    await new Promise((r) => setTimeout(r, 10))
+    return { sent, session, inputs }
+  }
+
+  const disconnected = async (): Promise<PlayerFailureReason> => 'drive-disconnected'
+  const unclassified = async (): Promise<null> => null
+
+  it('a failed run whose stdout ended first: the classified error, with its reason, and no end', async () => {
+    const { sent, session, inputs } = await run(fakeFfmpeg(1, true), disconnected)
+    expect(inputs).toEqual(['/drive/show.mkv'])
+    expect(sent.filter(([ch]) => ch !== 'sc')).toEqual([
+      [
+        'sx',
+        { sessionId: 'sid', error: expect.stringContaining('code 1'), reason: 'drive-disconnected' }
+      ]
+    ])
+    expect(session.endPending).toBe(false)
+  })
+
+  it('the same run unclassified still just ends, as it did before', async () => {
+    for (const classify of [unclassified, undefined]) {
+      const { sent } = await run(fakeFfmpeg(1, true), classify)
+      expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+    }
+    const held = await run(fakeFfmpeg(1, true), unclassified, false)
+    expect(held.sent).toEqual([])
+    expect(held.session.endPending).toBe(true)
+  })
+
+  it('a failed run that exits first: an error, with the reason only when classified', async () => {
+    const plain = await run(fakeFfmpeg(1, false), unclassified)
+    expect(plain.sent).toEqual([
+      ['sx', { sessionId: 'sid', error: expect.stringContaining('code 1') }]
+    ])
+    const drive = await run(fakeFfmpeg(1, false), disconnected)
+    expect(drive.sent).toEqual([
+      [
+        'sx',
+        { sessionId: 'sid', error: expect.stringContaining('code 1'), reason: 'drive-disconnected' }
+      ]
+    ])
+  })
+
+  it('a clean run is never classified and ends', async () => {
+    const classify = vi.fn(disconnected)
+    const { sent } = await run(fakeFfmpeg(0, true), classify)
+    expect(classify).not.toHaveBeenCalled()
+    expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+  })
+
+  it('a classifier that throws is unclassified', async () => {
+    const { sent } = await run(fakeFfmpeg(1, false), async () => {
+      throw new Error('boom')
+    })
+    expect(sent).toEqual([['sx', { sessionId: 'sid', error: expect.stringContaining('code 1') }]])
+  })
+})

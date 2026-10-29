@@ -161,6 +161,57 @@ describe('useMsePlayer — handleStreamEnd / Error', () => {
     expect(m.remuxError.value).toBe('')
     expect(m.streamSessionId.value).toBe('mine')
   })
+
+  describe('drive-disconnected (#582)', () => {
+    function rig() {
+      const calls: string[] = []
+      // `resetMseState()` revokes the source and clears the session id; each
+      // callback records what it saw, which pins the order.
+      const seen = (what: string): string =>
+        `${what}:${m.streamSessionId.value}:${m.mseSrcUrl.value}`
+      const deps = makeDeps({
+        savePosition: vi.fn(() => void calls.push(seen('save'))),
+        onDriveDisconnected: vi.fn(() => void calls.push(seen('overlay')))
+      })
+      const m = useMsePlayer(deps)
+      m.streamSessionId.value = 'mine'
+      m.mseSrcUrl.value = 'blob:live'
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+      return { m, deps, calls }
+    }
+
+    it('saves the position before resetMseState(), then raises the overlay', () => {
+      const { m, calls } = rig()
+      m._internal.handleStreamError('mine', 'ffmpeg exited with code 254', 'drive-disconnected')
+      expect(calls).toEqual(['save:mine:blob:live', 'overlay::'])
+      expect(m.remuxError.value).toBe('')
+      expect(m.hasActiveSession.value).toBe(false)
+    })
+
+    it('without a reason it behaves as today: remuxError, a reset, no save, no overlay', () => {
+      const { m, deps, calls } = rig()
+      m._internal.handleStreamError('mine', 'ffmpeg crashed')
+      expect(calls).toEqual([])
+      expect(deps.savePosition).not.toHaveBeenCalled()
+      expect(m.remuxError.value).toBe('ffmpeg crashed')
+      expect(m.streamSessionId.value).toBe('')
+    })
+
+    it('the subscription passes the reason through as the third argument', () => {
+      let cb: ((d: PlayerStreamErrorPayload) => void) | undefined
+      setApi({
+        onPlayerStreamError: ((fn: (d: PlayerStreamErrorPayload) => void) => {
+          cb = fn
+          return () => {}
+        }) as Api['onPlayerStreamError']
+      })
+      const { m, calls } = rig()
+      m.subscribeStreamEvents()
+      cb!({ sessionId: 'mine', error: 'x', reason: 'drive-disconnected' })
+      expect(calls).toEqual(['save:mine:blob:live', 'overlay::'])
+    })
+  })
 })
 
 describe('useMsePlayer — resetMseState', () => {

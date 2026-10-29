@@ -140,7 +140,9 @@ describe('DriveEpisodes on an unplugged drive', () => {
       ]),
       ffmpegCheck: vi.fn(async () => ({ available: true })),
       onSharedLibrariesChanged: () => () => {},
-      onSharedLibraryFound: () => () => {}
+      onSharedLibraryFound: () => () => {},
+      syncGetStatus: async () => ({ running: [], libraries: {} }),
+      onSyncRunFinished: () => () => {}
     }
   })
 

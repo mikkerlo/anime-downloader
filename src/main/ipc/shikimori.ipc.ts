@@ -26,6 +26,7 @@ import {
   rateFromCacheEntry,
   type StoredRateEntry
 } from '../lib/shikimori-rate-cache'
+import { NO_RATE_BEFORE, nextWatchedRate, rateValues, type RateValues } from '../lib/shikimori-rate'
 import { OfflineError } from '../lib/net'
 import { stampRateClocks } from '../store/sync-meta'
 import {
@@ -36,8 +37,6 @@ import {
 import type { AppDeps } from './index'
 
 const SHIKI_BASE = SHIKIMORI_ORIGIN
-
-type RateValues = QueuedShikimoriUpdate['after']
 
 type CachedRateEntry = {
   rate: Record<string, unknown> & {
@@ -52,33 +51,11 @@ type CachedRateEntry = {
   smotretAnime: unknown
 }
 
-// The `before` of a title that has no rate yet. The drain creates the rate when
-// the server has none; when it has one after all, this won't match it, and
-// `shouldApplyOnDrift` decides as for any other stale `before`.
-const NO_RATE_BEFORE: RateValues = { episodes: 0, status: 'planned', score: 0, rewatches: 0 }
-
-function rateValues(rate: CachedRateEntry['rate'] | shikimori.ShikiUserRate): RateValues {
-  const { episodes, status, score } = rate
-  return { episodes, status, score, rewatches: rate.rewatches ?? 0 }
-}
-
 function cachedBasis(entry: CachedRateEntry): { rateId: number | null; before: RateValues } {
   return {
     rateId: typeof entry.rate.id === 'number' ? entry.rate.id : null,
     before: rateValues(entry.rate)
   }
-}
-
-// What "episode `epNum` watched" moves a rate to, or null when it changes
-// nothing. A completed title starts a rewatch from `epNum` (the flipped status
-// is what stops a second bump); anything else only moves forward.
-function nextWatchedRate(current: RateValues, epNum: number): RateValues | null {
-  const { score, rewatches } = current
-  if (current.status === 'completed') {
-    return { episodes: epNum, status: 'rewatching', score, rewatches: rewatches + 1 }
-  }
-  if (epNum > current.episodes) return { episodes: epNum, status: 'watching', score, rewatches }
-  return null
 }
 
 // An expired session joins the offline path rather than bypassing it: the edit
@@ -97,7 +74,8 @@ export function register({
   maybeBroadcastCleanupPrompt,
   runAutoDownloadTick,
   broadcast,
-  offlineService
+  offlineService,
+  syncRunner
 }: AppDeps) {
   // Null when the account changed while the list was in flight: it is the
   // previous account's list and must not land in the new one's cache (#588).
@@ -768,6 +746,10 @@ export function register({
     sync.startSyncTimer()
     void sync.syncShikimoriQueue()
     sync.broadcastSyncStatus()
+    // The merge on login (#584), after S0b's restore: its Shikimori leg drains first.
+    void syncRunner
+      ?.runAll('login')
+      .catch((err) => console.error('[sync] the login run failed:', err))
     return user
   })
 

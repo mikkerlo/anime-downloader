@@ -62,9 +62,34 @@ export function rateText(rate: AttachedTitleRate): string {
   return parts.join(' · ')
 }
 
-/** "never" until S9 (#584) records a sync. */
+/** "never" until the first merge with the library (#584). */
 export function lastSyncWhen(lastSyncAt: number | null, now = Date.now()): string {
   return lastSyncAt === null ? 'never' : formatAgo(lastSyncAt, now)
+}
+
+/**
+ * A library row's status line (#584), until S10 (#585)'s toast and review
+ * sheet: "N changes synced, M need review", or why the last run didn't write.
+ */
+export function syncStatusText(
+  entry: { last: SyncLibraryResult | null; needReview: number } | undefined
+): string {
+  if (!entry) return ''
+  const parts: string[] = []
+  const last = entry.last
+  if (last?.drive === 'error') {
+    parts.push(
+      last.driveReason === 'write-failed-read-only'
+        ? "Couldn't write to the drive"
+        : last.driveReason === 'unreadable'
+          ? "Couldn't read the drive"
+          : 'Sync failed, will retry'
+    )
+  } else if (last && (last.drive === 'ok' || last.shikimori === 'ok')) {
+    parts.push(`${plural(last.counts.applied, 'change', 'changes')} synced`)
+  }
+  if (entry.needReview > 0) parts.push(`${entry.needReview} need review`)
+  return parts.join(', ')
 }
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
@@ -198,6 +223,42 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
     })
   }
 
+  // --- The merge (#584): Sync now, and each library's last result.
+  const syncStatus = ref<SyncStatus>({ running: [], libraries: {} })
+  // Sync now scopes in flight: 'all', or `title:<animeId>`.
+  const syncing = ref<string[]>([])
+
+  async function refreshSyncStatus(): Promise<void> {
+    const s = await window.api.syncGetStatus()
+    if (s && Array.isArray(s.running)) syncStatus.value = s
+  }
+
+  /** Every attached owned or claimed library, or only those holding `animeId`, restricted to it. */
+  async function syncNow(animeId?: number): Promise<void> {
+    const key = animeId === undefined ? 'all' : `title:${animeId}`
+    if (syncing.value.includes(key)) return
+    syncing.value = [...syncing.value, key]
+    try {
+      await window.api.sharedLibrarySyncNow(animeId === undefined ? {} : { animeId })
+    } finally {
+      syncing.value = syncing.value.filter((k) => k !== key)
+      await refreshSyncStatus().catch(() => {})
+    }
+  }
+
+  /** Whether an owned or claimed library has `animeId` in scope (the detail page's Sync now). */
+  function canSyncTitle(animeId: number): boolean {
+    return libraries.value.some(
+      (l) =>
+        l.mode === 'metadata' &&
+        (l.role === 'owner' || l.role === 'claim') &&
+        l.titles.some((t) => t.animeId === animeId)
+    )
+  }
+
+  void window.api.onSyncRunFinished(() => {
+    void refreshSyncStatus().catch(() => {})
+  })
   void window.api.onSharedLibrariesChanged(() => {
     void refresh().catch(() => {})
   })
@@ -209,8 +270,14 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
     if (libraries.value.length > 0) void checkFfmpeg()
   })
   void refresh().catch(() => {})
+  void refreshSyncStatus().catch(() => {})
 
   return {
+    syncStatus,
+    syncing,
+    syncNow,
+    canSyncTitle,
+    refreshSyncStatus,
     libraries,
     found,
     openingFound,

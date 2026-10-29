@@ -167,6 +167,8 @@ export interface AttachedLibraryService {
   reportUnreadable(p: string, err: unknown): boolean
   /** `list()`, with a claim PC's rates from each library base. */
   listWithRates(): Promise<AttachedLibraryInfo[]>
+  /** S9 (#584): a merge with the library finished at `at` ("Last sync"). */
+  markSynced(libraryId: string, at: number): void
 }
 
 /** What one open of a root holds in memory. */
@@ -1196,6 +1198,16 @@ export function createAttachedLibraryService(
     }
   }
 
+  function markSynced(libraryId: string, at: number): void {
+    // Fetched now: a Forget meanwhile leaves nothing to mark.
+    const recs = records()
+    const rec = recs[libraryId]
+    if (!rec) return
+    rec.lastSyncAt = at
+    save(recs)
+    deps.onChanged?.()
+  }
+
   // Forget deletes the library's snapshot cache (#581's hook contract).
   if (cache) registerForgetHook({ onForgotten: (libraryId) => cache.remove(libraryId) })
 
@@ -1229,6 +1241,7 @@ export function createAttachedLibraryService(
     onAvailabilityChanged: (listener) => transitions.add(listener),
     classifyMissing,
     reportUnreadable,
-    listWithRates
+    listWithRates,
+    markSynced
   }
 }

@@ -26,7 +26,10 @@ import type { AppDeps } from '../../src/main/ipc'
 interface FakeRun {
   stdout: PassThrough
   stderr: PassThrough
+  exitCode: number | null
+  signalCode: NodeJS.Signals | null
   killed: string[]
+  emit: (event: string, ...args: unknown[]) => boolean
 }
 
 const runs = vi.hoisted(() => [] as FakeRun[])
@@ -42,6 +45,8 @@ vi.mock('child_process', async (importOriginal) => {
       const run = Object.assign(new EventEmitter(), {
         stdout: new PassThrough(),
         stderr: new PassThrough(),
+        exitCode: null,
+        signalCode: null,
         killed,
         kill: (sig: string): boolean => {
           killed.push(sig)
@@ -102,12 +107,16 @@ async function write(run: FakeRun, ...chunks: Buffer[]): Promise<void> {
   await new Promise((res) => setImmediate(res))
 }
 
-// The service's `end` handler was registered at spawn, so it has run by the
-// time this listener fires.
+// A clean exit, in the order Node guarantees: `close` comes last. The run
+// settles in the service's `close` listener (#631), synchronously here because
+// no classifier is wired.
 async function finish(run: FakeRun): Promise<void> {
   const ended = new Promise((res) => run.stdout.once('end', res))
   run.stdout.end()
   await ended
+  run.exitCode = 0
+  run.emit('exit', 0, null)
+  run.emit('close', 0, null)
 }
 
 const channelsOf = (sent: [string, unknown][]): string[] => sent.map(([ch]) => ch)

@@ -257,7 +257,7 @@ An unmerged download (auto-merge off, or a merge that failed) is a `.mp4` + `.as
 
 **Re-export.** `present` compares the library item's size with the local video's, so a merged item (whose `.mkv` size differs from the `.mp4`) is merged and copied again on a re-export of the same selection.
 
-The rule for re-exporting merged items is decided in a follow-up issue: TODO(#576 follow-up): link the issue number here.
+The rule for re-exporting merged items is decided in [#623](https://github.com/mikkerlo/anime-downloader/issues/623).
 
 ## Opening a library (#578)
 

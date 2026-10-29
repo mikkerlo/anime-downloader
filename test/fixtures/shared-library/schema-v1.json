@@ -2,7 +2,7 @@
   "versions": {
     "layout": {
       "version": 1,
-      "minor": 0
+      "minor": 1
     },
     "state": {
       "version": 1,
@@ -157,6 +157,31 @@
       "path": "manifest.items[].sha256",
       "type": "string:sha256",
       "required": false
+    },
+    {
+      "path": "manifest.items[].source",
+      "type": "object",
+      "required": false
+    },
+    {
+      "path": "manifest.items[].source.size",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].source.subtitleSize",
+      "type": "integer>=0",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].source.codec",
+      "type": "string",
+      "required": true
+    },
+    {
+      "path": "manifest.items[].source.outputSize",
+      "type": "integer>=0",
+      "required": true
     },
     {
       "path": "manifest.naming",

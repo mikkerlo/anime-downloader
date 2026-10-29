@@ -51,6 +51,7 @@ function target(over: Partial<ExportTarget>): ExportTarget {
     blocked: null,
     free: 1_000_000,
     present: [],
+    presentMerged: [],
     ...over
   }
 }
@@ -254,6 +255,126 @@ describe('ExportDialog unmerged pairs (#576)', () => {
     expect(api.exportStart).toHaveBeenCalledWith(
       expect.objectContaining({ unmerged: 'copy-as-is' })
     )
+  })
+
+  describe('pairs already on the drive as a merged MKV (#623)', () => {
+    // E2 is on the drive merged; E3 is a new pair.
+    const TITLES3: ExportTreeTitle[] = [
+      {
+        ...PAIR_TITLES[0],
+        translations: [
+          {
+            ...PAIR_TITLES[0].translations[0],
+            episodes: [
+              ...PAIR_TITLES[0].translations[0].episodes,
+              {
+                key: '1:3:11',
+                episodeInt: '3',
+                label: 'E3',
+                state: 'ready',
+                size: 2000,
+                unmerged: true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+
+    async function openMergedThere(presentMerged: string[]) {
+      const t = target({ kind: 'add', present: ['1:2:11'], presentMerged })
+      stubApi(t)
+      api.exportPlan = vi.fn(async (req: ExportPlanRequest) => ({
+        titles: TITLES3,
+        target: req.target ? t : null,
+        preflight: null,
+        merge: { available: true, encoders: ['libx265'] }
+      }))
+      const w = mount(ExportDialog, { props: { animeIds: [1], preselect: true } })
+      await flushPromises()
+      await w.find('[data-testid="export-pick"]').trigger('click')
+      await flushPromises()
+      return w
+    }
+    const note = (w: ReturnType<typeof mount>) => w.find('[data-testid="export-not-reencoded"]')
+
+    it('says they won’t be re-encoded only with Merge on and a codec other than copy', async () => {
+      const w = await openMergedThere(['1:2:11'])
+      expect(w.text()).toContain('1 already on the drive')
+      expect(note(w).exists()).toBe(false)
+
+      await w.find('[data-testid="export-codec"]').setValue('libx265')
+      await flushPromises()
+      expect(note(w).text()).toBe(
+        '1 episode is already on the drive as MKV and won’t be re-encoded.'
+      )
+
+      await w.find('[data-testid="export-unmerged-copy"]').setValue(true)
+      await flushPromises()
+      expect(note(w).exists()).toBe(false)
+    })
+
+    it('counts only selected pairs main reports as merged', async () => {
+      const w = await openMergedThere([])
+      await w.find('[data-testid="export-codec"]').setValue('libx265')
+      await flushPromises()
+      expect(note(w).exists()).toBe(false)
+
+      const m = await openMergedThere(['1:2:11'])
+      await m.find('[data-testid="export-codec"]').setValue('libx265')
+      await flushPromises()
+      expect(note(m).exists()).toBe(true)
+      await m.find('[data-testid="tree-episode-1:2:11"]').trigger('change')
+      expect(note(m).exists()).toBe(false)
+    })
+
+    const block = (w: ReturnType<typeof mount>) => w.find('[data-testid="export-unmerged"]')
+    const codecSelect = (w: ReturnType<typeof mount>) => w.find('[data-testid="export-codec"]')
+
+    it('with only pairs already on the drive as MKV selected, the merge options stay, and the codec drives the note', async () => {
+      const w = await openMergedThere(['1:2:11'])
+      // E1 (not a pair) and E3 (the pair still to copy) deselected: E2 alone.
+      await w.find('[data-testid="tree-episode-1:1:11"]').trigger('change')
+      await w.find('[data-testid="tree-episode-1:3:11"]').trigger('change')
+      await flushPromises()
+      expect(w.text()).toContain('1 already on the drive')
+      expect(block(w).exists()).toBe(true)
+      expect(block(w).text()).toContain('Unmerged episodes: all already on the drive')
+      expect(radio(w, 'export-unmerged-merge').checked).toBe(true)
+      expect(codecSelect(w).exists()).toBe(true)
+      expect(note(w).exists()).toBe(false)
+      expect(startButton(w).disabled).toBe(true)
+      expect(w.find('.why').text()).toBe('Nothing to copy.')
+
+      await codecSelect(w).setValue('libx265')
+      await flushPromises()
+      expect(note(w).text()).toBe(
+        '1 episode is already on the drive as MKV and won’t be re-encoded.'
+      )
+      expect(startButton(w).disabled).toBe(true)
+
+      await codecSelect(w).setValue('copy')
+      await flushPromises()
+      expect(note(w).exists()).toBe(false)
+    })
+
+    it('unticking the only pair still to copy keeps the codec select next to the note', async () => {
+      const w = await openMergedThere(['1:2:11'])
+      await codecSelect(w).setValue('libx265')
+      await flushPromises()
+      await w.find('[data-testid="tree-episode-1:3:11"]').trigger('change')
+      await flushPromises()
+      expect(note(w).exists()).toBe(true)
+      expect(codecSelect(w).exists()).toBe(true)
+    })
+
+    it('a pair on the drive copied as-is (not merged) brings no merge options back', async () => {
+      const w = await openMergedThere([])
+      await w.find('[data-testid="tree-episode-1:3:11"]').trigger('change')
+      await flushPromises()
+      expect(w.text()).toContain('1 already on the drive')
+      expect(block(w).exists()).toBe(false)
+    })
   })
 
   it('a re-encode says the size will change, counts the pair plus 10%, and re-plans with the choice', async () => {

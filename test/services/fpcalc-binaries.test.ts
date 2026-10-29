@@ -1,12 +1,62 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { execFileSync } from 'child_process'
 
 import {
   detectFpcalcPlatform,
   ensureFpcalc,
+  fpcalcInstallPath,
   getFpcalcDir,
   type FpcalcPlatformInfo
 } from '../../src/main/fpcalc-binaries'
+
+// #592: like ensureFfmpeg, a second call mid-install joins the first.
+describe.skipIf(process.platform !== 'linux' || process.arch !== 'x64')(
+  'ensureFpcalc single flight',
+  () => {
+    let work: string
+    beforeEach(() => {
+      fs.rmSync(getFpcalcDir(), { recursive: true, force: true })
+      work = fs.mkdtempSync(path.join(os.tmpdir(), 'fpcalc-sf-'))
+    })
+    afterEach(() => {
+      fs.rmSync(getFpcalcDir(), { recursive: true, force: true })
+      fs.rmSync(work, { recursive: true, force: true })
+      vi.restoreAllMocks()
+    })
+
+    it('one download and one extract; both callers get the same path', async () => {
+      // A real tar.gz holding `chromaprint-fpcalc-1.5.1-linux-x86_64/fpcalc`.
+      const inner = path.join(work, 'chromaprint-fpcalc-1.5.1-linux-x86_64')
+      fs.mkdirSync(inner)
+      fs.writeFileSync(path.join(inner, 'fpcalc'), '#!/bin/sh\necho fpcalc\n', { mode: 0o755 })
+      const archive = path.join(work, 'a.tar.gz')
+      execFileSync('tar', ['-czf', archive, '-C', work, 'chromaprint-fpcalc-1.5.1-linux-x86_64'])
+      const bytes = fs.readFileSync(archive)
+
+      let release!: () => void
+      const held = new Promise<void>((r) => (release = r))
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        await held
+        return new Response(new Uint8Array(bytes), { status: 200 })
+      })
+
+      const boot = ensureFpcalc()
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+      const second = ensureFpcalc()
+      release()
+      const [a, b] = await Promise.all([boot, second])
+
+      expect(a).toBe(fpcalcInstallPath())
+      expect(b).toBe(a)
+      // On main the second call starts a second download.
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(fs.readFileSync(a, 'utf8')).toContain('echo fpcalc')
+    })
+  }
+)
 
 // #470. chromaprint v1.5.1 publishes one asset per platform, and the `ia32`
 // branch asked for a `windows-i686.zip` that release never shipped (404 against

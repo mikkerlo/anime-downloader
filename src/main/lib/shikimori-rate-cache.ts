@@ -80,3 +80,31 @@ export function rateFromCacheEntry(entry: StoredRateEntry): ShikiUserRate & { st
     stale: true
   }
 }
+
+/**
+ * A wholesale refresh that keeps the cached entry of every MAL id in `queued`
+ * (#592): those still have edits waiting in the offline queue, so the server's
+ * value is older than the cache's. A queued id the server didn't return keeps
+ * its cached entry too; one with no cached entry takes the server's.
+ */
+export function keepQueuedEntries<S extends StoredRateEntry, C extends StoredRateEntry>(
+  server: S[],
+  cached: C[],
+  queued: ReadonlySet<number>
+): (S | C)[] {
+  if (queued.size === 0) return server
+  const malIdOf = (e: StoredRateEntry): number | undefined => e.rate.target_id ?? e.shikiAnime?.id
+  const seen = new Set<number>()
+  const out: (S | C)[] = server.map((e) => {
+    const id = malIdOf(e)
+    if (id === undefined || !queued.has(id)) return e
+    seen.add(id)
+    return findRateEntry(cached, id) ?? e
+  })
+  for (const id of queued) {
+    if (seen.has(id)) continue
+    const kept = findRateEntry(cached, id)
+    if (kept) out.push(kept)
+  }
+  return out
+}

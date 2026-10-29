@@ -121,14 +121,34 @@ async function findBinaryRecursively(dir: string, name: string): Promise<string 
   return null
 }
 
-/** Like `ensureFfmpeg`: resolves `''` without downloading while offline (#567). */
-export async function ensureFpcalc(
+/** Where `ensureFpcalc` installs the binary. */
+export function fpcalcInstallPath(): string {
+  const ext = process.platform === 'win32' ? '.exe' : ''
+  return path.join(getFpcalcDir(), `fpcalc${ext}`)
+}
+
+let fpcalcInFlight: Promise<string> | null = null
+
+/**
+ * Like `ensureFfmpeg`: resolves `''` without downloading while offline (#567),
+ * and single-flight (#592).
+ */
+export function ensureFpcalc(
   win?: BrowserWindow,
   isOffline: () => boolean = () => false
 ): Promise<string> {
+  fpcalcInFlight ??= installFpcalc(win, isOffline).finally(() => {
+    fpcalcInFlight = null
+  })
+  return fpcalcInFlight
+}
+
+async function installFpcalc(
+  win: BrowserWindow | undefined,
+  isOffline: () => boolean
+): Promise<string> {
   const dest = getFpcalcDir()
-  const ext = process.platform === 'win32' ? '.exe' : ''
-  const binary = path.join(dest, `fpcalc${ext}`)
+  const binary = fpcalcInstallPath()
 
   if (fs.existsSync(binary)) {
     fpcalcPath = binary

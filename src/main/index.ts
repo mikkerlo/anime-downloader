@@ -18,12 +18,15 @@ import {
   getFfmpegPath,
   getFfprobePath,
   clearFfmpegPaths,
-  getFfmpegDir
+  getFfmpegDir,
+  ffmpegInstallPaths,
+  verifyBinary
 } from './ffmpeg-binaries'
 import * as shikimori from './shikimori'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
 import { createEpisodeCompletionHandlers, isMergeExpected } from './lib/episode-completion'
+import { createFfmpegStatus } from './lib/ffmpeg-status'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import type { ParkedQueues } from './lib/shikimori-queue'
 import { applyApiBaseOverrides, shikimoriOrigin, smotretApiBase } from './lib/api-bases'
@@ -36,7 +39,15 @@ import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import { createAnimePosterHandler } from './streaming/anime-poster-protocol'
 import { createCacheScope } from './services/anime-cache/scope'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
-import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
+import { ensureFpcalc, getFpcalcPath, fpcalcInstallPath } from './fpcalc-binaries'
+import { createPrepareOfflineService } from './services/prepare-offline'
+import { createBinariesStep } from './services/prepare-offline/steps/binaries'
+import { createShikimoriRatesStep } from './services/prepare-offline/steps/shikimori-rates'
+import { cachableIdsFrom, createMetadataStep } from './services/prepare-offline/steps/metadata'
+import { createLocalIntegrityStep } from './services/prepare-offline/steps/local-integrity'
+import { createAttachedIntegrityStep } from './services/prepare-offline/steps/attached-integrity'
+import { createLibrarySyncStep } from './services/prepare-offline/steps/library-sync'
+import { probeDuration } from './lib/probe-duration'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
 import { registerSyncplayBroadcasts } from './ipc/syncplay-broadcasts'
@@ -185,7 +196,8 @@ const STORE_DEFAULTS = {
   syncMeta: { titles: {}, rates: {} } as SyncMeta,
   workOffline: false,
   attachedLibraries: {} as Record<string, AttachedLibraryRecord>,
-  sharedLibraryPromptDismissed: [] as string[]
+  sharedLibraryPromptDismissed: [] as string[],
+  prepareOfflineLastRun: null as PrepareOfflineLastRun | null
 }
 
 applyApiBaseOverrides(process.env, app.isPackaged)
@@ -419,7 +431,9 @@ const shikimoriSyncService = createShikimoriSyncService({
   rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
   animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
   isOffline,
-  snapshotsPath: path.join(app.getPath('userData'), 'shikimori-snapshots.json')
+  snapshotsPath: path.join(app.getPath('userData'), 'shikimori-snapshots.json'),
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  ratesRefreshedChannel: EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED
 })
 // `ensureFreshToken` is where a dead refresh token is detected, but that module
 // only knows about the store. Give it a way to push the transition out so the
@@ -428,14 +442,12 @@ const shikimoriSyncService = createShikimoriSyncService({
 shikimori.setOnSessionExpired(() => shikimoriSyncService.broadcastSyncStatus())
 let downloadManager: DownloadManager
 
-// Resolved by the background ffmpeg-ensure task in `bootstrap()`. The
-// episode-complete hook awaits it, so a download finishing before ffmpeg is
-// ready still merges correctly instead of silently skipping the merge; the
+// First refreshed by the background ffmpeg-ensure task in `bootstrap()`. The
+// episode-complete hook awaits `get()`, so a download finishing before ffmpeg
+// is ready still merges correctly instead of silently skipping the merge; the
 // export's pre-fetch (#577) awaits it before deciding whether a merge is coming.
-let resolveFfmpegReady!: (info: FfmpegInfo) => void
-const ffmpegReady = new Promise<FfmpegInfo>((resolve) => {
-  resolveFfmpegReady = resolve
-})
+// Prepare for offline (#592) refreshes it after an install or repair.
+const ffmpegStatus = createFfmpegStatus<FfmpegInfo>(() => checkFfmpeg())
 
 // The Shared Library merge (#584): the only writer of state to a drive.
 const syncLocalFiles = createLocalFiles({
@@ -517,7 +529,7 @@ const sharedLibraryExport = createSharedLibraryExportService({
     onMergeComplete: (cb) => downloadManager.onMergeComplete(() => cb())
   },
   mergeExpected: async () => {
-    const ffmpegInfo = await ffmpegReady
+    const ffmpegInfo = await ffmpegStatus.get()
     return isMergeExpected({
       autoMerge: store.get('autoMerge') as boolean,
       ffmpegInfo,
@@ -606,6 +618,78 @@ const streamingService = createStreamingService({
   }
 })
 
+// Prepare for offline (#592): six steps, run in this order. Every dependency
+// is read when a run reaches it, so the download manager built in
+// `bootstrap()` is in place by then.
+const prepareOffline = createPrepareOfflineService({
+  store,
+  isOffline,
+  broadcast: broadcastToAll,
+  progressChannel: EVENT_CHANNELS.PREPARE_OFFLINE_PROGRESS
+})
+prepareOffline.registerStep(
+  createBinariesStep({
+    ensureFfmpeg: () => ensureFfmpeg(undefined, isOffline),
+    ensureFpcalc: () => ensureFpcalc(undefined, isOffline),
+    paths: () => ({ ...ffmpegInstallPaths(), fpcalc: fpcalcInstallPath() }),
+    exists: (p) => fs.existsSync(p),
+    verify: (p) => verifyBinary(p),
+    remove: (p) => fs.promises.rm(p, { force: true }),
+    clearFfmpegPaths,
+    refreshFfmpegStatus: () => ffmpegStatus.refresh(),
+    ffmpegUser: () => downloadManager?.ffmpegUser() ?? null,
+    isPlayerOpen: () => playerPresenceService.isOpen(),
+    isSkipAnalysisRunning: () => skipAnalysisService.getCurrentAnalysis() !== null
+  })
+)
+prepareOffline.registerStep(
+  createShikimoriRatesStep({
+    isLoggedIn: () => store.get('shikimoriUser') !== null,
+    drain: () => shikimoriSyncService.drainNow(),
+    refreshRates: (opts) => shikimoriSyncService.refreshRates(opts),
+    prefetchShikimoriDetails: () => shikimoriSyncService.prefetchShikimoriDetails(),
+    abortPrefetch: () => shikimoriSyncService.abortPrefetch()
+  })
+)
+prepareOffline.registerStep(
+  createMetadataStep({
+    cachableIds: () => cachableIdsFrom(store, isCachableAnime),
+    getAnime: (id) => smotretApi.getAnime(id),
+    getEpisodesBatch: (ids) => smotretApi.getEpisodesBatch(ids),
+    refreshAnimeDetail: (id, detail) => animeCacheService.refreshAnimeDetail(id, detail),
+    updateEpisodes: (id, details) => animeCacheService.updateEpisodes(id, details)
+  })
+)
+prepareOffline.registerStep(
+  createLocalIntegrityStep({
+    downloadedEpisodes: () =>
+      store.get('downloadedEpisodes') as Record<string, { author?: string }>,
+    downloadedAnime: () => store.get('downloadedAnime') as Record<string, AnimeSearchResult>,
+    displayName: getDisplayName,
+    sanitizeFilename,
+    roots: () => {
+      const cold = coldStorageService.isAdvanced() ? coldStorageService.getColdStorageDir() : ''
+      return cold
+        ? [coldStorageService.getDownloadDir(), cold]
+        : [coldStorageService.getDownloadDir()]
+    },
+    probeDuration: (file, signal) => {
+      const ffprobe = getFfprobePath()
+      return ffprobe && fs.existsSync(ffprobe)
+        ? probeDuration(ffprobe, file, signal)
+        : Promise.resolve(null)
+    },
+    isActivePart: (p) => downloadManager?.getActiveDownloadByPath(p) != null
+  })
+)
+prepareOffline.registerStep(createAttachedIntegrityStep(attachedLibraryService))
+prepareOffline.registerStep(
+  createLibrarySyncStep({
+    list: () => attachedLibraryService.list(),
+    runAll: (trigger) => syncRunner!.runAll(trigger)
+  })
+)
+
 interface FfmpegInfo {
   available: boolean
   version: string
@@ -618,21 +702,20 @@ function checkFfmpeg(): Promise<FfmpegInfo> {
   const result: FfmpegInfo = { available: false, version: '', path: ffmpegPath, encoders: [] }
   if (!ffmpegPath || !fs.existsSync(ffmpegPath)) return Promise.resolve(result)
 
-  return new Promise((resolve) => {
-    execFile(ffmpegPath, ['-version'], { timeout: 5000 }, (error, stdout) => {
-      if (error) {
-        console.error(`[ffmpeg] Not available at ${ffmpegPath}:`, error.message)
-        resolve(result)
-        return
-      }
+  return verifyBinary(ffmpegPath).then((check) => {
+    if (!check.ok) {
+      console.error(`[ffmpeg] Not available at ${ffmpegPath}:`, check.error)
+      return result
+    }
 
-      const firstLine = stdout.split('\n')[0] || ''
-      const versionMatch = firstLine.match(/ffmpeg version (\S+)/)
-      result.available = true
-      result.version = versionMatch ? versionMatch[1] : firstLine
-      console.log(`[ffmpeg] Found: ${result.version} at ${ffmpegPath}`)
+    const firstLine = check.version
+    const versionMatch = firstLine.match(/ffmpeg version (\S+)/)
+    result.available = true
+    result.version = versionMatch ? versionMatch[1] : firstLine
+    console.log(`[ffmpeg] Found: ${result.version} at ${ffmpegPath}`)
 
-      // Detect available HEVC encoders
+    // Detect available HEVC encoders
+    return new Promise<FfmpegInfo>((resolve) => {
       execFile(ffmpegPath, ['-encoders'], { timeout: 5000 }, (err2, stdout2) => {
         if (!err2) {
           const candidates = ['libx265', 'hevc_nvenc', 'hevc_amf', 'hevc_qsv', 'hevc_videotoolbox']
@@ -792,7 +875,8 @@ function registerIpcHandlers(): void {
     attachedLibraryService,
     sharedLibraryExport,
     sharedLibraryImport,
-    syncRunner: syncRunner ?? undefined
+    syncRunner: syncRunner ?? undefined,
+    prepareOffline
   })
 }
 
@@ -909,7 +993,7 @@ async function bootstrap(): Promise<void> {
     coldStorageService,
     skipAnalysisService,
     mp4StatsService,
-    ffmpegReady,
+    getFfmpegInfo: () => ffmpegStatus.get(),
     getFfmpegPath,
     getFfprobePath,
     notify: showBackgroundNotification
@@ -982,7 +1066,7 @@ async function bootstrap(): Promise<void> {
 
   // First-launch binary downloads run in the background — nothing else in
   // bootstrap may wait on the network. checkFfmpeg() never rejects; a failed
-  // install resolves ffmpegReady with { available: false }. Offline (#567) the
+  // install leaves ffmpegStatus at { available: false }. Offline (#567) the
   // install is skipped rather than failed, and the online kick-off retries it.
   void (async () => {
     try {
@@ -992,7 +1076,7 @@ async function bootstrap(): Promise<void> {
     }
     // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
     binaryInstalls.fpcalc().catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
-    resolveFfmpegReady(await checkFfmpeg())
+    await ffmpegStatus.refresh()
     // Crash recovery (#63): no locks exist at boot, so any 'deferred' episode
     // restored from queue.json gets its rename + merge now.
     await finalizeDeferredEpisodes().catch((err) =>

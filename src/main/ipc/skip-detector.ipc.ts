@@ -19,7 +19,8 @@ export function register({
   skipAnalysisService: skip,
   broadcast,
   getFfmpegPath,
-  getFfprobePath
+  getFfprobePath,
+  downloadManager
 }: AppDeps): void {
   ipcMain.handle(CHANNELS.SKIP_DETECTOR_GET_DETECTIONS, (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
@@ -105,122 +106,131 @@ export function register({
     return skip.getAutoSkipQueueStatus()
   })
 
+  // Counted as an ffmpeg user (#592), so Prepare for offline doesn't delete a
+  // binary this loop is about to spawn.
   ipcMain.handle(
     CHANNELS.DOWNLOAD_INJECT_CHAPTERS,
     async (_event, animeId: number, allInputs: EpisodeInput[]) => {
-      if (!Number.isFinite(animeId) || animeId <= 0) throw new Error('invalid animeId')
-      const ffmpegPath = getFfmpegPath()
-      if (!ffmpegPath || !getFfprobePath()) throw new Error('ffmpeg/ffprobe not available')
-      if (!Array.isArray(allInputs) || allInputs.length === 0) throw new Error('no episode inputs')
-
-      const episodes = allInputs.filter(
-        (e) => e.filePath.toLowerCase().endsWith('.mkv') && fs.existsSync(e.filePath)
-      )
-      if (episodes.length < 3)
-        throw new Error(`need at least 3 downloaded MKV episodes (have ${episodes.length})`)
-
-      let detections =
-        (store.get('skipDetections') as Record<string, ShowSkipDetections>)[String(animeId)] ?? null
-      if (!detections) {
-        broadcast(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
-          animeId,
-          phase: 'analyzing',
-          current: 0,
-          total: episodes.length
-        })
-        detections = await skip.runSkipAnalysis(animeId, allInputs)
+      const release = downloadManager.beginFfmpegTask()
+      try {
+        return await injectChapters(animeId, allInputs)
+      } finally {
+        release()
       }
-
-      const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-      let written = 0
-      let skipped = 0
-      let failed = 0
-
-      for (let i = 0; i < episodes.length; i++) {
-        const ep = episodes[i]
-        broadcast(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
-          animeId,
-          phase: 'writing',
-          current: i,
-          total: episodes.length,
-          episodeLabel: ep.episodeLabel
-        })
-
-        const det = detections.perEpisode[ep.episodeInt]
-        if (!det) {
-          skipped++
-          continue
-        }
-        const chaptersMeta = formatChaptersMetadata(det.durationSec, det.op, det.ed)
-        if (!chaptersMeta) {
-          skipped++
-          continue
-        }
-
-        const dir = path.dirname(ep.filePath)
-        const base = path.basename(ep.filePath)
-        const tmpOut = path.join(dir, `.${base}.chapters.tmp.mkv`)
-        const chaptersMetaFile = path.join(
-          os.tmpdir(),
-          `anime-dl-chapters-${process.pid}-${Date.now()}-${i}.txt`
-        )
-        try {
-          const oldStat = fs.statSync(ep.filePath)
-          const oldKey = fingerprintCacheKey(animeId, ep.episodeInt, oldStat.size, oldStat.mtimeMs)
-          const cached = cache[oldKey]
-
-          fs.writeFileSync(chaptersMetaFile, chaptersMeta, 'utf8')
-          await new Promise<void>((resolve, reject) => {
-            Ffmpeg.setFfmpegPath(ffmpegPath)
-            Ffmpeg(ep.filePath)
-              .input(chaptersMetaFile)
-              .outputOptions('-y')
-              .outputOptions(['-map', '0', '-map_chapters', '1', '-c', 'copy'])
-              .output(tmpOut)
-              .on('end', () => resolve())
-              .on('error', reject)
-              .run()
-          })
-          fs.renameSync(tmpOut, ep.filePath)
-
-          if (cached) {
-            const newStat = fs.statSync(ep.filePath)
-            const newKey = fingerprintCacheKey(
-              animeId,
-              ep.episodeInt,
-              newStat.size,
-              newStat.mtimeMs
-            )
-            delete cache[oldKey]
-            cache[newKey] = { ...cached, fileSize: newStat.size, fileMtimeMs: newStat.mtimeMs }
-            store.set('skipFingerprintCache', cache)
-          }
-          written++
-        } catch (err) {
-          failed++
-          try {
-            fs.unlinkSync(tmpOut)
-          } catch {
-            /* ignore */
-          }
-          const msg = err instanceof Error ? err.message : String(err)
-          console.error(`[chapter-inject] failed for ${ep.episodeLabel}: ${msg}`)
-        } finally {
-          try {
-            fs.unlinkSync(chaptersMetaFile)
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-
-      broadcast(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
-        animeId,
-        phase: 'done',
-        current: episodes.length,
-        total: episodes.length
-      })
-      return { written, skipped, failed, total: episodes.length }
     }
   )
+
+  async function injectChapters(
+    animeId: number,
+    allInputs: EpisodeInput[]
+  ): Promise<{ written: number; skipped: number; failed: number; total: number }> {
+    if (!Number.isFinite(animeId) || animeId <= 0) throw new Error('invalid animeId')
+    const ffmpegPath = getFfmpegPath()
+    if (!ffmpegPath || !getFfprobePath()) throw new Error('ffmpeg/ffprobe not available')
+    if (!Array.isArray(allInputs) || allInputs.length === 0) throw new Error('no episode inputs')
+
+    const episodes = allInputs.filter(
+      (e) => e.filePath.toLowerCase().endsWith('.mkv') && fs.existsSync(e.filePath)
+    )
+    if (episodes.length < 3)
+      throw new Error(`need at least 3 downloaded MKV episodes (have ${episodes.length})`)
+
+    let detections =
+      (store.get('skipDetections') as Record<string, ShowSkipDetections>)[String(animeId)] ?? null
+    if (!detections) {
+      broadcast(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
+        animeId,
+        phase: 'analyzing',
+        current: 0,
+        total: episodes.length
+      })
+      detections = await skip.runSkipAnalysis(animeId, allInputs)
+    }
+
+    const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+    let written = 0
+    let skipped = 0
+    let failed = 0
+
+    for (let i = 0; i < episodes.length; i++) {
+      const ep = episodes[i]
+      broadcast(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
+        animeId,
+        phase: 'writing',
+        current: i,
+        total: episodes.length,
+        episodeLabel: ep.episodeLabel
+      })
+
+      const det = detections.perEpisode[ep.episodeInt]
+      if (!det) {
+        skipped++
+        continue
+      }
+      const chaptersMeta = formatChaptersMetadata(det.durationSec, det.op, det.ed)
+      if (!chaptersMeta) {
+        skipped++
+        continue
+      }
+
+      const dir = path.dirname(ep.filePath)
+      const base = path.basename(ep.filePath)
+      const tmpOut = path.join(dir, `.${base}.chapters.tmp.mkv`)
+      const chaptersMetaFile = path.join(
+        os.tmpdir(),
+        `anime-dl-chapters-${process.pid}-${Date.now()}-${i}.txt`
+      )
+      try {
+        const oldStat = fs.statSync(ep.filePath)
+        const oldKey = fingerprintCacheKey(animeId, ep.episodeInt, oldStat.size, oldStat.mtimeMs)
+        const cached = cache[oldKey]
+
+        fs.writeFileSync(chaptersMetaFile, chaptersMeta, 'utf8')
+        await new Promise<void>((resolve, reject) => {
+          Ffmpeg.setFfmpegPath(ffmpegPath)
+          Ffmpeg(ep.filePath)
+            .input(chaptersMetaFile)
+            .outputOptions('-y')
+            .outputOptions(['-map', '0', '-map_chapters', '1', '-c', 'copy'])
+            .output(tmpOut)
+            .on('end', () => resolve())
+            .on('error', reject)
+            .run()
+        })
+        fs.renameSync(tmpOut, ep.filePath)
+
+        if (cached) {
+          const newStat = fs.statSync(ep.filePath)
+          const newKey = fingerprintCacheKey(animeId, ep.episodeInt, newStat.size, newStat.mtimeMs)
+          delete cache[oldKey]
+          cache[newKey] = { ...cached, fileSize: newStat.size, fileMtimeMs: newStat.mtimeMs }
+          store.set('skipFingerprintCache', cache)
+        }
+        written++
+      } catch (err) {
+        failed++
+        try {
+          fs.unlinkSync(tmpOut)
+        } catch {
+          /* ignore */
+        }
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[chapter-inject] failed for ${ep.episodeLabel}: ${msg}`)
+      } finally {
+        try {
+          fs.unlinkSync(chaptersMetaFile)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    broadcast(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
+      animeId,
+      phase: 'done',
+      current: episodes.length,
+      total: episodes.length
+    })
+    return { written, skipped, failed, total: episodes.length }
+  }
 }

@@ -164,14 +164,15 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
         calls.push(`recordCheckSettled(${path.basename(filePath)})`)
       }
     },
-    // A promise, not a value: the real `ffmpegReady` is the background
-    // ffmpeg-ensure task's promise, and `await`ing it is what lets a download
-    // that lands before ffmpeg is ready still merge.
-    ffmpegReady: Promise.resolve({
-      get available() {
-        return h.ffmpegAvailable
-      }
-    }),
+    // A promise, not a value: the real `ffmpegStatus.get()` is pending until
+    // the boot install's check, and `await`ing it is what lets a download that
+    // lands before ffmpeg is ready still merge.
+    getFfmpegInfo: () =>
+      Promise.resolve({
+        get available() {
+          return h.ffmpegAvailable
+        }
+      }),
     getFfmpegPath: () => h.ffmpegPath,
     getFfprobePath: () => '/bin/ffprobe',
     notify: (title, body) => calls.push(`notify(${title}|${body})`)
@@ -823,7 +824,7 @@ describe('isMergeExpected (#577)', () => {
     expect(isMergeExpected({ ...on, ffmpegPath: '' })).toBe(false)
   })
 
-  it('is what the export’s pre-fetch reads in src/main/index.ts, after ffmpegReady', () => {
+  it('is what the export’s pre-fetch reads in src/main/index.ts, after ffmpegStatus.get()', () => {
     // The two can't disagree only if the export asks the same function.
     const text = fs.readFileSync(
       path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'),
@@ -832,8 +833,9 @@ describe('isMergeExpected (#577)', () => {
     const at = text.indexOf('mergeExpected: async () => {')
     expect(at).toBeGreaterThan(-1)
     const body = text.slice(at, at + 300)
-    expect(body.indexOf('await ffmpegReady')).toBeGreaterThan(-1)
-    expect(body.indexOf('isMergeExpected(')).toBeGreaterThan(body.indexOf('await ffmpegReady'))
+    const awaited = body.indexOf('await ffmpegStatus.get()')
+    expect(awaited).toBeGreaterThan(-1)
+    expect(body.indexOf('isMergeExpected(')).toBeGreaterThan(awaited)
   })
 })
 

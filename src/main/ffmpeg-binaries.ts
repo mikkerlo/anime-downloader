@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
+import { execFile } from 'child_process'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
@@ -213,19 +214,61 @@ async function fetchComponent(
   }
 }
 
+export type BinaryCheck = { ok: true; version: string } | { ok: false; error: string }
+
+/**
+ * Runs `<bin> -version` (#592): `ensureFfmpeg` only checks that the files
+ * exist, so a truncated or wrong-arch binary passes it. Never rejects.
+ */
+export function verifyBinary(binPath: string, timeoutMs = 5000): Promise<BinaryCheck> {
+  if (!binPath || !fs.existsSync(binPath)) {
+    return Promise.resolve({ ok: false, error: `not found: ${binPath || '(no path)'}` })
+  }
+  return new Promise((resolve) => {
+    execFile(binPath, ['-version'], { timeout: timeoutMs }, (error, stdout) => {
+      if (error) {
+        resolve({ ok: false, error: error.message })
+        return
+      }
+      resolve({ ok: true, version: String(stdout).split('\n')[0] ?? '' })
+    })
+  })
+}
+
+let ffmpegInFlight: Promise<string> | null = null
+
 /**
  * Resolves `''` without downloading while `isOffline()` is true (#567): the
  * install is skipped, not failed, so no error modal, and the caller retries it
  * when the app is online again.
+ *
+ * Single-flight (#592): a call while an install runs gets that same promise,
+ * so the boot install and Prepare for offline never extract into the same
+ * directory at once.
  */
-export async function ensureFfmpeg(
+export function ensureFfmpeg(
   win?: BrowserWindow,
   isOffline: () => boolean = () => false
 ): Promise<string> {
+  ffmpegInFlight ??= installFfmpeg(win, isOffline).finally(() => {
+    ffmpegInFlight = null
+  })
+  return ffmpegInFlight
+}
+
+/** Where `ensureFfmpeg` installs the two binaries. */
+export function ffmpegInstallPaths(): { ffmpeg: string; ffprobe: string } {
   const dest = getFfmpegDir()
   const ext = process.platform === 'win32' ? '.exe' : ''
-  const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
-  const ffprobeBin = path.join(dest, `ffprobe${ext}`)
+  return { ffmpeg: path.join(dest, `ffmpeg${ext}`), ffprobe: path.join(dest, `ffprobe${ext}`) }
+}
+
+async function installFfmpeg(
+  win: BrowserWindow | undefined,
+  isOffline: () => boolean
+): Promise<string> {
+  const dest = getFfmpegDir()
+  const { ffmpeg: ffmpegBin, ffprobe: ffprobeBin } = ffmpegInstallPaths()
 
   if (fs.existsSync(ffmpegBin) && fs.existsSync(ffprobeBin)) {
     ffmpegPath = ffmpegBin

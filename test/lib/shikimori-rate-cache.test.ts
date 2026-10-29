@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildRateCacheEntries,
   findRateEntry,
+  keepQueuedEntries,
   rateFromCacheEntry
 } from '../../src/main/lib/shikimori-rate-cache'
 import type { ShikiAnimeRateEntry } from '../../src/main/shikimori'
@@ -111,5 +112,32 @@ describe('findRateEntry', () => {
     expect(findRateEntry([byTarget, byAnime], 1)).toBe(byTarget)
     expect(findRateEntry([byTarget, byAnime], 2)).toBe(byAnime)
     expect(findRateEntry([byTarget, byAnime], 3)).toBeNull()
+  })
+})
+
+describe('keepQueuedEntries (#592)', () => {
+  const e = (malId: number, score: number, byAnime = false) =>
+    byAnime
+      ? { rate: { score, status: 'watching' as const, episodes: 1 }, shikiAnime: { id: malId } }
+      : { rate: { score, status: 'watching' as const, episodes: 1, target_id: malId } }
+
+  it('nothing queued: the server list as is', () => {
+    const server = [e(1, 6)]
+    expect(keepQueuedEntries(server, [e(1, 7)], new Set())).toBe(server)
+  })
+
+  it('a queued id keeps its cached entry in place; the others take the server', () => {
+    const out = keepQueuedEntries([e(1, 6), e(2, 8)], [e(1, 7), e(2, 1)], new Set([1]))
+    expect(out.map((x) => x.rate.score)).toEqual([7, 8])
+  })
+
+  it('a queued id the server did not return keeps its cached entry, matched by shikiAnime.id too', () => {
+    const out = keepQueuedEntries([e(1, 6)], [e(3, 9, true)], new Set([3]))
+    expect(out.map((x) => x.rate.score)).toEqual([6, 9])
+  })
+
+  it('a queued id with no cached entry takes the server’s', () => {
+    const out = keepQueuedEntries([e(1, 6)], [], new Set([1, 4]))
+    expect(out.map((x) => x.rate.score)).toEqual([6])
   })
 })

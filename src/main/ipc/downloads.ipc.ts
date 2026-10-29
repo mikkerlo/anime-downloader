@@ -235,7 +235,18 @@ export function register(deps: AppDeps): void {
     )
   })
 
+  // Counted as an ffmpeg user (#592), so Prepare for offline doesn't delete a
+  // binary this loop is about to spawn.
   ipcMain.handle(CHANNELS.DOWNLOAD_FIX_METADATA, async () => {
+    const release = downloadManager.beginFfmpegTask()
+    try {
+      return await fixMetadata()
+    } finally {
+      release()
+    }
+  })
+
+  async function fixMetadata(): Promise<{ fixed: number; failed: string[] }> {
     const ffmpegPath = getFfmpegPath()
     const ffprobePath = getFfprobePath()
     if (!ffmpegPath || !ffprobePath) throw new Error('ffmpeg/ffprobe not found')
@@ -350,7 +361,7 @@ export function register(deps: AppDeps): void {
     }
 
     return result
-  })
+  }
 
   /**
    * Pick the simple-mode download root.

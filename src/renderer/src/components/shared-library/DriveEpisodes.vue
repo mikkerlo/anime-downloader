@@ -8,16 +8,19 @@ import {
   useSharedLibrariesStore
 } from '../../stores/shared-libraries';
 import { usePlayFromDrive } from '../../composables/use-play-from-drive';
+import ImportDialog from './ImportDialog.vue';
 
-// One attached library's episodes of a title (#578), with Play from drive. The
-// detail page's attached form lists all of them; a local title's page lists
-// only the episodes this PC doesn't have (`exclude`), as "On <library>".
+// One attached library's episodes of a title (#578), with Play from drive and,
+// next to it, Copy to this PC (#579). The detail page's attached form lists
+// all of them; a local title's page lists only the episodes this PC doesn't
+// have (`exclude`), as "On <library>".
 const props = defineProps<{ title: AttachedTitleDetail; exclude?: ReadonlySet<string> }>();
 
 const shared = useSharedLibrariesStore();
 const { ffmpegAvailable } = storeToRefs(shared);
 const { play } = usePlayFromDrive();
 const error = ref('');
+const copying = ref(false);
 
 const episodes = computed(() =>
   props.title.episodes.filter((e) => !props.exclude?.has(e.episodeInt))
@@ -51,6 +54,15 @@ async function playItem(ep: AttachedTitleEpisode, item: AttachedTitleItem): Prom
       <span v-if="unplugged" class="sl-badge" data-testid="drive-episodes-unplugged">{{
         DRIVE_NOT_CONNECTED
       }}</span>
+      <button
+        class="sl-btn copy-btn"
+        data-testid="detail-copy-to-pc"
+        :disabled="unplugged"
+        :title="unplugged && library ? notConnectedTitle(library) : undefined"
+        @click="copying = true"
+      >
+        Copy to this PC
+      </button>
     </div>
     <p v-if="error" class="sl-error">{{ error }}</p>
     <div v-for="ep in episodes" :key="ep.episodeInt" class="drive-row">
@@ -72,6 +84,12 @@ async function playItem(ep: AttachedTitleEpisode, item: AttachedTitleItem): Prom
         </div>
       </div>
     </div>
+    <ImportDialog
+      v-if="copying"
+      :library-id="title.libraryId"
+      :anime-ids="[title.animeId]"
+      @close="copying = false"
+    />
   </section>
 </template>
 
@@ -89,6 +107,10 @@ async function playItem(ep: AttachedTitleEpisode, item: AttachedTitleItem): Prom
   display: flex;
   align-items: baseline;
   gap: 10px;
+}
+
+.copy-btn {
+  margin-left: auto;
 }
 
 .section-head h3 {

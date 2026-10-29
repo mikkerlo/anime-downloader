@@ -31,8 +31,17 @@ const props = withDefaults(
     choices?: Record<string, number>;
     /** Not-downloaded episodes the target has (`presentMissing`): "On the drive". */
     onDrive?: string[];
+    /** The copy to this PC (#579) reuses the tree: what a `missing` episode and no titles say. */
+    missingLabel?: string;
+    emptyLabel?: string;
   }>(),
-  { prefetch: 'unavailable', choices: () => ({}), onDrive: () => [] }
+  {
+    prefetch: 'unavailable',
+    choices: () => ({}),
+    onDrive: () => [],
+    missingLabel: 'Not downloaded',
+    emptyLabel: 'No downloaded episodes to export.'
+  }
 );
 
 const emit = defineEmits<{
@@ -96,7 +105,7 @@ function checkState(keys: string[]): TriState {
 }
 
 function episodeNote(e: ExportTreeEpisode): string {
-  if (e.state === 'missing') return 'Not downloaded';
+  if (e.state === 'missing') return props.missingLabel;
   if (e.state === 'busy') return 'Busy (merging or downloading)';
   if (props.present.includes(e.key)) return 'On the drive';
   return e.unmerged ? `${formatBytes(e.size)} · .mp4 + .ass` : formatBytes(e.size);
@@ -105,7 +114,7 @@ function episodeNote(e: ExportTreeEpisode): string {
 
 <template>
   <div class="export-tree" data-testid="export-tree">
-    <div v-if="titles.length === 0" class="empty">No downloaded episodes to export.</div>
+    <div v-if="titles.length === 0" class="empty">{{ emptyLabel }}</div>
     <div v-for="t in titles" :key="t.animeId" class="node title-node">
       <div class="row">
         <button

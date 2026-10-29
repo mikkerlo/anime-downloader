@@ -888,9 +888,21 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     const cutoff = Date.now() - days * 86400_000
     const candidates: CleanupCandidate[] = []
+    // A copy from a Shared Library (#579) ages from its arrival. The sweep
+    // deletes every translation's file of an episode, so one recent arrival in
+    // any translation (`animeId:episodeInt:*`) keeps the whole episode.
+    const arrivedRecently = new Set<string>()
+    const episodes =
+      (store.get('downloadedEpisodes') as Record<string, { arrivedAt?: number }> | undefined) ?? {}
+    for (const [key, entry] of Object.entries(episodes)) {
+      const parts = key.split(':')
+      if (parts.length !== 3 || typeof entry?.arrivedAt !== 'number') continue
+      if (entry.arrivedAt > cutoff) arrivedRecently.add(`${parts[0]}:${parts[1]}`)
+    }
 
     for (const [key, entry] of Object.entries(watchProgress)) {
       if (!entry.watched || !entry.watchedAt || entry.watchedAt > cutoff) continue
+      if (arrivedRecently.has(key)) continue
       const sep = key.indexOf(':')
       if (sep < 0) continue
       const animeId = key.slice(0, sep)

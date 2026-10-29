@@ -18,6 +18,11 @@ export interface DownloadedEpisodeEntry {
   author: string
   quality: number
   translationId: number
+  /**
+   * When a copy from a Shared Library arrived on this PC (#579), in ms. Watched
+   * cleanup counts an episode's age from it; ordinary downloads have none.
+   */
+  arrivedAt?: number
 }
 
 export type DownloadedEpisodesMap = Record<string, DownloadedEpisodeEntry>
@@ -30,6 +35,8 @@ export interface DownloadedEpisodeSource {
   translationType: string
   author: string
   quality: number
+  /** Set by the import (#579); without it, the entry's existing `arrivedAt` is kept. */
+  arrivedAt?: number
 }
 
 /** The slice of `StorageService` this helper touches. */
@@ -53,12 +60,17 @@ export function persistDownloadedEpisode(
   if (!(animeId > 0) || !episodeInt) return false
 
   const episodes = store.get('downloadedEpisodes')
+  const key = `${animeId}:${episodeInt}:${translationId}`
+  // A later write to the same key (the subtitle-retry tail, a re-download)
+  // carries the arrival over, so cleanup keeps aging from the first arrival.
+  const arrivedAt = source.arrivedAt ?? episodes[key]?.arrivedAt
   delete episodes[`${animeId}:${episodeInt}`]
-  episodes[`${animeId}:${episodeInt}:${translationId}`] = {
+  episodes[key] = {
     translationType,
     author,
     quality,
-    translationId
+    translationId,
+    ...(arrivedAt !== undefined ? { arrivedAt } : {})
   }
   store.set('downloadedEpisodes', episodes)
   return true

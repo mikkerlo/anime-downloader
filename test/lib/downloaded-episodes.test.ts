@@ -112,6 +112,45 @@ describe('persistDownloadedEpisode', () => {
     expect(store.entries['100:3:42'].quality).toBe(1080)
   })
 
+  describe('arrivedAt (#579)', () => {
+    it('is written when the source carries it', () => {
+      const store = makeStore()
+      persistDownloadedEpisode(store, source({ arrivedAt: 1_700_000_000_000 }))
+      expect(store.entries['100:3:42'].arrivedAt).toBe(1_700_000_000_000)
+    })
+
+    it('survives a later write of the same key without it (the subtitle-retry tail)', () => {
+      // On main the entry was rebuilt from scratch, dropping it.
+      const store = makeStore()
+      persistDownloadedEpisode(store, source({ arrivedAt: 1_700_000_000_000 }))
+      persistDownloadedEpisode(store, source({ quality: 720 }))
+      expect(store.entries['100:3:42']).toEqual({
+        translationType: 'subRu',
+        author: 'Author',
+        quality: 720,
+        translationId: 42,
+        arrivedAt: 1_700_000_000_000
+      })
+    })
+
+    it('a newer arrival replaces the old one; another key never lends its own', () => {
+      const store = makeStore({
+        '100:3:99': {
+          translationType: 'voiceRu',
+          author: 'Other',
+          quality: 720,
+          translationId: 99,
+          arrivedAt: 5
+        }
+      })
+      persistDownloadedEpisode(store, source())
+      expect(store.entries['100:3:42']).not.toHaveProperty('arrivedAt')
+      persistDownloadedEpisode(store, source({ arrivedAt: 10 }))
+      persistDownloadedEpisode(store, source({ arrivedAt: 20 }))
+      expect(store.entries['100:3:42'].arrivedAt).toBe(20)
+    })
+  })
+
   it('refuses an item with no anime id — the key would be unreadable', () => {
     for (const animeId of [0, -1]) {
       const store = makeStore()

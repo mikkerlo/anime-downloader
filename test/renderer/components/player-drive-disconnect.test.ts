@@ -13,6 +13,7 @@ import { ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import DriveEpisodes from '../../../src/renderer/src/components/shared-library/DriveEpisodes.vue'
+import ImportDialog from '../../../src/renderer/src/components/shared-library/ImportDialog.vue'
 
 const SOURCE = readFileSync(
   resolve(__dirname, '../../../src/renderer/src/components/views/PlayerView.vue'),
@@ -142,7 +143,10 @@ describe('DriveEpisodes on an unplugged drive', () => {
       onSharedLibrariesChanged: () => () => {},
       onSharedLibraryFound: () => () => {},
       syncGetStatus: async () => ({ running: [], libraries: {} }),
-      onSyncRunFinished: () => () => {}
+      onSyncRunFinished: () => () => {},
+      importPlan: vi.fn(async () => new Promise(() => {})),
+      importListJobs: async () => [],
+      onImportJobUpdated: () => () => {}
     }
   })
 
@@ -162,5 +166,19 @@ describe('DriveEpisodes on an unplugged drive', () => {
     await flushPromises()
     expect(w.find('[data-testid="drive-episodes-unplugged"]').exists()).toBe(false)
     expect(w.find('[data-testid="play-episode-from-drive"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('Copy to this PC (#579) sits next to Play: off unplugged, and opens the dialog for this title', async () => {
+    available = false
+    const off = mount(DriveEpisodes, { props: { title: detail } })
+    await flushPromises()
+    expect(off.find('[data-testid="detail-copy-to-pc"]').attributes('disabled')).toBeDefined()
+
+    setActivePinia(createPinia())
+    available = true
+    const w = mount(DriveEpisodes, { props: { title: detail } })
+    await flushPromises()
+    await w.find('[data-testid="detail-copy-to-pc"]').trigger('click')
+    expect(w.findComponent(ImportDialog).props()).toEqual({ libraryId: 'lib-1', animeIds: [101] })
   })
 })

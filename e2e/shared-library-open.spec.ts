@@ -136,6 +136,93 @@ test('open a Shared Library, see its titles, and play an .mp4 and an .mkv from t
 })
 
 /**
+ * Copy to this PC (#579): the title is copied from the drive under this PC's
+ * own name (the drive's folder is shortened), shows in Library, and plays from
+ * the local copy once the drive is "unplugged" (its folder renamed away).
+ * Nothing on the drive changes.
+ */
+test('Copy to this PC: the title lands in Library and plays with the drive unplugged', async () => {
+  const profile = makeProfile({ prefix: 'anime-dl-shared-copy-' })
+  const downloads = path.join(profile.root, 'downloads')
+  fs.mkdirSync(downloads)
+  fs.writeFileSync(
+    path.join(profile.userData, 'config.json'),
+    JSON.stringify({
+      playerVolume: 0,
+      playerMuted: true,
+      playerMode: 'builtin',
+      workOffline: true,
+      downloadDir: downloads
+    }),
+    { mode: 0o600 }
+  )
+  const drive = path.join(profile.root, 'drive', 'Fixture library')
+  fs.cpSync(FIXTURE, drive, { recursive: true })
+  const before = tree(drive)
+  const away = path.join(profile.root, 'unplugged')
+  const local = path.join(
+    downloads,
+    'Sousou no Frieren',
+    'Sousou no Frieren - 01 [Crunchyroll].mp4'
+  )
+
+  let launched: LaunchedApp | undefined
+  try {
+    launched = await launchApp(profile)
+    const { app } = launched
+    await assertUserData(app, profile)
+    await app.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as never
+    }, path.dirname(drive))
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.locator('.sidebar').getByRole('button', { name: 'Library', exact: true }).click()
+    await page.locator('.library-view').getByTestId('open-shared-library').click()
+    await page.getByTestId('use-videos').click()
+    await page.getByTestId('show-library').click()
+
+    const frieren = page.getByTestId('drive-title').filter({ hasText: 'Frieren' })
+    await expect(frieren.getByTestId('on-this-pc')).toHaveCount(0)
+    await frieren.getByTestId('copy-to-pc').click()
+    const dialog = page.getByTestId('import-dialog')
+    await expect(dialog).toContainText('Sousou no Frieren')
+    await dialog.getByTestId('import-start').click()
+    await expect(dialog).toHaveCount(0)
+    await expect(frieren.getByTestId('on-this-pc')).toBeVisible({ timeout: 20_000 })
+    expect(fs.existsSync(local)).toBe(true)
+    expect(fs.readFileSync(local)).toEqual(
+      fs.readFileSync(path.join(drive, 'Frieren~3f2a1c', 'Frieren~3f2a1c - 01 [Crunchyroll].mp4'))
+    )
+    expect(tree(drive)).toEqual(before)
+
+    // The drive goes away; the copy is this PC's own download now.
+    fs.renameSync(drive, away)
+    await page.locator('.pill-tab', { hasText: 'All' }).click()
+    const card = page.locator('.library-view .acard', { hasText: 'Sousou no Frieren' })
+    await expect(card).toHaveCount(1)
+    await card.click()
+    // The detail page from the cached details the copy registered, offline.
+    await page.locator('button[title="Open file"]').first().click()
+    const video = page.locator('video').first()
+    await expect
+      .poll(() => video.evaluate((v) => (v as HTMLVideoElement).readyState), { timeout: 30_000 })
+      .toBeGreaterThanOrEqual(2)
+    expect(await video.evaluate((v) => (v as HTMLVideoElement).src)).toContain(
+      encodeURIComponent('Sousou no Frieren - 01 [Crunchyroll].mp4')
+    )
+    await page.locator('.close-btn').first().click()
+  } finally {
+    try {
+      if (launched) assertNoDownloads(launched)
+    } finally {
+      await launched?.app.close()
+      profile.cleanup()
+    }
+  }
+})
+
+/**
  * Drive detection and Forget (#581). `ANIME_DL_MOUNT_PARENTS` points the mount
  * candidates at a temp folder, so moving the library in and out of it plays an
  * unplug and a re-plug (a test can't mount a real drive). A window-focus event

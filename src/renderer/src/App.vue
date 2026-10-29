@@ -21,6 +21,7 @@ import RecommendationsView from './components/views/RecommendationsView.vue';
 import HomeView from './components/views/HomeView.vue';
 import PlayerView from './components/views/PlayerView.vue';
 import OpenLibraryDialog from './components/shared-library/OpenLibraryDialog.vue';
+import DuplicatePrompt from './components/shared-library/DuplicatePrompt.vue';
 import { foundText, useSharedLibrariesStore } from './stores/shared-libraries';
 import { formatBytes } from './utils';
 
@@ -256,6 +257,8 @@ onBeforeUnmount(() => {
       @close="openingFound = null"
       @show="showFoundLibrary"
     />
+    <!-- A copy to this PC asks about an episode this PC already has (#579), over any view. -->
+    <DuplicatePrompt />
     <div v-if="ffmpegDownloading || ffmpegError" class="ffmpeg-overlay">
       <div v-if="ffmpegError" class="ffmpeg-modal">
         <p class="ffmpeg-title">ffmpeg install failed</p>

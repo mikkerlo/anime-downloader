@@ -384,6 +384,22 @@ interface Api {
   exportLocateTarget: (jobId: string) => Promise<{ ok: boolean; reason: string | null }>
   onExportJobUpdated: (callback: (job: ExportJobView) => void) => Unsubscribe
 
+  // Copy to this PC from a Shared Library (#579)
+  /** One title's tree (Copy to this PC), or every title's (`animeIds: null`, Import all). */
+  importPlan: (req: ImportPlanRequest) => Promise<ImportPlan>
+  importStart: (req: ImportStartRequest) => Promise<ImportStartResult>
+  /** The answer to a job's open duplicate prompt. */
+  importResolveDuplicate: (
+    jobId: string,
+    answer: ImportDuplicateAnswer
+  ) => Promise<ImportJobView | null>
+  importPause: (jobId: string) => Promise<ImportJobView | null>
+  importResume: (jobId: string) => Promise<ImportJobView | null>
+  /** Cancels a running job; on a finished one, dismisses it (null). */
+  importCancel: (jobId: string) => Promise<ImportJobView | null>
+  importListJobs: () => Promise<ImportJobView[]>
+  onImportJobUpdated: (callback: (job: ImportJobView) => void) => Unsubscribe
+
   // Shared Library (#578)
   /** Folder picker, then the libraries in it and one level below. */
   sharedLibraryPickAndDiscover: () => Promise<SharedLibraryDiscovery>

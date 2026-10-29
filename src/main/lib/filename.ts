@@ -6,10 +6,14 @@
 // the comment above lists a *fifth* member, `part`, which this regex has never
 // matched: a `.part` file is an in-progress download and has no parsed episode.
 // Built once at module scope, case-insensitive as before.
+//
+// The author tag may hold one level of nested brackets (#579), as a real
+// `… - 03 [Crunchyroll [Chinese]].ass` does: a `[…]` inside the tag is one
+// unit, and any other character but `]` is allowed as before.
 import { EPISODE_ARTIFACT_EXT_ALTERNATION } from '@shared/episode-files'
 
 export const FILENAME_EP_RE = new RegExp(
-  `\\s-\\s(\\d{1,4}(?:\\.\\d+)?)(?:\\s\\[[^\\]]+\\])?\\.(${EPISODE_ARTIFACT_EXT_ALTERNATION})$`,
+  `\\s-\\s(\\d{1,4}(?:\\.\\d+)?)(?:\\s\\[(?:[^\\]]|\\[[^\\]]*\\])+\\])?\\.(${EPISODE_ARTIFACT_EXT_ALTERNATION})$`,
   'i'
 )
 

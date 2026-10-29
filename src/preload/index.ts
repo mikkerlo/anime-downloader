@@ -529,6 +529,26 @@ const api = {
     }>,
   onExportJobUpdated: subscribe<ExportJobView>(EVENT_CHANNELS.EXPORT_JOB_UPDATED),
 
+  // Copy to this PC from a Shared Library (#579)
+  importPlan: (req: ImportPlanRequest) =>
+    ipcRenderer.invoke(CHANNELS.IMPORT_PLAN, req) as Promise<ImportPlan>,
+  importStart: (req: ImportStartRequest) =>
+    ipcRenderer.invoke(CHANNELS.IMPORT_START, req) as Promise<ImportStartResult>,
+  importResolveDuplicate: (jobId: string, answer: ImportDuplicateAnswer) =>
+    ipcRenderer.invoke(
+      CHANNELS.IMPORT_RESOLVE_DUPLICATE,
+      jobId,
+      answer
+    ) as Promise<ImportJobView | null>,
+  importPause: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.IMPORT_PAUSE, jobId) as Promise<ImportJobView | null>,
+  importResume: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.IMPORT_RESUME, jobId) as Promise<ImportJobView | null>,
+  importCancel: (jobId: string) =>
+    ipcRenderer.invoke(CHANNELS.IMPORT_CANCEL, jobId) as Promise<ImportJobView | null>,
+  importListJobs: () => ipcRenderer.invoke(CHANNELS.IMPORT_LIST_JOBS) as Promise<ImportJobView[]>,
+  onImportJobUpdated: subscribe<ImportJobView>(EVENT_CHANNELS.IMPORT_JOB_UPDATED),
+
   // Shared Library (#578)
   sharedLibraryPickAndDiscover: () =>
     ipcRenderer.invoke(

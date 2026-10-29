@@ -619,3 +619,90 @@ interface ExportJobView {
   error: string | null
   createdAt: number
 }
+
+// --- Copy to this PC (S7b #579) ---------------------------------------------------
+
+/** Where copied episodes land: the hot (download) root or the cold one. */
+type ImportDestination = 'hot' | 'cold'
+
+/** `import:plan`: one title's episodes (Copy to this PC), or every title (`null`, Import all). */
+interface ImportPlanRequest {
+  libraryId: string
+  animeIds: number[] | null
+}
+
+/** An item the import never creates; the dialog lists it with the reason. */
+interface ImportRejected {
+  key: string
+  label: string
+  reason: string
+}
+
+interface ImportPlan {
+  libraryId: string
+  libraryName: string
+  /** `ExportTree`'s shape; `notDownloaded` is always empty. A `missing` episode's file is gone from the drive. */
+  titles: ExportTreeTitle[]
+  rejected: ImportRejected[]
+  hot: { dir: string; free: number | null }
+  /** Null when cold storage isn't set up or its folder is missing (`coldUnavailable` says which). */
+  cold: { dir: string; free: number | null } | null
+  coldUnavailable: string | null
+  /** Set when there is nothing to plan: the library isn't attached, or its drive isn't connected. */
+  error: string | null
+}
+
+interface ImportStartRequest {
+  libraryId: string
+  selection: ExportSelectionItem[]
+  destination: ImportDestination
+}
+
+type ImportStartResult = { ok: true; job: ImportJobView } | { ok: false; reason: string }
+
+/** The duplicate prompt's answers: keep this PC's file, replace it with the drive's, or keep both. */
+type ImportDuplicateChoice = 'keep' | 'replace' | 'keep-both'
+
+interface ImportDuplicateAnswer {
+  choice: ImportDuplicateChoice
+  /** "Apply to all remaining": later duplicates of this job get the same answer. */
+  applyToAll: boolean
+}
+
+/** An episode this PC already has, waiting for the user's answer. */
+interface ImportDuplicatePrompt {
+  key: string
+  label: string
+  /** This PC's file: the same translation's, else another translation's. */
+  localSize: number
+  driveSize: number
+  /** The local file is another translation's, under another name. */
+  canKeepBoth: boolean
+  /** False while this PC's copy is still downloading (`.part`) or merging. */
+  canReplace: boolean
+}
+
+/** Export's statuses, plus `waiting-duplicate`: paused on the duplicate prompt. */
+type ImportJobStatus = ExportJobStatus | 'waiting-duplicate'
+
+/** An import job as the renderer shows it (`IMPORT_JOB_UPDATED`). */
+interface ImportJobView {
+  jobId: string
+  libraryId: string
+  libraryName: string
+  destination: ImportDestination
+  status: ImportJobStatus
+  itemsDone: number
+  itemsTotal: number
+  bytesDone: number
+  bytesTotal: number
+  /** The item being copied, as "Title — episode". */
+  current: string | null
+  duplicate: ImportDuplicatePrompt | null
+  failed: { key: string; label: string; reason: string }[]
+  /** Duplicates where this PC's file was kept. */
+  kept: { key: string; label: string; reason: string }[]
+  note: string | null
+  error: string | null
+  createdAt: number
+}

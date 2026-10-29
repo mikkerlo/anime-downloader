@@ -112,9 +112,12 @@ export interface SyncRunner {
   /** Resolves once no run of `libraryId` is in flight (S7c's `syncIdle`). */
   idle(libraryId: string): Promise<void>
   status(): Promise<SyncStatus>
-  /** Subscribes to availability, the online edge, the drain's settles, and Forget. */
   /** Resolves once every leg, settle and Forget step queued so far has run. */
   quiesce(): Promise<void>
+  /**
+   * Subscribes to the drain's settles and Forget, and with `triggers` (the
+   * default) to availability and the online edge.
+   */
   start(opts?: { triggers?: boolean }): void
   stop(): void
   readonly syncLog: SyncLog
@@ -779,7 +782,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         .map((r) => `${r.animeId}:${r.fieldPath}`)
     )
     const nextBase = normalizeDoc(shikiBase?.doc ?? shiki)
-    const queue = store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []
+    // Only this leg's own entries; the queue is re-read right before the write.
+    const additions: QueuedShikimoriUpdate[] = []
     let queuedAt = t
     const legConflicts: LegConflict[] = m.conflicts.map((c) => ({
       animeId: c.animeId,
@@ -849,7 +853,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           const p = rates[String(malId)]?.[f]
           if (p) provenance[f] = p.provenance
         }
-        queue.push({
+        additions.push({
           malId,
           rateId: row?.id ?? null,
           before: row ? rateValues(row) : NO_RATE_BEFORE,
@@ -879,7 +883,12 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       runId
     )
     out.resolvedElsewhere = conv.resolvedElsewhere
-    if (queuedAt > t) {
+    if (additions.length > 0) {
+      // Re-read: a user edit or a drain may have written the queue during the awaits above.
+      const queue = [
+        ...(store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []),
+        ...additions
+      ]
       store.set('shikimoriUpdateQueue', queue)
       deps.broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
       deps.sync.startSyncTimer()
@@ -889,6 +898,25 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   // --- the settle listener (path C, drops) ---------------------------------------------------
+
+  /**
+   * What Shikimori has for a pending field, as this PC last saw it: the cache,
+   * when a refresh replaced the patch since; otherwise the value the patch
+   * covered (`prePatch`). The cache itself shows the pending value.
+   */
+  function serverValueOf(
+    ownerId: number,
+    malId: number,
+    field: SyncRateField,
+    p: PendingField
+  ): number | string | null {
+    const c = cacheEntry(store, ownerId, malId)
+    const cached = c && c.idx !== -1 ? c.entries[c.idx].rate : null
+    if (cached && parseAt(cached.serverUpdatedAt) > parseAt(p.prePatch.serverUpdatedAt)) {
+      return cached[field] as number | string
+    }
+    return p.prePatch.value ?? (cached?.[field] as number | string | undefined) ?? null
+  }
 
   function animeIdOfMal(ownerId: number, malId: number): string | null {
     const c = cacheEntry(store, ownerId, malId)
@@ -928,7 +956,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
               fieldPath: `rate.${f}` as SyncConflictFieldPath,
               reason: REJECTED_REASON,
               local: fields![f]!.value,
-              party: (e.after as Record<string, unknown>)[f],
+              party: serverValueOf(e.ownerId, e.malId, f, fields![f]!),
               base: null
             })),
             runId: `settle-${e.malId}`
@@ -1125,9 +1153,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const result: SyncRunResult = { runId, trigger, libraries }
     record.result = result
     if (fresh.length > 0) {
-      await syncLog
-        .append(record)
-        .catch((err) => log.warn('[sync] could not write the sync log', err))
+      // Under the mutex, as every other append: the size bound rewrites the file.
+      await locked(() => syncLog.append(record)).catch((err) =>
+        log.warn('[sync] could not write the sync log', err)
+      )
     }
     deps.broadcast(deps.runFinishedChannel ?? EVENT_CHANNELS.SYNC_RUN_FINISHED, result)
     return result

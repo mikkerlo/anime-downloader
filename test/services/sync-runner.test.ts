@@ -1405,7 +1405,9 @@ describe('settles and triggers', () => {
     expect(held).toHaveLength(1)
     expect(held[0]).toMatchObject({
       fieldPath: 'rate.score',
-      reason: 'Shikimori rejected this change'
+      reason: 'Shikimori rejected this change',
+      // Shikimori's side is the server value the patch covered, not the rejected 11.
+      parties: { local: 11, shikimori: 6 }
     })
     expect((await pending(pc))[MAL].score).toMatchObject({ value: 11, drops: 3 })
     server.writeError = null
@@ -1435,5 +1437,75 @@ describe('settles and triggers', () => {
     online!()
     await vi.waitFor(() => expect(runs.map((r) => r.trigger)).toEqual(['plug', 'online']))
     expect(pc.attached.get(libraryId)!.lastSyncAt).toBe(pc.clock.t)
+  })
+})
+
+describe('the Shikimori leg never writes back a stale queue (#628 review)', () => {
+  /** Runs `fn` once, at the leg's `shikimori-` base rename: after the queue read, before the queue write. */
+  function duringShikiBaseWrite(fn: () => void) {
+    const real = fs.promises.rename.bind(fs.promises)
+    let done = false
+    return vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (!done && String(to).includes('shikimori-')) {
+        done = true
+        fn()
+      }
+      return real(from, to)
+    })
+  }
+
+  it("a user edit queued during the leg's awaits survives it", async () => {
+    const { pc } = await ownerSetup({
+      base: { score: 6 },
+      drive: { score: 8 },
+      server: { score: 6 },
+      shikiBase: { score: 6 }
+    })
+    const kicked = vi.spyOn(pc.sync, 'syncShikimoriQueue').mockResolvedValue(undefined)
+    const userEntry = {
+      malId: 7777,
+      rateId: 1,
+      before: vals(),
+      after: vals({ score: 3 }),
+      queuedAt: 42
+    }
+    const spy = duringShikiBaseWrite(() => {
+      const cur = pc.store.get('shikimoriUpdateQueue') as unknown[]
+      pc.store.set('shikimoriUpdateQueue', [...cur, userEntry])
+    })
+    await pc.runner.runAll('manual')
+    spy.mockRestore()
+    kicked.mockRestore()
+    expect(queue(pc).map((q) => q.queuedAt)).toContain(42)
+    expect(queue(pc).filter((q) => q.malId === MAL)).toHaveLength(1)
+  })
+
+  it('an entry a drain consumed during the leg does not come back', async () => {
+    const { pc } = await ownerSetup({
+      base: { score: 6 },
+      drive: { score: 8 },
+      server: { score: 6 },
+      shikiBase: { score: 6 }
+    })
+    const kicked = vi.spyOn(pc.sync, 'syncShikimoriQueue').mockResolvedValue(undefined)
+    const drained = vi.spyOn(pc.sync, 'drainNow').mockResolvedValue(undefined)
+    // Another title's user edit, still queued when the leg reads the queue.
+    pc.store.set('shikimoriUpdateQueue', [
+      { malId: 7777, rateId: 1, before: vals(), after: vals({ score: 3 }), queuedAt: 42 }
+    ])
+    const spy = duringShikiBaseWrite(() => {
+      // A timer drain sends it and drops it (`dropConsumedEntries` writes a fresh array).
+      const cur = pc.store.get('shikimoriUpdateQueue') as { queuedAt: number }[]
+      pc.store.set(
+        'shikimoriUpdateQueue',
+        cur.filter((q) => q.queuedAt !== 42)
+      )
+    })
+    await pc.runner.runAll('manual')
+    spy.mockRestore()
+    kicked.mockRestore()
+    drained.mockRestore()
+    expect(queue(pc).map((q) => q.queuedAt)).not.toContain(42)
+    expect(queue(pc).filter((q) => q.malId === MAL)).toHaveLength(1)
   })
 })

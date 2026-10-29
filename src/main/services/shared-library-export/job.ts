@@ -106,7 +106,7 @@ export interface PrefetchRecord {
 export interface PrefetchJobDeps {
   row: (id: string) => PrefetchRow | null
   mergeStatus: (translationId: number) => MergeStatus | null
-  /** `isMergeExpected`, after `ffmpegReady`: re-read at every evaluation. */
+  /** `isMergeExpected`, after `ffmpegStatus.get()`: re-read at every evaluation. */
   mergeExpected: () => Promise<boolean>
   /** `isMergeCycleActive() || hasHeldMerge()`; the job adds the player. */
   mergeInFlight: () => boolean
@@ -709,7 +709,7 @@ export class ExportJob {
 
   /**
    * `evaluatePrefetchItem` on the state read now: the awaited reads first (the
-   * merge predicate, after `ffmpegReady`, and the files), then the queue and
+   * merge predicate, after `ffmpegStatus.get()`, and the files), then the queue and
    * merge state synchronously, so a status that changed meanwhile wins.
    */
   private async evaluate(p: PrefetchRecord): Promise<PrefetchDecision> {

@@ -33,7 +33,7 @@ export interface PrefetchState {
   video: PrefetchRow | null
   subtitle: PrefetchRow | null
   mergeStatus: MergeStatus | null
-  /** `isMergeExpected(...)`, read for this evaluation after `ffmpegReady`. */
+  /** `isMergeExpected(...)`, read for this evaluation after `ffmpegStatus.get()`. */
   mergeExpected: boolean
   /** `isMergeCycleActive()`, `hasHeldMerge()` or the player is open. */
   mergeInFlight: boolean

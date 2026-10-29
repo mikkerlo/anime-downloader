@@ -67,6 +67,14 @@ export class VerifyError extends Error {
   }
 }
 
+/** The source isn't what the caller expected (`copyVerified`'s `expect`); `dest` is untouched. */
+export class ExpectationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ExpectationError'
+  }
+}
+
 /** FAT32's largest file: 4 GiB − 1 bytes. */
 export const FAT32_MAX_FILE_SIZE = 4_294_967_295
 /**
@@ -153,6 +161,12 @@ export async function copyVerified(
     hashLimit?: number
     /** The target's filesystem, for the run-time size rule. */
     fsType?: ExportFsType
+    /**
+     * What the source must be (#579: the drive's manifest entry). A copy that
+     * differs never reaches `dest`: its temp file is deleted and
+     * `ExpectationError` thrown.
+     */
+    expect?: { size: number; sha256?: string }
   } = {}
 ): Promise<{ size: number; sha256: string }> {
   const tmp = `${dest}${TMP_SUFFIX}`
@@ -191,7 +205,19 @@ export async function copyVerified(
     throw err
   }
   await fh.close()
-  return placeVerified(xfs, tmp, dest, size, hash.digest('hex'), opts)
+  const sha256 = hash.digest('hex')
+  // Checked on the temp file, before anything at `dest` is touched: an import's
+  // Replace in place (#579) has this PC's own file there.
+  const want = opts.expect
+  if (want && (size !== want.size || (want.sha256 !== undefined && sha256 !== want.sha256))) {
+    await unlinkQuiet(xfs, tmp).catch(() => {})
+    throw new ExpectationError(
+      size !== want.size
+        ? `the source is ${size} bytes, ${want.size} were expected`
+        : 'the source does not match its expected hash'
+    )
+  }
+  return placeVerified(xfs, tmp, dest, size, sha256, opts)
 }
 
 /**

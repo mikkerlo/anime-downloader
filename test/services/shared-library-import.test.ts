@@ -380,6 +380,60 @@ describe('duplicates: ask, showing both sizes', () => {
     expect(fs.statSync(path.join(env.hot, 'Dungeon Meshi', `${MESHI_FILE}.mkv`)).size).toBe(19727)
   })
 
+  // PR #633 review, repro 1: the manifest check used to run after the rename,
+  // so a same-name Replace had already put the bad copy over this PC's file.
+  it('Replace in place, then the drive’s file doesn’t match its manifest: this PC’s file and entry stay', async () => {
+    env = makeImportEnv({}, { editDrive: (d) => fs.appendFileSync(path.join(d, MESHI_MKV), 'x') })
+    const local = localFile(env, 'Dungeon Meshi', `${MESHI_FILE}.mkv`, 700)
+    const was = fs.readFileSync(local)
+    env.store.set('downloadedEpisodes', { [MESHI]: entry(9101, 'AniLibria') })
+    const j = await startOk(env, [MESHI])
+    await until(() => job(env).status === 'waiting-duplicate', 'the prompt')
+    await env.svc.resolveDuplicate(j.jobId, { choice: 'replace', applyToAll: false })
+    await env.svc.settled(j.jobId)
+    expect(fs.existsSync(local)).toBe(true)
+    expect(fs.readFileSync(local)).toEqual(was)
+    expect(fs.existsSync(`${local}${TMP_SUFFIX}`)).toBe(false)
+    expect(read('downloadedEpisodes')).toEqual({ [MESHI]: entry(9101, 'AniLibria') })
+    expect(job(env).failed.map((f) => f.key)).toEqual([MESHI])
+    expect(job(env).failed[0].reason).toMatch(/doesn't match its library/)
+  })
+
+  // PR #633 review, repro 2: on Import all, the copy this job had just made of
+  // one translation counted as a duplicate for the next translation.
+  it('Import all of two translations of one episode: the job’s own copy is never a duplicate', async () => {
+    const other = '202:1:9102'
+    env = makeImportEnv(
+      {},
+      {
+        editDrive: (d) => {
+          const rel = 'Dungeon Meshi/Dungeon Meshi - 01 [Other].mkv'
+          fs.copyFileSync(path.join(d, MESHI_MKV), path.join(d, rel))
+          const file = path.join(d, '.anime-dl', 'manifest.json')
+          const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+          m.items.push({ ...m.items[1], translationId: 9102, author: 'Other', path: rel })
+          fs.writeFileSync(file, `${JSON.stringify(m, null, 2)}\n`)
+        }
+      }
+    )
+    const j = await startOk(env, [MESHI, other])
+    // As Import all relies on: any prompt gets "Replace" with "Apply to all remaining".
+    await until(
+      () => ['completed', 'waiting-duplicate'].includes(job(env).status),
+      'the end or a prompt'
+    )
+    if (job(env).status === 'waiting-duplicate') {
+      await env.svc.resolveDuplicate(j.jobId, { choice: 'replace', applyToAll: true })
+    }
+    await env.svc.settled(j.jobId)
+    for (const name of [`${MESHI_FILE}.mkv`, 'Dungeon Meshi - 01 [Other].mkv']) {
+      expect(fs.existsSync(path.join(env.hot, 'Dungeon Meshi', name)), name).toBe(true)
+    }
+    expect(Object.keys(read<object>('downloadedEpisodes')).sort()).toEqual([MESHI, other])
+    expect(job(env)).toMatchObject({ status: 'completed', itemsDone: 2, kept: [] })
+    expect(env.updates.filter((u) => u.status === 'waiting-duplicate')).toEqual([])
+  })
+
   it('a pause while asking stops the job; the resume asks again', async () => {
     env = makeImportEnv()
     localFile(env, 'Dungeon Meshi', `${MESHI_FILE}.mkv`, 700)

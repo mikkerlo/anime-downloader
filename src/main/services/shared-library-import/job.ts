@@ -11,6 +11,7 @@
 import * as path from 'path'
 import { itemKey } from '../../lib/shared-library/format'
 import {
+  ExpectationError,
   TMP_SUFFIX,
   VerifyError,
   copyVerified,
@@ -303,7 +304,8 @@ export class ImportJob {
     const base = this.baseOf(item)
     const stem = path.basename(item.dest, path.extname(item.dest))
     const isVideo = (f: LocalFile): boolean => f.ext !== '.ass'
-    const files = await this.deps.localFiles(item)
+    // This job's own copies (another translation it just brought in) are not duplicates.
+    const files = (await this.deps.localFiles(item)).filter((f) => !this.rec.doneFiles[f.path])
     const same = files.filter((f) => f.stem === stem)
     const others = files.filter((f) => f.stem !== stem)
     // The same translation's name first; else any other translation's file.
@@ -363,7 +365,12 @@ export class ImportJob {
     return `${item.title} — ${item.label}`
   }
 
-  private async copyFile(src: string, dest: string, item: ImportItem): Promise<void> {
+  private async copyFile(
+    src: string,
+    dest: string,
+    item: ImportItem,
+    expect?: { size: number; sha256?: string }
+  ): Promise<void> {
     if (this.rec.doneFiles[dest]) return
     if (this.stop) throw stoppedError()
     // The backstop again, at the write: a job file is read back from disk.
@@ -376,12 +383,19 @@ export class ImportJob {
       const result = await copyVerified(this.deps.xfs, src, dest, {
         signal: this.copyAbort.signal,
         fsType: 'other',
+        // Checked before the rename: a Replace in place has this PC's file at `dest`.
+        ...(expect ? { expect } : {}),
         onBytes: (n) => {
           this.inFlight += n
           this.deps.update()
         }
       })
       this.rec.doneFiles[dest] = result
+    } catch (err) {
+      if (!(err instanceof ExpectationError)) throw err
+      // The drive's file doesn't match its own manifest: this PC's file stays.
+      this.rec.current = null
+      throw new ItemError(`the drive's file doesn't match its library: ${err.message}`)
     } finally {
       this.inFlight = 0
       this.copyAbort = null
@@ -402,18 +416,10 @@ export class ImportJob {
     if (item.destSubtitle && (r.subtitlePath === undefined || r.subtitlePath === 'missing')) {
       throw new ItemError('the subtitle file is missing on the drive')
     }
-    await this.copyFile(r.path, item.dest, item)
-    const video = this.rec.doneFiles[item.dest]
-    if (video.size !== driveItem.size || (driveItem.sha256 && video.sha256 !== driveItem.sha256)) {
-      // The drive's file doesn't match its own manifest: never registered.
-      delete this.rec.doneFiles[item.dest]
-      await unlinkQuiet(this.deps.xfs, item.dest).catch(() => {})
-      throw new ItemError(
-        video.size !== driveItem.size
-          ? `the drive's file is ${video.size} bytes, its library says ${driveItem.size}`
-          : 'the drive’s file does not match its library (hash mismatch)'
-      )
-    }
+    await this.copyFile(r.path, item.dest, item, {
+      size: driveItem.size,
+      ...(driveItem.sha256 ? { sha256: driveItem.sha256 } : {})
+    })
     if (item.destSubtitle && typeof r.subtitlePath === 'string') {
       await this.copyFile(r.subtitlePath, item.destSubtitle, item)
     }

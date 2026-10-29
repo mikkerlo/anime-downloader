@@ -1,6 +1,7 @@
 // Where a removable drive can be mounted (#574), for finding a Shared Library
 // by its `libraryId` after a re-plug changed its letter or path. S6a's export
-// resume uses it, and S7c (#581)'s availability poller reuses it.
+// resume uses it, and S7c (#581)'s availability poller reuses it, with
+// `mountParents` and `relativeToOldMount` for its relative-path probe (#620).
 //
 // - Windows: the drive letters `D:`–`Z:` that exist.
 // - macOS: every folder under `/Volumes`.
@@ -203,15 +204,63 @@ export interface MountCandidateDeps {
 
 export type MountCandidates = () => Promise<string[]>
 
+const defaultUser = (): string => {
+  try {
+    return os.userInfo().username
+  } catch {
+    return process.env.USER ?? ''
+  }
+}
+
+/**
+ * The folders whose children are the mount candidates: `parents` when set (on
+ * every OS), else `/Volumes` on macOS and `/media/$USER`, `/run/media/$USER`
+ * and `/mnt` on Linux. None on Windows, whose candidates are drive letters.
+ */
+export function mountParents(
+  overrides: Partial<Pick<MountCandidateDeps, 'platform' | 'user' | 'parents'>> = {}
+): string[] {
+  if (overrides.parents) return overrides.parents
+  const platform = overrides.platform ?? process.platform
+  if (platform === 'win32') return []
+  if (platform === 'darwin') return ['/Volumes']
+  const user = overrides.user ?? defaultUser()
+  return [...(user ? [`/media/${user}`, `/run/media/${user}`] : []), '/mnt']
+}
+
+/** `path.win32` for a `X:\…` path, `path.posix` otherwise, whatever the host. */
+export function pathFlavour(p: string): typeof path.posix {
+  return /^[A-Za-z]:[\\/]/.test(p) ? path.win32 : path.posix
+}
+
+/**
+ * `root`'s path below the mount it was on, for looking for it under each
+ * current candidate after a re-plug changed the mount (#620). With `parents`
+ * (`mountParents`), the old mount is the parent holding `root` plus the next
+ * folder; without them (Windows), the drive `D:`–`Z:`. Null for a root under
+ * no parent, on `C:` or a UNC path, or less than two folders below its mount
+ * (`discoverLibraries` covers those).
+ */
+export function relativeToOldMount(root: string, parents: string[]): { rel: string } | null {
+  const p = pathFlavour(root)
+  let below: string[] | null = null
+  if (parents.length > 0) {
+    for (const parent of parents) {
+      if (pathFlavour(parent) !== p) continue
+      const r = p.relative(parent, root)
+      if (!r || r === '..' || r.startsWith(`..${p.sep}`) || p.isAbsolute(r)) continue
+      below = r.split(p.sep).slice(1)
+      break
+    }
+  } else if (/^[D-Zd-z]:[\\/]/.test(root)) {
+    below = p.relative(p.parse(root).root, root).split(p.sep).filter(Boolean)
+  }
+  return below && below.length >= 2 ? { rel: below.join(p.sep) } : null
+}
+
 const defaultDeps = (): MountCandidateDeps => ({
   platform: process.platform,
-  user: (() => {
-    try {
-      return os.userInfo().username
-    } catch {
-      return process.env.USER ?? ''
-    }
-  })(),
+  user: defaultUser(),
   listDirs: async (dir) =>
     (await fsp.readdir(dir, { withFileTypes: true }))
       .filter((e) => e.isDirectory())
@@ -250,17 +299,12 @@ export function createMountCandidates(
   }
 
   const listAll = async (): Promise<string[]> => {
-    if (deps.parents) return (await Promise.all(deps.parents.map((p) => children(p)))).flat()
-    if (deps.platform === 'win32') {
+    if (!deps.parents && deps.platform === 'win32') {
       const letters = 'DEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((l) => `${l}:\\`)
       const present = await Promise.all(letters.map((root) => isDir(root)))
       return letters.filter((_, i) => present[i])
     }
-    const parents =
-      deps.platform === 'darwin'
-        ? ['/Volumes']
-        : [...(deps.user ? [`/media/${deps.user}`, `/run/media/${deps.user}`] : []), '/mnt']
-    const lists = await Promise.all(parents.map((p) => children(p)))
+    const lists = await Promise.all(mountParents(deps).map((p) => children(p)))
     return lists.flat()
   }
 

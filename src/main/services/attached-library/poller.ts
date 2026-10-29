@@ -10,6 +10,12 @@
 //    one while an attached library is unavailable. A known `libraryId` found
 //    at a new path moves there and becomes available. Matching is by
 //    `libraryId`, never by path.
+// 3. for each unavailable library at least two folders below its old mount
+//    (`relativeToOldMount`), each candidate's job also checks that relative
+//    path under the candidate: one `stat` of its manifest, then `identify`
+//    (cached by signature), and `reopenAt` only when it holds that
+//    `libraryId`. This re-finds a library exported into a subfolder after a
+//    drive-letter or mount-name change (#620).
 //
 // The cost guard is async. Every filesystem call is `fs.promises`; each check
 // races a 1 s budget, so a sleeping disk or a hung mount never blocks the main
@@ -23,6 +29,9 @@ import * as path from 'path'
 import { discoverLibraries } from '../../lib/shared-library/discover'
 import {
   CANDIDATE_BUDGET_MS,
+  mountParents,
+  pathFlavour,
+  relativeToOldMount,
   withBudget,
   type MountCandidates
 } from '../../lib/shared-library/mount-candidates'
@@ -53,6 +62,8 @@ export interface PollerTarget {
 export interface AvailabilityPollerDeps {
   target: PollerTarget
   candidates: MountCandidates
+  /** `mountParents()` with the same overrides as `candidates`; the default is this OS's. */
+  mountParents?: string[]
   onFound: (found: SharedLibraryFound) => void
   /** A change signature of `<root>/.anime-dl/manifest.json`, or null when it isn't there. */
   statManifest?: (root: string) => Promise<string | null>
@@ -97,6 +108,7 @@ export function createAvailabilityPoller(deps: AvailabilityPollerDeps): Availabi
   const { target } = deps
   const statManifest = deps.statManifest ?? defaultStatManifest
   const discover = deps.discover ?? discoverLibraries
+  const parents = deps.mountParents ?? mountParents()
   const budgetMs = deps.budgetMs ?? CANDIDATE_BUDGET_MS
   const intervalMs = deps.intervalMs ?? POLL_INTERVAL_MS
   const log = deps.log ?? console
@@ -180,13 +192,16 @@ export function createAvailabilityPoller(deps: AvailabilityPollerDeps): Availabi
     }
   }
 
-  async function identifyAt(root: string): Promise<SharedLibraryCandidate | null> {
-    const sig = (await statManifest(root)) ?? ''
+  async function identifyBySig(root: string, sig: string): Promise<SharedLibraryCandidate | null> {
     const cached = identified.get(root)
     if (cached && sig !== '' && cached.sig === sig) return cached.found
     const found = await target.identify(root)
     identified.set(root, { sig, found })
     return found
+  }
+
+  async function identifyAt(root: string): Promise<SharedLibraryCandidate | null> {
+    return identifyBySig(root, (await statManifest(root)) ?? '')
   }
 
   function candidateJob(dir: string): Job {
@@ -210,6 +225,25 @@ export function createAvailabilityPoller(deps: AvailabilityPollerDeps): Availabi
             await target.reopenAt(c.libraryId!, c.root)
           }
         }
+        // The relative-path probe: an unavailable library's path below its old mount, here.
+        for (const k of target.known()) {
+          if (late()) return
+          if (k.available) continue
+          const below = relativeToOldMount(k.root, parents)
+          if (!below) continue
+          const probe = pathFlavour(k.root).join(dir, below.rel)
+          if (probe === k.root) continue
+          const sig = await statManifest(probe)
+          if (late()) return
+          if (sig === null) continue
+          const c = await identifyBySig(probe, sig)
+          if (late()) return
+          if (c?.libraryId !== k.libraryId) continue
+          const now = target.known().find((x) => x.libraryId === k.libraryId)
+          if (!now || now.available) continue
+          await target.reopenAt(k.libraryId, probe)
+        }
+        if (late()) return
         if (offered.has(dir)) return
         offered.add(dir)
         if (unknown.length > 0) {

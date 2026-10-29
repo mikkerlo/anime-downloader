@@ -53,7 +53,7 @@ import { createPlayerPresenceService } from './services/player-presence'
 import { createSharedLibraryExportService } from './services/shared-library-export'
 import { createAttachedLibraryService } from './services/attached-library'
 import { createAvailabilityPoller } from './services/attached-library/poller'
-import { createMountCandidates } from './lib/shared-library/mount-candidates'
+import { createMountCandidates, mountParents } from './lib/shared-library/mount-candidates'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -222,12 +222,14 @@ const attachedLibraryService = createAttachedLibraryService({
 })
 // Drive detection (#581). `ANIME_DL_MOUNT_PARENTS` (unpackaged runs only, as
 // the API base overrides) points the candidates at test folders.
-const mountParents = !app.isPackaged
+const mountParentsEnv = !app.isPackaged
   ? process.env.ANIME_DL_MOUNT_PARENTS?.split(path.delimiter).filter(Boolean)
   : undefined
+const mountOverrides = mountParentsEnv?.length ? { parents: mountParentsEnv } : {}
 const availabilityPoller = createAvailabilityPoller({
   target: attachedLibraryService,
-  candidates: createMountCandidates(mountParents?.length ? { parents: mountParents } : {}),
+  candidates: createMountCandidates(mountOverrides),
+  mountParents: mountParents(mountOverrides),
   onFound: (found) => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARY_FOUND, found)
 })
 

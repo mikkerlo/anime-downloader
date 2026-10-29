@@ -303,8 +303,8 @@ describe('StreamingService run end vs. the prelude (#607)', () => {
       channels
     })
     const proc = svc.spawnFfmpegForSession(session, event, 'sid', 0)
-    // `close` fires after stdout has ended, so the service's `end` handler
-    // (registered first) has run by now.
+    // The service's `close` listener was registered at spawn, so it has
+    // settled the run by the time this one fires.
     await new Promise<void>((res) => proc.on('close', () => res()))
     return sent
   }
@@ -703,7 +703,11 @@ describe('StreamingService exit classification (#582)', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  /** A fake ffmpeg: `endFirst` closes stdout before exiting, as a run that can't open its input does. */
+  /**
+   * A fake ffmpeg. `endFirst` only makes stdout ending before the exit likely;
+   * Node doesn't order them, so the forced orders live in
+   * test/streaming/streaming-exit-order.test.ts (#631).
+   */
   function fakeFfmpeg(code: number, endFirst: boolean, stderr = ''): string {
     const file = path.join(dir, `ffmpeg-${code}-${endFirst}-${stderr.length}`)
     const say = stderr ? `printf '%s\\n' '${stderr}' >&2\n` : ''
@@ -785,16 +789,6 @@ describe('StreamingService exit classification (#582)', () => {
     expect(session.endPending).toBe(false)
   })
 
-  it('the same run unclassified still just ends, as it did before', async () => {
-    for (const classify of [unclassified, undefined]) {
-      const { sent } = await run(fakeFfmpeg(1, true), classify)
-      expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
-    }
-    const held = await run(fakeFfmpeg(1, true), unclassified, false)
-    expect(held.sent).toEqual([])
-    expect(held.session.endPending).toBe(true)
-  })
-
   it('a failed run that exits first: an error, with the reason only when classified', async () => {
     const plain = await run(fakeFfmpeg(1, false), unclassified)
     expect(plain.sent).toEqual([
@@ -834,7 +828,7 @@ describe('StreamingService exit classification (#582)', () => {
     expect(gone.sent.map(([ch]) => ch)).toEqual(['sx'])
     const there = await run(fakeFfmpeg(0, true), unclassified)
     expect(there.sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
-    // A clean exit before stdout ended is asked once, from the end.
+    // A clean exit before stdout ended is asked once, at `close`.
     const exitFirst = await run(fakeFfmpeg(0, false), disconnected)
     expect(exitFirst.hints).toHaveLength(1)
     expect(exitFirst.sent.map(([ch]) => ch)).toEqual(['sx'])

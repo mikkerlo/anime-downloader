@@ -246,17 +246,25 @@ describe.skipIf(!hasFfmpeg)('MSE mid-play (real ffmpeg)', () => {
     }
   }, 60_000)
 
-  it('the same failed respawn with the input still present carries no reason: it ends, as on main', async () => {
+  it('the same failed respawn with the input still present is an error without a reason, quoting its own stderr', async () => {
     const r = await rig()
     try {
       const { sessionId } = await r.open()
       // Still there, but no longer a file ffmpeg can read: the respawn exits non-zero.
       fs.writeFileSync(r.file, 'not a matroska file')
       await r.seek(sessionId, 45)
-      await waitFor(() => r.session(sessionId)?.done === true)
+      await waitFor(() => r.errors.length > 0)
+      // Long enough for a second send to land.
       await new Promise((res) => setTimeout(res, 50))
-      expect(r.errors).toEqual([])
-      expect(r.session(sessionId)?.endPending).toBe(true)
+      expect(r.errors).toEqual([
+        {
+          sessionId,
+          error: expect.stringContaining('Invalid data found when processing input')
+        }
+      ])
+      // Not pinned to 183: Windows reports ffmpeg's negative return differently.
+      expect(r.errors[0].error).toMatch(/^ffmpeg exited with code /)
+      expect(r.session(sessionId)?.endPending).toBe(false)
     } finally {
       await r.cleanupAll()
     }

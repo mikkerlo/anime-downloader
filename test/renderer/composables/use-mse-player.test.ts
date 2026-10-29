@@ -2044,6 +2044,21 @@ describe('useMsePlayer — a stream error during the seek continuation (#634)', 
     m.resetMseState()
   })
 
+  // T3 parks the stale continuation in the remove drain; this one parks it in
+  // the gate, the only window that reaches the post-gate check.
+  it('a session opened while the old continuation is in the gate keeps its toast (T3b)', async () => {
+    const r = rig()
+    const { m, sb, open } = r
+    const { seekDone } = await seekIntoGate(r)
+    m._internal.handleStreamError('s1', 'ffmpeg exited with code 183')
+    open('s2')
+    m.mkvBuffering.value = true
+    sb.detach()
+    await expect(seekDone).resolves.toBeUndefined()
+    expect(m.mkvBuffering.value).toBe(true)
+    m.resetMseState()
+  })
+
   it('an error before the seek reply leaves nothing to undo (T5)', async () => {
     const { m, sb, startSpy, reply } = rig()
     const seekDone = m._internal.handleUnbufferedSeek()
@@ -2091,6 +2106,10 @@ describe('useMsePlayer — a stream error during the seek continuation (#634)', 
 
     reply({ generation: 1, timestampOffset: 99 })
     await expect(parked).resolves.toBeUndefined()
+    // s2's seek is still in flight, so the stale finally must not have released it.
+    video.currentTime = 400
+    void m._internal.handleUnbufferedSeek()
+    expect(seekSpy).toHaveBeenCalledTimes(2)
     reply({ error: 'seek failed' })
     await next
     m.resetMseState()

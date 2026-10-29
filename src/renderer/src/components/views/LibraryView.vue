@@ -9,6 +9,7 @@ import { getAnimeName } from '../../utils';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useSharedLibrariesStore } from '../../stores/shared-libraries';
+import { useImportStore } from '../../stores/import';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
@@ -134,6 +135,10 @@ onMounted(async () => {
       .catch((err) => console.error('Failed to hydrate Shikimori rates for Library:', err));
   }
 });
+
+// A copy from a Shared Library (#579) registers titles while this view is open.
+const { itemsDone: importedItems } = storeToRefs(useImportStore());
+watch(importedItems, () => void loadLibrary(libraryStore.loadPosterIds()));
 
 async function loadLibrary(posterIdsLoaded?: Promise<void>): Promise<void> {
   const list = await window.api.libraryGet();

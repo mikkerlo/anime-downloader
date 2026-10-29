@@ -1,6 +1,7 @@
-// Shared Library IPC: opening a library (#578) and export jobs (#574). The
-// work lives in `services/attached-library` and `services/shared-library-export`;
-// this router adds the folder pickers. `SHARED_LIBRARIES_CHANGED` is broadcast
+// Shared Library IPC: opening a library (#578), export jobs (#574) and copies
+// onto this PC (#579). The work lives in `services/attached-library`,
+// `services/shared-library-export` and `services/shared-library-import`; this
+// router adds the folder pickers. `SHARED_LIBRARIES_CHANGED` is broadcast
 // by the attached-library service's `onChanged` hook, and `SHARED_LIBRARY_FOUND`
 // by the availability poller (#581), both wired in `src/main/index.ts`.
 
@@ -23,6 +24,7 @@ async function pickFolder(sender: Electron.WebContents, title: string): Promise<
 export function register({
   attachedLibraryService,
   sharedLibraryExport,
+  sharedLibraryImport,
   syncRunner
 }: AppDeps): void {
   // --- Open a Shared Library (#578)
@@ -141,4 +143,17 @@ export function register({
       return r.ok ? { ok: true, reason: null } : { ok: false, reason: r.reason }
     }
   )
+
+  // --- Copy to this PC and Import all (#579)
+  const imp = sharedLibraryImport
+  ipcMain.handle(CHANNELS.IMPORT_PLAN, (_e, req: ImportPlanRequest) => imp.plan(req))
+  ipcMain.handle(CHANNELS.IMPORT_START, (_e, req: ImportStartRequest) => imp.start(req))
+  ipcMain.handle(
+    CHANNELS.IMPORT_RESOLVE_DUPLICATE,
+    (_e, jobId: string, answer: ImportDuplicateAnswer) => imp.resolveDuplicate(jobId, answer)
+  )
+  ipcMain.handle(CHANNELS.IMPORT_PAUSE, (_e, jobId: string) => imp.pause(jobId))
+  ipcMain.handle(CHANNELS.IMPORT_RESUME, (_e, jobId: string) => imp.resume(jobId))
+  ipcMain.handle(CHANNELS.IMPORT_CANCEL, (_e, jobId: string) => imp.cancel(jobId))
+  ipcMain.handle(CHANNELS.IMPORT_LIST_JOBS, () => imp.list())
 }

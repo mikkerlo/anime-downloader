@@ -10,6 +10,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import LibraryView from '../../src/renderer/src/components/views/LibraryView.vue'
 import OpenLibraryDialog from '../../src/renderer/src/components/shared-library/OpenLibraryDialog.vue'
+import ImportDialog from '../../src/renderer/src/components/shared-library/ImportDialog.vue'
 
 function anime(id: number, title: string): AnimeSearchResult {
   return {
@@ -90,6 +91,9 @@ function mountLibrary(opts: {
     libraryGetPriority: vi.fn().mockResolvedValue([]),
     sharedLibraryList: vi.fn().mockImplementation(async () => list),
     ffmpegCheck: vi.fn().mockResolvedValue({ available: opts.ffmpeg ?? true }),
+    // The import dialog (#579) stays on "Loading…".
+    importPlan: vi.fn(() => new Promise(() => {})),
+    importListJobs: vi.fn().mockResolvedValue([]),
     onSharedLibrariesChanged: (cb: () => void) => {
       changed = cb
       return () => {}
@@ -307,6 +311,30 @@ describe('an unplugged drive and a read-only library (#582)', () => {
     // Metadata still shows, from the snapshot.
     expect(card.find('.acard-title').text()).toBe('Frieren')
     expect(card.find('img.poster').attributes('src')).toBe('anime-poster://101')
+  })
+
+  it('Copy to this PC and Import all (#579) are off while unplugged', async () => {
+    const off = await sharedTab({ ...library([title(101, 'Frieren', 'mp4')]), available: false })
+    expect(off.find('[data-testid="copy-to-pc"]').attributes('disabled')).toBeDefined()
+    expect(off.find('[data-testid="import-all"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('Copy to this PC and Import all (#579) each open the import dialog when plugged', async () => {
+    const w = await sharedTab(library([title(101, 'Frieren', 'mp4'), title(202, 'Meshi', 'mkv')]))
+    const copy = w.findAll('[data-testid="copy-to-pc"]')
+    expect(copy[1].attributes('disabled')).toBeUndefined()
+    await copy[1].trigger('click')
+    let dialog = w.findComponent(ImportDialog)
+    expect(dialog.props()).toEqual({
+      libraryId: '5d7c1f3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f',
+      animeIds: [202]
+    })
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(w.findComponent(ImportDialog).exists()).toBe(false)
+    await w.find('[data-testid="import-all"]').trigger('click')
+    dialog = w.findComponent(ImportDialog)
+    expect(dialog.props('animeIds')).toBeNull()
   })
 
   it('back on re-plug: not dimmed, Play enabled', async () => {

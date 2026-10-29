@@ -781,6 +781,52 @@ describe('ColdStorageService write-side disk ops', () => {
       })
     })
 
+    describe('a copy from a Shared Library ages from its arrival (#579)', () => {
+      const entry = (translationId: number, arrivedAt?: number): object => ({
+        translationType: 'subRu',
+        author: 'A',
+        quality: 1080,
+        translationId,
+        ...(arrivedAt !== undefined ? { arrivedAt } : {})
+      })
+      const candidatesWith = (episodes: Record<string, object>): string[] => {
+        const { svc } = svcWithDirs({
+          autoCleanupWatchedDays: 7,
+          watchProgress: { '7:1': { watched: true, watchedAt: now - 30 * dayMs } },
+          downloadedAnime: { '7': { title: 'Show', titles: {} } },
+          downloadedEpisodes: episodes
+        })
+        writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'x'.repeat(100))
+        return svc.findCleanupCandidates(7).map((c) => `${c.animeId}:${c.episodeInt}`)
+      }
+
+      it('watched 30 days ago but arrived now: not a candidate (on main it is)', () => {
+        expect(candidatesWith({ '7:1:11': entry(11, now) })).toEqual([])
+      })
+
+      it('arrived 30 days ago: a candidate', () => {
+        expect(candidatesWith({ '7:1:11': entry(11, now - 30 * dayMs) })).toEqual(['7:1'])
+      })
+
+      it('mixed translations: one arrived now keeps the episode; both old make it a candidate', () => {
+        expect(
+          candidatesWith({ '7:1:11': entry(11, now - 30 * dayMs), '7:1:12': entry(12, now) })
+        ).toEqual([])
+        expect(
+          candidatesWith({
+            '7:1:11': entry(11, now - 30 * dayMs),
+            '7:1:12': entry(12, now - 30 * dayMs)
+          })
+        ).toEqual(['7:1'])
+      })
+
+      it('without arrivedAt the watchedAt rule is unchanged; another episode’s arrival is ignored', () => {
+        expect(candidatesWith({ '7:1:11': entry(11) })).toEqual(['7:1'])
+        expect(candidatesWith({ '7:1:11': entry(11), '7:2:11': entry(11, now) })).toEqual(['7:1'])
+        expect(candidatesWith({ '7:10:11': entry(11, now) })).toEqual(['7:1'])
+      })
+    })
+
     it('returns [] for days <= 0', () => {
       const { svc } = svcWithDirs()
       expect(svc.findCleanupCandidates(0)).toEqual([])

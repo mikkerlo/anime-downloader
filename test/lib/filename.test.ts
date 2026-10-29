@@ -27,6 +27,26 @@ describe('parseEpisodeFromFilename', () => {
     })
   })
 
+  // #579: copied-in files carry such authors; on main this parsed to null, so
+  // the usage scan skipped the file.
+  it('parses an author tag with one level of nested brackets', () => {
+    expect(parseEpisodeFromFilename('Sousou no Frieren - 03 [Crunchyroll [Chinese]].ass')).toEqual({
+      episodeInt: '3',
+      ext: 'ass'
+    })
+    expect(parseEpisodeFromFilename('Show - 12.5 [A [B] C].mkv')).toEqual({
+      episodeInt: '12.5',
+      ext: 'mkv'
+    })
+  })
+
+  it('still accepts a lone opening bracket inside a tag, as before', () => {
+    expect(parseEpisodeFromFilename('Show - 04 [Studio [x].mp4')).toEqual({
+      episodeInt: '4',
+      ext: 'mp4'
+    })
+  })
+
   it('returns null for non-matching names', () => {
     expect(parseEpisodeFromFilename('Some Anime - 03.part')).toBeNull()
     expect(parseEpisodeFromFilename('poster.jpg')).toBeNull()

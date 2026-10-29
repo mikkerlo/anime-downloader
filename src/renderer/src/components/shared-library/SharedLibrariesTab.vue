@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import AnimeCard from '../shared/AnimeCard.vue';
 import FfmpegMissingBanner from './FfmpegMissingBanner.vue';
+import ImportDialog from './ImportDialog.vue';
 import LibraryActionsMenu from './LibraryActionsMenu.vue';
 import { useLibraryStore } from '../../stores/library';
 import {
@@ -22,8 +23,9 @@ import { usePlayFromDrive } from '../../composables/use-play-from-drive';
 import { formatAgo } from '../../utils';
 
 // Library → Shared Libraries (#578, owner decision 3): one section per
-// attached library, its titles from the drive's snapshot. Copy to this PC and
-// Import all arrive with S7b (#579). Each section header is the library's
+// attached library, its titles from the drive's snapshot. Copy to this PC (per
+// title) and Import all (per library) open the import dialog (#579), while
+// the drive is connected. Each section header is the library's
 // management row (#581): availability, Last seen, a badge, Last sync, and the
 // ⋯ menu. Sync now and the status line are the merge's (#584); the empty
 // `slot-*` spans are where S10 (#585) renders.
@@ -36,6 +38,8 @@ const shared = useSharedLibrariesStore();
 const { libraries, ffmpegAvailable, syncStatus, syncing } = storeToRefs(shared);
 const { play } = usePlayFromDrive();
 const error = ref('');
+// The import dialog: one title (Copy to this PC) or every title (Import all).
+const copying = ref<{ libraryId: string; animeIds: number[] | null } | null>(null);
 
 const ROLE_NOTE: Partial<Record<AttachedLibraryRole, string>> = {
   foreign: 'Owned by someone else: used as videos only, its watch state is ignored.',
@@ -113,7 +117,17 @@ function playBlockedTitle(
         >
         <span class="slot" data-testid="slot-conflicts"></span>
         <div class="grow"></div>
-        <button class="sl-btn" disabled title="Arrives in a later update">Import all</button>
+        <button
+          class="sl-btn"
+          data-testid="import-all"
+          :disabled="!lib.available || lib.titles.length === 0"
+          :title="
+            lib.available ? 'Copy every title of this library to this PC' : notConnectedTitle(lib)
+          "
+          @click="copying = { libraryId: lib.libraryId, animeIds: null }"
+        >
+          Import all
+        </button>
         <LibraryActionsMenu :library="lib" @error="error = $event" />
       </header>
       <p v-if="ROLE_NOTE[lib.role]" class="sl-muted">{{ ROLE_NOTE[lib.role] }}</p>
@@ -156,13 +170,25 @@ function playBlockedTitle(
             >
               Play from drive
             </button>
-            <button class="sl-btn" disabled title="Arrives in a later update">
+            <button
+              class="sl-btn"
+              data-testid="copy-to-pc"
+              :disabled="!lib.available"
+              :title="lib.available ? undefined : notConnectedTitle(lib)"
+              @click.stop="copying = { libraryId: lib.libraryId, animeIds: [title.animeId] }"
+            >
               Copy to this PC
             </button>
           </div>
         </div>
       </div>
     </section>
+    <ImportDialog
+      v-if="copying"
+      :library-id="copying.libraryId"
+      :anime-ids="copying.animeIds"
+      @close="copying = null"
+    />
   </div>
 </template>
 

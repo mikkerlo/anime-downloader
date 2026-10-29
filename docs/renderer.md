@@ -64,6 +64,14 @@ src/renderer/src/
                                 the player is open", "Waiting for drive '<name>'" with Locate…, Dismiss;
                                 per file "Waiting for a download merge", "Merging N%" or "Copying" (#576)
       export-selection.ts       Pure tri-state selection and size helpers for the tree
+      ImportDialog.vue          Copy to this PC / Import all (#579): props { libraryId, animeIds: number[] | null };
+                                ExportTree (all preselected), the unsafe items greyed with their reason, Hot /
+                                Cold (Cold off while its folder is missing) and the size-vs-free bar. Mounted
+                                by SharedLibrariesTab (per title and per library) and DriveEpisodes
+      DuplicatePrompt.vue       An episode this PC already has (#579): Keep this PC's file / Replace with the
+                                drive's / Keep both, both sizes, "Apply to all remaining". Mounted once in App.vue
+      ImportJobCard.vue         One copy job in DownloadsView: "Copying from <library> — 5 / 12", Pause/Resume/
+                                Cancel, the held / waiting-drive / waiting-duplicate states, kept and failed lists
     player/                    PlayerView sub-components (controls bar)
       PlayerTitleBar.vue
       TranslationMenu.vue
@@ -106,6 +114,7 @@ The stores in `src/renderer/src/stores/` own cross-view state and, where applica
 | `useSharedLibrariesStore` | `shared-libraries.ts` | `libraries` (`AttachedLibraryInfo[]`), `attachedCount`, `librariesByAnimeId` (computed), `ffmpegAvailable` (read through `ffmpeg:check` once the first `refresh()` lists a library, on window focus while one is attached, and before each `.mkv` Play; a PC with none never spawns it), `focusTab` (Settings' "Show in Library"), `refresh()`, `checkFfmpeg()`, `playTarget(title)` — backs Library → Shared Libraries, the "Also on <library>" badge and the detail page's attached form (#578); `found` (the found-on-a-drive toast queue, one entry per drive, pruned of libraries attached meanwhile), `openingFound`, `openFound` / `dropFound` / `dontAskFound` (#581). Created by `App.vue`, so a toast shows on any view | `onSharedLibrariesChanged`, `onSharedLibraryFound` (lifetime-scoped) |
 | `useSyncplayStore` | `syncplay.ts` | `status` (`SyncplayStatus`), `roomUsers`, `isActive` (computed), `refresh()` re-seed from `get-status`/`get-room-users` | `onSyncplayConnectionStatus`, `onSyncplayRoomUsers` (lifetime-scoped) |
 | `useExportStore` | `export.ts` | `jobs` (`ExportJobView[]`, seeded from `export:list-jobs`), `activeJob` (computed), `locateErrors`; `start`, `pause`, `resume`, `cancel` (dismisses a finished job), `locate` — the Shared Library export jobs (#574) shown by `ExportJobCard` in Downloads | `onExportJobUpdated` (lifetime-scoped) |
+| `useImportStore` | `import.ts` | `jobs` (`ImportJobView[]`, seeded from `import:list-jobs`), `activeJob`, `asking` (the job on the duplicate prompt), `itemsDone` (LibraryView reloads as it grows); `start`, `answer`, `pause`, `resume`, `cancel` (dismisses a finished job) — the copy-to-this-PC jobs (#579) shown by `ImportJobCard` and `DuplicatePrompt` | `onImportJobUpdated` (lifetime-scoped) |
 
 Stores singleton-own their broadcast subscriptions and never dispose them — they live for the app's lifetime. Component-local subscriptions (per-anime, per-player-instance) bind to `onUnmounted` instead. See [IPC](./ipc.md) for the full ownership rule and the CI gate.
 

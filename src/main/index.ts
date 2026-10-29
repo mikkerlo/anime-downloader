@@ -51,6 +51,7 @@ import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
 import { createPlayerPresenceService } from './services/player-presence'
 import { createSharedLibraryExportService } from './services/shared-library-export'
+import { createSharedLibraryImportService } from './services/shared-library-import'
 import { createAttachedLibraryService } from './services/attached-library'
 import { createAvailabilityPoller } from './services/attached-library/poller'
 import { createSnapshotCache, SNAPSHOT_DIR } from './services/attached-library/snapshot-cache'
@@ -533,6 +534,29 @@ const sharedLibraryExport = createSharedLibraryExportService({
   }
 })
 
+// Copy to this PC from an attached Shared Library (#579). It only reads the
+// drive; the copies land in the hot (or cold) root and are registered like
+// downloads.
+const sharedLibraryImport = createSharedLibraryImportService({
+  userDataDir: app.getPath('userData'),
+  store,
+  library: (libraryId) => attachedLibraryService.get(libraryId),
+  localRoots: () => ({
+    hot: coldStorageService.getDownloadDir(),
+    cold: coldStorageService.isAdvanced() ? coldStorageService.getColdStorageDir() || null : null
+  }),
+  sanitizeFilename,
+  mergeStatus: (translationId) => downloadManager.getMergeStatus(translationId),
+  presence: playerPresenceService,
+  broadcast: (job) => broadcastToAll(EVENT_CHANNELS.IMPORT_JOB_UPDATED, job),
+  onImported: ({ dirName }) => {
+    invalidateFileCacheByDirName(dirName)
+    // The tab's "On this PC" badge and Library read `downloadedAnime`.
+    broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED)
+  },
+  candidates: createMountCandidates(mountOverrides)
+})
+
 const skipAnalysisService = createSkipAnalysisService({
   store,
   scanEpisodeFiles,
@@ -767,6 +791,7 @@ function registerIpcHandlers(): void {
     recentWatch,
     attachedLibraryService,
     sharedLibraryExport,
+    sharedLibraryImport,
     syncRunner: syncRunner ?? undefined
   })
 }
@@ -928,6 +953,10 @@ async function bootstrap(): Promise<void> {
   void sharedLibraryExport
     .init()
     .catch((err) => console.error('[export] Loading saved export jobs failed:', err))
+  // So does a copy onto this PC (#579).
+  void sharedLibraryImport
+    .init()
+    .catch((err) => console.error('[import] Loading saved import jobs failed:', err))
 
   // Register IPC BEFORE creating the window: the renderer mounts as soon as
   // the window loads, and it used to race a multi-second awaited ensureFfmpeg

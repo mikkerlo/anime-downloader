@@ -9,7 +9,7 @@
 | `autoMerge` | boolean | `false` | Auto-merge when episode downloads complete |
 | `videoCodec` | string | `'copy'` | FFmpeg video codec for merge |
 | `downloadedAnime` | object | `{}` | Map of anime with downloaded files |
-| `downloadedEpisodes` | object | `{}` | Per-episode translation metadata (key: `animeId:episodeInt`) |
+| `downloadedEpisodes` | object | `{}` | Per-episode translation metadata, keyed `animeId:episodeInt:translationId` (the pre-translation-id `animeId:episodeInt` key is dropped on the next write). Each entry is `{ translationType, author, quality, translationId, arrivedAt? }`; `arrivedAt` (ms, #579) is set only on an episode copied from a Shared Library, carried over by later writes of the same key, and makes watched cleanup age the episode from its arrival ([Storage](storage.md#when-a-copy-arrived-downloadedepisodesarrivedat-579)). Written only by `persistDownloadedEpisode` (`src/main/lib/downloaded-episodes.ts`) |
 | `animeCache` | object | `{}` | Offline cache: anime details, episodes, quality probes, posters |
 | `lastUpdateCheck` | number | `0` | Timestamp of last successful update check |
 | `notificationMode` | string | `'off'` | Desktop notification mode: `off`, `each` (per episode), `queue` (when queue empties) |

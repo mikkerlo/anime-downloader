@@ -77,6 +77,15 @@ export const CHANNELS = {
   EXPORT_RESUME: 'export:resume',
   EXPORT_START: 'export:start',
 
+  // Copy to this PC from a Shared Library (#579)
+  IMPORT_CANCEL: 'import:cancel',
+  IMPORT_LIST_JOBS: 'import:list-jobs',
+  IMPORT_PAUSE: 'import:pause',
+  IMPORT_PLAN: 'import:plan',
+  IMPORT_RESOLVE_DUPLICATE: 'import:resolve-duplicate',
+  IMPORT_RESUME: 'import:resume',
+  IMPORT_START: 'import:start',
+
   // ffmpeg
   FFMPEG_CHECK: 'ffmpeg:check',
   FFMPEG_DELETE: 'ffmpeg:delete',
@@ -245,6 +254,9 @@ export const EVENT_CHANNELS = {
 
   // Shared Library export (#574)
   EXPORT_JOB_UPDATED: 'export:job-updated',
+
+  // Copy to this PC from a Shared Library (#579)
+  IMPORT_JOB_UPDATED: 'import:job-updated',
 
   // ffmpeg
   FFMPEG_DOWNLOAD_PROGRESS: 'ffmpeg:download-progress',

@@ -4,13 +4,16 @@ import { storeToRefs } from 'pinia';
 import { useDownloadsStore } from '../../stores/downloads';
 import { useOfflineStore } from '../../stores/offline';
 import { useExportStore } from '../../stores/export';
+import { useImportStore } from '../../stores/import';
 import ExportJobCard from '../shared-library/ExportJobCard.vue';
+import ImportJobCard from '../shared-library/ImportJobCard.vue';
 import { formatBytes, formatSpeed, formatEta } from '../../utils';
 
 const downloadsStore = useDownloadsStore();
 const { groups } = storeToRefs(downloadsStore);
-// Shared Library export jobs (#574) sit above the download queue.
+// Shared Library export jobs (#574) and copies to this PC (#579) sit above the download queue.
 const { jobs: exportJobs } = storeToRefs(useExportStore());
+const { jobs: importJobs } = storeToRefs(useImportStore());
 // One ffmpeg at a time (#576): while an export merges, a download's merge waits.
 const exportMerging = computed(() =>
   exportJobs.value.some((j) => j.status === 'running' && j.merge?.phase === 'merging')
@@ -180,6 +183,7 @@ async function mergeFinished(): Promise<void> {
     </header>
     <div class="body">
       <ExportJobCard v-for="job in exportJobs" :key="job.jobId" :job="job" />
+      <ImportJobCard v-for="job in importJobs" :key="job.jobId" :job="job" />
       <div
         v-if="exportMerging && hasMergeable"
         class="export-merge-note"
@@ -187,7 +191,10 @@ async function mergeFinished(): Promise<void> {
       >
         Download merges wait until the export’s current merge finishes.
       </div>
-      <div v-if="groups.length === 0 && exportJobs.length === 0" class="empty-state">
+      <div
+        v-if="groups.length === 0 && exportJobs.length === 0 && importJobs.length === 0"
+        class="empty-state"
+      >
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
             <path

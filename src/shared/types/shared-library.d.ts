@@ -179,7 +179,26 @@ type SharedLibraryResolved = string | 'missing' | 'escapes'
  */
 type AttachedLibraryRole = 'videos' | 'owner' | 'claim' | 'foreign'
 
-type AttachedLibraryAccessReason = SharedLibraryReadOnlyReason | 'mount'
+// `mount`: `access(W_OK)` refused on an availability transition; `write-failed`:
+// a real write failed (`reportWriteFailure`, S8 #582), until the next transition.
+type AttachedLibraryAccessReason = SharedLibraryReadOnlyReason | 'mount' | 'write-failed'
+
+/** An attached library's availability transition (S8 #582); S9 (#584) merges on them. */
+interface AttachedLibraryTransition {
+  libraryId: string
+  available: boolean
+  access: 'read-write' | 'read-only'
+  accessReason?: AttachedLibraryAccessReason
+  // `access` went from read-only to read-write on this transition.
+  becameWritable: boolean
+}
+
+/** A claim PC's rate for an attached title, read from the library base (S9 #584). */
+interface AttachedTitleRate {
+  score: number
+  status: string
+  episodes: number
+}
 
 /** One `attachedLibraries` entry, keyed by `libraryId`. */
 interface AttachedLibraryRecord {
@@ -239,6 +258,8 @@ interface AttachedLibraryTitle {
   mkvCount: number
   // The first episode in order, and the first that plays without ffmpeg.
   play: { any: AttachedPlayTarget | null; withoutFfmpeg: AttachedPlayTarget | null }
+  // On a claim PC, from `sync-bases/library-<libraryId>.json` (#582).
+  rate?: AttachedTitleRate
 }
 
 interface AttachedLibraryInfo {
@@ -293,6 +314,8 @@ interface AttachedTitleDetail {
   meta: SharedLibraryMeta | null
   hasPoster: boolean
   episodes: AttachedTitleEpisode[]
+  // On a claim PC, from the library base (#582).
+  rate?: AttachedTitleRate
 }
 
 /** `resolveItem` on the service: a played file and its sidecar, both checked at play time. */

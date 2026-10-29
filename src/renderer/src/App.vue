@@ -191,6 +191,7 @@ onBeforeUnmount(() => {
       :episode-index="playerState.episodeIndex"
       :anime-id="playerState.animeId"
       :mal-id="playerState.malId"
+      :attached-library-id="playerState.attachedLibraryId"
       @close="playerStore.closePlayer()"
     />
     <CleanupModal

@@ -342,6 +342,26 @@ It runs only when the candidate set gains a path it hasn't classified, and each 
 
 **Re-locate** (`shared-library:relocate`) picks a folder and accepts it only when it, or a folder directly inside it, holds the same `libraryId`; that root is re-read through `reopenAt`, saved, and available.
 
+## Lifecycle (#582)
+
+How the rest of the app behaves as a library's availability changes.
+
+**Availability transitions.** A transition is a read that makes a library available when it wasn't: the startup re-read, an attach, and a poller or Re-locate `reopenAt` of an unavailable library. Going unavailable (`markUnavailable`) is the other one. `attachedLibraryService.onAvailabilityChanged(listener)` reports each as `{ libraryId, available, access, accessReason?, becameWritable }`, after the record is saved, and returns an unsubscribe handle (multi-listener; a listener that throws is logged). It also fires when `access` turns from read-only to read-write. S9 (#584) merges on these. A `refresh` after an export's write, and a poll that finds the manifest unchanged, are not transitions.
+
+**Read-only mounts: one non-writing check, then demotion at write time.** Nothing is written to a drive to learn whether it is writable.
+
+1. Every transition re-runs `checkWritable(root)`, the same `access(<root>/.anime-dl, W_OK)` as the open flow. `EROFS`, `EACCES` and `EPERM` give `access: 'read-only'`, `accessReason: 'mount'`; a success makes it read-write again. An inconclusive check (`EIO`, anything else) is logged and keeps a `mount` or `write-failed` demotion. The reader's `version`, `size` and `interrupted` come first and are never cleared by this check.
+2. `access(W_OK)` can say writable when the medium isn't (Windows ignores write protection for directories; some FUSE mounts lie). `attachedLibraryService.reportWriteFailure(libraryId, err)` is S9's contract: when a write under the root fails with `EROFS`, `EACCES` or `EPERM`, S9 calls it, keeps the library's changes pending and stops writing to it. The library becomes `access: 'read-only'`, `accessReason: 'write-failed'`, saved and broadcast, until its next transition re-checks it; a non-transition re-read keeps it. Other errors (`ENOSPC`, `EIO`) don't demote, and a library that is already read-only (a `version` one included) is left as it is. It never throws.
+3. A read-only library still plays. Its header in the Shared Libraries tab and its row in Settings → Storage show "Read-only on this computer", with the reason as the tooltip: the drive is mounted read-only, a write failed, or the library's format is newer than this app.
+
+**Unplugged titles.** An unavailable library's titles stay listed: dimmed cards with "Drive not connected" (the tooltip names the library and when it was last seen), Play and Copy disabled, and on the attached detail page the same chip with the drive's episodes listed and their Play disabled. In the session the drive went away, they render from the copy read before. After a restart they render from the **snapshot cache** (`snapshot-cache.ts`, `userData/shared-library-cache/<libraryId>/`, see [Storage](./storage.md#shared-library-snapshot-cache-userdatashared-library-cache-582)): the manifest, every title's `meta/` snapshot, and the posters, refreshed from each fresh read whose `generation` differs from the cached one (or whose posters were evicted). `anime-poster://` serves an unavailable library's poster from the cache. Forget deletes the library's cache dir through its forget hook.
+
+**A claim PC's rates.** A claim PC has no Shikimori session or rate cache, so on it an attached title's card and detail page read the rate (score, status, episodes) from the library base `sync-bases/library-<libraryId>.json` (S9 #584), plugged in or not; `shared-library:list` and `shared-library:get-title` add it as `rate`. With no base yet, no rate shows. The snapshot cache never holds rate values.
+
+**Mid-play removal.** On POSIX an open fd keeps reading a renamed or unmounted file, so a removal surfaces on the next open. `classifyMissing(path)` says `drive-disconnected` for a path under an attached root that can no longer be `stat`ed, and `reportUnreadable(path, err)` does the same from an error already in hand (`ENOENT`, `EIO`, `ENXIO`, `ENODEV`, `EBUSY`); both log one `drive-disconnected` line per library until it is seen again, and a local file is never reported. The player's side is in [Player](./player.md#a-drive-disconnected-mid-episode-582).
+
+**Never a storage root.** The attached roots live only in this service: no `ROOT_KEYS` setting, no `coldStorageService` root, no cleanup, cold-storage move, usage scan, episode-file scan, `download:scan-merge` or player `dirsToCheck` ever receives one, before or after a re-plug at a new path (`test/services/attached-roots-never-scanned.test.ts`).
+
 ## Tests
 
 `test/lib/shared-library/`: the golden and edge-case trees under `test/fixtures/shared-library/v1/` (byte-compared, so excluded from Prettier), the schema fingerprint `test/fixtures/shared-library/schema-v1.json`, and over-cap trees built at test time with sparse files. `write.test.ts` injects a crash at every mutating `fs.promises` call of every write and checks the tree reads as a matching pair after each one.

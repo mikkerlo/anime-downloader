@@ -322,15 +322,15 @@ const api = {
   playerViewClosed: () => ipcRenderer.invoke(CHANNELS.PLAYER_VIEW_CLOSED) as Promise<void>,
   playerRemuxMkv: (mkvPath: string) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV, mkvPath) as Promise<
-      { mp4Path: string; subtitleContent?: string } | { error: string }
+      { mp4Path: string; subtitleContent?: string } | PlayerOpenError
     >,
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV_STREAM, mkvPath, initialSeek) as Promise<
-      MseOpenResult | { requiresTranscode: true } | { error: string }
+      MseOpenResult | { requiresTranscode: true } | PlayerOpenError
     >,
   playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV_STREAM_TRANSCODE, mkvPath, initialSeek) as Promise<
-      MseOpenResult | { error: string }
+      MseOpenResult | PlayerOpenError
     >,
   shellOpenExternalFile: (filePath: string) =>
     ipcRenderer.invoke(CHANNELS.SHELL_OPEN_EXTERNAL_FILE, filePath) as Promise<{
@@ -358,9 +358,7 @@ const api = {
     EVENT_CHANNELS.PLAYER_STREAM_CHUNK
   ),
   onPlayerStreamEnd: subscribe<{ sessionId: string }>(EVENT_CHANNELS.PLAYER_STREAM_END),
-  onPlayerStreamError: subscribe<{ sessionId: string; error: string }>(
-    EVENT_CHANNELS.PLAYER_STREAM_ERROR
-  ),
+  onPlayerStreamError: subscribe<PlayerStreamErrorPayload>(EVENT_CHANNELS.PLAYER_STREAM_ERROR),
   onPlayerStreamProgress: subscribe<{
     sessionId: string
     gen: number

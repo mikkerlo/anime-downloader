@@ -88,6 +88,10 @@ export function useMsePlayer(deps: {
    *  been applied (or is parked) in a live session (#240). The resume land is
    *  cancelled then: the room outranks the saved position. */
   hasRemoteStateApplied?: () => boolean
+  /** Saves the watch position from the element's clock, synchronously up to its IPC (#582). */
+  savePosition?: () => void
+  /** A stream error main classified as `drive-disconnected` (#582): raise the overlay. */
+  onDriveDisconnected?: () => void
 }): {
   // Reactive state
   mseSrcUrl: Ref<string>
@@ -111,7 +115,7 @@ export function useMsePlayer(deps: {
   _internal: {
     handleStreamChunk: (sessionId: string, gen: number, data: Uint8Array) => void
     handleStreamEnd: (sessionId: string) => void
-    handleStreamError: (sessionId: string, error: string) => void
+    handleStreamError: (sessionId: string, error: string, reason?: PlayerFailureReason) => void
     handleUnbufferedSeek: () => Promise<void>
     getAppendQueueLength: () => number
     getSourceBuffer: () => SourceBuffer | null
@@ -628,9 +632,17 @@ export function useMsePlayer(deps: {
     pumpAppendQueue()
   }
 
-  function handleStreamError(sessionId: string, error: string): void {
+  function handleStreamError(sessionId: string, error: string, reason?: PlayerFailureReason): void {
     if (sessionId !== streamSessionId.value) return
-    console.error('[player] stream error:', error)
+    console.error('[player] stream error:', error, reason ?? '')
+    if (reason === 'drive-disconnected' && deps.onDriveDisconnected) {
+      // The position first: the reset below revokes the source, and the
+      // element's clock goes with it (#582).
+      deps.savePosition?.()
+      resetMseState()
+      deps.onDriveDisconnected()
+      return
+    }
     remuxError.value = error
     resetMseState()
   }
@@ -704,8 +716,8 @@ export function useMsePlayer(deps: {
       handleStreamChunk(sessionId, gen, data)
     )
     const unsubEnd = window.api.onPlayerStreamEnd(({ sessionId }) => handleStreamEnd(sessionId))
-    const unsubErr = window.api.onPlayerStreamError(({ sessionId, error }) =>
-      handleStreamError(sessionId, error)
+    const unsubErr = window.api.onPlayerStreamError(({ sessionId, error, reason }) =>
+      handleStreamError(sessionId, error, reason)
     )
     const unsubProgress = window.api.onPlayerStreamProgress(({ sessionId, gen, speed }) => {
       if (sessionId !== streamSessionId.value) return

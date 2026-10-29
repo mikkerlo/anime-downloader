@@ -19,6 +19,25 @@ interface PlayerLocalFileResult {
   subtitleContent: string | null
   isPartial?: boolean
   totalBytes?: number
+  // Set when the file is an attached Shared Library's copy (#578, #582).
+  libraryId?: string
+}
+
+// Why an open or a stream failed, when main can tell (#582): the file was
+// under an attached Shared Library root that can no longer be read.
+type PlayerFailureReason = 'drive-disconnected'
+
+// An open's or the legacy remux's failure reply.
+interface PlayerOpenError {
+  error: string
+  reason?: PlayerFailureReason
+}
+
+// `player:stream-error`: `reason` is set only when main classified the exit.
+interface PlayerStreamErrorPayload {
+  sessionId: string
+  error: string
+  reason?: PlayerFailureReason
 }
 
 // `player:remux-mkv-stream` / `player:remux-mkv-stream-transcode` success

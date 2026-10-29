@@ -633,8 +633,8 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `let prepareEpoch = 0;` and the `indexOf` below still finds it, still
     // inside the bounds, still green. What closes that hole here is not this
     // scan — it is typecheck, since two code-side sites read the binding
-    // (`PlayerView.vue:672` ("myPrepare !== prepareEpoch"),
-    // `PlayerView.vue:1252` ("const myPrepare = ++prepareEpoch")) and fail
+    // (`PlayerView.vue:704` ("myPrepare !== prepareEpoch"),
+    // `PlayerView.vue:1290` ("const myPrepare = ++prepareEpoch")) and fail
     // before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
@@ -2486,8 +2486,13 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
         (p as { name: string }).name === 'on' &&
         (p as { arg?: { content?: string } }).arg?.content === 'error'
     )
-    expect((error as { exp?: { content?: string } }).exp?.content).toBe(
-      'syncplay.endEpisodeSwitchHold'
+    // #582 wraps the hold release with the disconnect check; the release still
+    // runs first, on every error.
+    expect((error as { exp?: { content?: string } }).exp?.content).toBe('onVideoElementError')
+    const wrapper = slice('function onVideoElementError(', '\n}')
+    expect(wrapper.indexOf('syncplay.endEpisodeSwitchHold();')).toBeGreaterThan(-1)
+    expect(wrapper.indexOf('syncplay.endEpisodeSwitchHold();')).toBeLessThan(
+      wrapper.indexOf('driveDisconnect.onVideoError()')
     )
   })
 

@@ -53,6 +53,8 @@ import { createPlayerPresenceService } from './services/player-presence'
 import { createSharedLibraryExportService } from './services/shared-library-export'
 import { createAttachedLibraryService } from './services/attached-library'
 import { createAvailabilityPoller } from './services/attached-library/poller'
+import { createSnapshotCache, SNAPSHOT_DIR } from './services/attached-library/snapshot-cache'
+import { createSyncBaseStore } from './lib/sync-state/bases'
 import { createMountCandidates, mountParents } from './lib/shared-library/mount-candidates'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
@@ -214,11 +216,15 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
 const mp4StatsService = createMp4StatsService({ store })
 const playerLockService = createPlayerLockService()
 const playerPresenceService = createPlayerPresenceService()
-// Attached Shared Libraries (#578). Their roots live only in this service.
+// Attached Shared Libraries (#578). Their roots live only in this service. An
+// unplugged library renders from its snapshot cache, and a claim PC's rates
+// come from the library base under `sync-bases/` (#582).
 const attachedLibraryService = createAttachedLibraryService({
   store,
   checkFfmpeg: () => checkFfmpeg(),
-  onChanged: () => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED)
+  onChanged: () => broadcastToAll(EVENT_CHANNELS.SHARED_LIBRARIES_CHANGED),
+  snapshotCache: createSnapshotCache({ dir: path.join(app.getPath('userData'), SNAPSHOT_DIR) }),
+  syncBases: createSyncBaseStore(path.join(app.getPath('userData'), 'sync-bases'), fs.promises)
 })
 // Drive detection (#581). `ANIME_DL_MOUNT_PARENTS` (unpackaged runs only, as
 // the API base overrides) points the candidates at test folders.
@@ -459,6 +465,8 @@ const skipAnalysisService = createSkipAnalysisService({
 const streamingService = createStreamingService({
   getFfmpegPath,
   getFfprobePath,
+  // A mid-episode ffmpeg run on a drive that went away (#582).
+  classifyExit: (input, hint) => attachedLibraryService.classifyMissing(input, hint),
   // Live-read so the Settings → Debug toggle applies without a restart; the
   // env var stays as a force-on override for one-off runs.
   isPlayerDiagEnabled: () =>
@@ -737,7 +745,9 @@ async function bootstrap(): Promise<void> {
   protocol.handle(
     'anime-video',
     createAnimeVideoHandler({
-      getActiveDownload: (fp) => downloadManager?.getActiveDownloadByPath(fp) ?? null
+      getActiveDownload: (fp) => downloadManager?.getActiveDownloadByPath(fp) ?? null,
+      // Logs `drive-disconnected` for a file under an attached root (#582).
+      onUnreadable: (fp, err) => void attachedLibraryService.reportUnreadable(fp, err)
     })
   )
   protocol.handle(

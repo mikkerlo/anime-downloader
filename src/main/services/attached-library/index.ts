@@ -7,6 +7,10 @@
 // cold-storage moves can never touch the user's drive. Nothing here writes
 // under a library root before S9 (#584): it reads with S5 (#573)'s reader, and
 // the writability check is `access(W_OK)`.
+//
+// The lifecycle (#582): every availability transition re-checks writability,
+// `reportWriteFailure` demotes a library whose real write failed, and an
+// unplugged library renders from the snapshot cache (`snapshot-cache.ts`).
 
 import { promises as fsp } from 'fs'
 import * as path from 'path'
@@ -21,9 +25,16 @@ import {
 import type { StorageService } from '../../store/types'
 import { ATTACHED_POSTER_MAX_BYTES } from '../../streaming/anime-poster-protocol'
 import { createListenerSet } from '../../lib/listener-set'
-import { checkWritable as defaultCheckWritable, type WritableVerdict } from './writable'
-import { spawnPathFor as spawnPathForRoots, type SpawnPathImpl } from './spawn-path'
+import type { SyncBaseStore } from '../../lib/sync-state/bases'
+import {
+  checkWritable as defaultCheckWritable,
+  DISCONNECT_CODES,
+  READ_ONLY_CODES,
+  type WritableVerdict
+} from './writable'
+import { isUnder, spawnPathFor as spawnPathForRoots, type SpawnPathImpl } from './spawn-path'
 import type { KnownLibrary } from './poller'
+import type { SnapshotCache } from './snapshot-cache'
 
 export { checkWritable } from './writable'
 
@@ -42,7 +53,15 @@ export interface AttachedLibraryServiceDeps {
   log?: Pick<Console, 'log' | 'warn' | 'error'>
   /** Forget's step 1: resolves once no S9 (#584) sync run on this library is in flight. */
   syncIdle?: (libraryId: string) => Promise<void>
+  /** `userData/shared-library-cache` (#582); without it nothing is cached. */
+  snapshotCache?: SnapshotCache
+  /** `userData/sync-bases`: a claim PC's rates come from the library base (#582). */
+  syncBases?: Pick<SyncBaseStore, 'read'>
+  /** Fills `stat` for `classifyMissing`; injectable for a test. */
+  stat?: (p: string) => Promise<unknown>
 }
+
+export { DISCONNECT_CODES } from './writable'
 
 /**
  * The forget-hook contract (#581). S8 (#582) and S9 (#584) register one each.
@@ -121,6 +140,27 @@ export interface AttachedLibraryService {
   ): Promise<SharedLibraryForgetResult>
   /** Accepts `dir` (or a folder one level below) only when it holds this `libraryId`. */
   relocate(libraryId: string, dir: string): Promise<SharedLibraryRelocateResult>
+
+  // --- Lifecycle (#582)
+  /**
+   * S9 (#584)'s contract: a write under the root failed. `EROFS`, `EACCES` and
+   * `EPERM` make the library `read-only` (`write-failed`) until its next
+   * availability transition re-checks it; true when it demoted. Other errors
+   * don't demote. Never throws.
+   */
+  reportWriteFailure(libraryId: string, err: unknown): boolean
+  /** Every availability transition, and `access` turning writable. Returns an unsubscribe. */
+  onAvailabilityChanged(listener: (t: AttachedLibraryTransition) => void): () => void
+  /**
+   * `'drive-disconnected'` when `p` is under an attached root and can't be
+   * `stat`ed now, or a read of it already failed (`readError`); logged once
+   * per library until it is seen again. Never throws.
+   */
+  classifyMissing(p: string, hint?: { readError?: boolean }): Promise<PlayerFailureReason | null>
+  /** The same from an error already in hand (the `anime-video://` handler); logs only. */
+  reportUnreadable(p: string, err: unknown): boolean
+  /** `list()`, with a claim PC's rates from each library base. */
+  listWithRates(): Promise<AttachedLibraryInfo[]>
 }
 
 /** What one open of a root holds in memory. */
@@ -213,9 +253,19 @@ export function createAttachedLibraryService(
   // When the poller last saw each available library; persisted when it goes, and on quit.
   const seenAt = new Map<string, number>()
   const forgetHooks = createListenerSet<[(hook: ForgetHook) => void]>('forget-hook')
+  // Read from the snapshot cache because the root couldn't be read at startup (#582).
+  const cached = new Map<string, Opened>()
+  const transitions = createListenerSet<[AttachedLibraryTransition]>('availability')
+  // Libraries whose disconnect was logged, until they are seen again.
+  const disconnectLogged = new Set<string>()
+  const stat = deps.stat ?? ((p: string) => fsp.stat(p))
+  const cache = deps.snapshotCache
 
   const isAvailable = (libraryId: string): boolean =>
     !!opened.get(libraryId)?.manifest && !unavailable.has(libraryId)
+  /** What a library renders from: this run's read, else the snapshot cache. */
+  const view = (libraryId: string): Opened | undefined =>
+    opened.get(libraryId) ?? cached.get(libraryId)
 
   const records = (): Record<string, AttachedLibraryRecord> =>
     (deps.store.get(STORE_KEY) as Record<string, AttachedLibraryRecord> | undefined) ?? {}
@@ -333,7 +383,7 @@ export function createAttachedLibraryService(
   }
 
   function infoOf(libraryId: string, rec: AttachedLibraryRecord): AttachedLibraryInfo {
-    const o = opened.get(libraryId)
+    const o = view(libraryId)
     return {
       libraryId,
       root: rec.root,
@@ -353,10 +403,14 @@ export function createAttachedLibraryService(
     }
   }
 
-  /** `read-write` unless the reader made it read-only; the writability check can only demote. */
+  /**
+   * `read-write` unless the reader made it read-only; the writability check can
+   * only demote. An inconclusive check keeps `prev`'s `mount` / `write-failed`.
+   */
   async function accessOf(
     root: string,
-    read: SharedLibraryRead
+    read: SharedLibraryRead,
+    prev?: Pick<AttachedLibraryRecord, 'access' | 'accessReason'>
   ): Promise<Pick<AttachedLibraryRecord, 'access' | 'accessReason'>> {
     if (read.status === 'read-only') return { access: 'read-only', accessReason: read.reason }
     const verdict = await checkWritable(root)
@@ -366,6 +420,12 @@ export function createAttachedLibraryService(
         `[shared-library] writability check failed for ${root}; access unchanged`,
         verdict.error
       )
+      if (
+        prev?.access === 'read-only' &&
+        (prev.accessReason === 'mount' || prev.accessReason === 'write-failed')
+      ) {
+        return { access: 'read-only', accessReason: prev.accessReason }
+      }
     }
     return { access: 'read-write' }
   }
@@ -387,17 +447,97 @@ export function createAttachedLibraryService(
     const { read, opened: o } = await open(rec.root)
     if (!o.manifest || o.manifest.libraryId !== libraryId) return null
     logRead(rec.root, read)
-    return { o, ...(await accessOf(rec.root, read)) }
+    return { o, ...(await accessOf(rec.root, read, rec)) }
   }
 
-  function commit(libraryId: string, rec: AttachedLibraryRecord, r: Reopened): void {
+  /**
+   * Makes `r` the library's read. On an availability transition the access
+   * check's result stands; otherwise a `write-failed` demotion is kept, since
+   * only a transition re-checks it. Returns the transition to emit once the
+   * record is saved, or null.
+   */
+  function commit(
+    libraryId: string,
+    rec: AttachedLibraryRecord,
+    r: Reopened
+  ): AttachedLibraryTransition | null {
+    const transition = !isAvailable(libraryId)
+    const wasReadOnly = rec.access === 'read-only'
+    let { access, accessReason } = r
+    if (!transition && rec.accessReason === 'write-failed' && access === 'read-write') {
+      access = 'read-only'
+      accessReason = 'write-failed'
+    }
     opened.set(libraryId, r.o)
-    rec.access = r.access
-    if (r.accessReason) rec.accessReason = r.accessReason
+    cached.delete(libraryId)
+    rec.access = access
+    if (accessReason) rec.accessReason = accessReason
     else delete rec.accessReason
     rec.lastSeenAt = now()
     unavailable.delete(libraryId)
     seenAt.set(libraryId, rec.lastSeenAt)
+    disconnectLogged.delete(libraryId)
+    persistSnapshot(libraryId, r.o)
+    const becameWritable = wasReadOnly && access === 'read-write'
+    if (!transition && !becameWritable) return null
+    return {
+      libraryId,
+      available: true,
+      access,
+      ...(accessReason ? { accessReason } : {}),
+      becameWritable
+    }
+  }
+
+  function emitTransition(t: AttachedLibraryTransition | null): void {
+    if (t) transitions.emit(t)
+  }
+
+  function capEntries(): { libraryId: string; available: boolean; lastSeenAt: number }[] {
+    return Object.entries(records()).map(([libraryId, rec]) => ({
+      libraryId,
+      available: isAvailable(libraryId),
+      lastSeenAt: (isAvailable(libraryId) ? seenAt.get(libraryId) : undefined) ?? rec.lastSeenAt
+    }))
+  }
+
+  /** Refreshes the snapshot cache from a fresh read, then checks the poster cap. Never throws. */
+  function persistSnapshot(libraryId: string, o: Opened): void {
+    if (!cache || !o.manifest) return
+    const input = {
+      manifest: o.manifest,
+      metas: o.metas,
+      posters: o.posters,
+      // `'skip'` for a poster that is bad for good (it leads outside the root);
+      // null when it is gone, which the cache reads as the drive going away.
+      posterSource: async (animeId: number): Promise<string | 'skip' | null> => {
+        const rel = posterPath(animeId)
+        if (!rel) return 'skip'
+        const r = await resolveLibraryPath(path.join(o.root, LIBRARY_DIR), { path: rel })
+        if (r.path === 'escapes') return 'skip'
+        return r.path === 'missing' ? null : r.path
+      }
+    }
+    void cache
+      .save(libraryId, input, () => !!records()[libraryId])
+      .then(() => cache.enforceCap(capEntries()))
+      .catch((err) => log.warn(`[shared-library] could not cache ${libraryId}`, err))
+  }
+
+  /** An unreadable library at startup: its titles from the snapshot cache, if any. */
+  async function loadCached(libraryId: string): Promise<void> {
+    if (!cache) return
+    const snap = await cache.load(libraryId)
+    const rec = records()[libraryId]
+    if (!snap || !rec || opened.has(libraryId)) return
+    cached.set(libraryId, {
+      root: rec.root,
+      realRoot: rec.root,
+      manifest: snap.manifest,
+      metas: snap.metas,
+      posters: snap.posters,
+      pathOverflow: 0
+    })
   }
 
   // The startup reopen; a `refresh` waits for it, so its older read never lands last.
@@ -415,16 +555,18 @@ export function createAttachedLibraryService(
         const before = attaches.get(libraryId)
         try {
           const r = await reopen(libraryId, rec)
-          if (!r) return
+          if (!r) return await loadCached(libraryId)
           // Fetched after the read, so an `attach` that landed meanwhile is
           // kept; one that opened this library itself has the newer read.
           const recs = records()
           const current = recs[libraryId]
           if (!current || current.root !== rec.root || attaches.get(libraryId) !== before) return
-          commit(libraryId, current, r)
+          const t = commit(libraryId, current, r)
           save(recs)
+          emitTransition(t)
         } catch (err) {
           log.warn(`[shared-library] could not reopen ${rec.root}`, err)
+          await loadCached(libraryId).catch(() => {})
         }
       })
     )
@@ -443,9 +585,10 @@ export function createAttachedLibraryService(
       const recs = records()
       const current = recs[libraryId]
       if (!current || current.root !== rec.root) return
-      commit(libraryId, current, r)
+      const t = commit(libraryId, current, r)
       save(recs)
       deps.onChanged?.()
+      emitTransition(t)
     } catch (err) {
       log.warn(`[shared-library] could not refresh ${root}`, err)
     }
@@ -544,10 +687,25 @@ export function createAttachedLibraryService(
       lastSyncAt: records()[libraryId]?.lastSyncAt ?? null
     }
     const recs = records()
+    const wasAvailable = isAvailable(libraryId)
     recs[libraryId] = rec
     save(recs)
     opened.set(libraryId, o)
+    cached.delete(libraryId)
+    unavailable.delete(libraryId)
+    seenAt.set(libraryId, rec.lastSeenAt)
+    disconnectLogged.delete(libraryId)
     attaches.set(libraryId, (attaches.get(libraryId) ?? 0) + 1)
+    persistSnapshot(libraryId, o)
+    if (!wasAvailable) {
+      transitions.emit({
+        libraryId,
+        available: true,
+        access: rec.access,
+        ...(rec.accessReason ? { accessReason: rec.accessReason } : {}),
+        becameWritable: false
+      })
+    }
     const library = infoOf(libraryId, rec)
     let ffmpegMissing: { mkvCount: number } | undefined
     if (library.mkvCount > 0) {
@@ -571,8 +729,9 @@ export function createAttachedLibraryService(
 
   async function getTitle(libraryId: string, animeId: number): Promise<AttachedTitleDetail | null> {
     const rec = records()[libraryId]
-    const o = opened.get(libraryId)
+    const o = view(libraryId)
     if (!rec || !o?.manifest) return null
+    const rate = (await ratesFor(libraryId)).get(animeId)
     const items = o.manifest.items.filter((i) => i.animeId === animeId)
     const titleName = o.manifest.titles.find((t) => t.animeId === animeId)?.name
     if (items.length === 0 && titleName === undefined) return null
@@ -606,8 +765,50 @@ export function createAttachedLibraryService(
       anime: snapshotAnime(animeId, name, meta ?? undefined, episodes.length),
       meta,
       hasPoster: o.posters.has(animeId),
-      episodes
+      episodes,
+      ...(rate ? { rate } : {})
     }
+  }
+
+  /**
+   * A claim PC's rates (#582): it has no Shikimori session or rate cache, so
+   * an attached title's rate is read from the library base S9 (#584) keeps,
+   * plugged in or not. Empty for any other role, or with no base yet.
+   */
+  async function ratesFor(libraryId: string): Promise<Map<number, AttachedTitleRate>> {
+    const out = new Map<number, AttachedTitleRate>()
+    const rec = records()[libraryId]
+    if (!deps.syncBases || !rec || roleOf(rec, userId()) !== 'claim') return out
+    try {
+      const base = await deps.syncBases.read(`library-${libraryId}`)
+      for (const [key, title] of Object.entries(base?.doc?.titles ?? {})) {
+        const id = Number(key)
+        const r = title?.rate
+        if (!Number.isSafeInteger(id) || id < 1 || !r) continue
+        const score = r.score?.value
+        const status = r.status?.value
+        const episodes = r.episodes?.value
+        if (typeof score !== 'number' || typeof status !== 'string') continue
+        if (typeof episodes !== 'number') continue
+        out.set(id, { score, status, episodes })
+      }
+    } catch (err) {
+      log.warn(`[shared-library] could not read the base of ${libraryId}`, err)
+    }
+    return out
+  }
+
+  async function listWithRates(): Promise<AttachedLibraryInfo[]> {
+    const libs = list()
+    for (const lib of libs) {
+      if (lib.role !== 'claim') continue
+      const rates = await ratesFor(lib.libraryId)
+      for (const t of lib.titles) {
+        const rate = rates.get(t.animeId)
+        if (rate) t.rate = rate
+      }
+    }
+    return libs
   }
 
   async function resolveItem(
@@ -679,8 +880,14 @@ export function createAttachedLibraryService(
   async function posterFor(animeId: number): Promise<string | null> {
     const rel = posterPath(animeId)
     if (!rel) return null
-    for (const o of opened.values()) {
+    for (const [libraryId, o] of [...opened, ...cached]) {
       if (!o.posters.has(animeId)) continue
+      // An unplugged library's poster comes from the snapshot cache (#582).
+      if (!isAvailable(libraryId)) {
+        const p = cache?.posterFile(libraryId, animeId)
+        if (p) return p
+        continue
+      }
       try {
         const r = await resolveLibraryPath(path.join(o.root, LIBRARY_DIR), { path: rel })
         if (r.path === 'missing' || r.path === 'escapes') continue
@@ -729,9 +936,10 @@ export function createAttachedLibraryService(
       return isAvailable(libraryId) && current?.root === root
     }
     current.root = root
-    commit(libraryId, current, r)
+    const t = commit(libraryId, current, r)
     save(recs)
     deps.onChanged?.()
+    emitTransition(t)
     return true
   }
 
@@ -760,6 +968,13 @@ export function createAttachedLibraryService(
     rec.lastSeenAt = seenAt.get(libraryId) ?? rec.lastSeenAt
     save(recs)
     deps.onChanged?.()
+    transitions.emit({
+      libraryId,
+      available: false,
+      access: rec.access,
+      ...(rec.accessReason ? { accessReason: rec.accessReason } : {}),
+      becameWritable: false
+    })
   }
 
   function markSeen(libraryId: string): void {
@@ -842,10 +1057,12 @@ export function createAttachedLibraryService(
       )
     }
     opened.delete(libraryId)
+    cached.delete(libraryId)
     discovered.delete(libraryId)
     found.delete(libraryId)
     unavailable.delete(libraryId)
     seenAt.delete(libraryId)
+    disconnectLogged.delete(libraryId)
     deps.onChanged?.()
     // 5. Every hook's own per-library data; one that rejects doesn't stop the rest.
     const results = await Promise.allSettled(hooks.map(async (hook) => hook.onForgotten(libraryId)))
@@ -882,6 +1099,86 @@ export function createAttachedLibraryService(
     }
   }
 
+  function reportWriteFailure(libraryId: string, err: unknown): boolean {
+    try {
+      const code = (err as NodeJS.ErrnoException | null)?.code
+      if (!code || !READ_ONLY_CODES.has(code)) return false
+      const recs = records()
+      const rec = recs[libraryId]
+      // Already read-only: a `version` (or any other) reason is never replaced.
+      if (!rec || rec.access === 'read-only') return false
+      rec.access = 'read-only'
+      rec.accessReason = 'write-failed'
+      save(recs)
+      log.warn(
+        `[shared-library] ${rec.name}: a write failed (${code}); read-only until it is re-detected`
+      )
+      deps.onChanged?.()
+      return true
+    } catch (err2) {
+      log.warn(`[shared-library] could not record a write failure for ${libraryId}`, err2)
+      return false
+    }
+  }
+
+  /** The attached library `p` is under, by this run's roots. */
+  function libraryOf(p: string): string | null {
+    const impl = deps.spawnPath ?? path
+    for (const [libraryId, o] of opened) {
+      if (isUnder(impl, o.root, p) || isUnder(impl, o.realRoot, p)) return libraryId
+    }
+    return null
+  }
+
+  function noteDisconnect(libraryId: string, p: string, err: unknown): void {
+    if (disconnectLogged.has(libraryId)) return
+    disconnectLogged.add(libraryId)
+    const code = (err as NodeJS.ErrnoException | null)?.code ?? 'unknown'
+    const name = records()[libraryId]?.name ?? libraryId
+    log.warn(`[shared-library] drive-disconnected: ${name} (${libraryId}), ${code} on ${p}`)
+  }
+
+  async function classifyMissing(
+    p: string,
+    hint: { readError?: boolean } = {}
+  ): Promise<PlayerFailureReason | null> {
+    try {
+      const libraryId = libraryOf(p)
+      if (!libraryId) return null
+      // A read that failed under an open fd: on a real unplug the path can
+      // still `stat` from cache while the device is gone.
+      if (hint.readError) {
+        noteDisconnect(libraryId, p, { code: 'read error' })
+        return 'drive-disconnected'
+      }
+      try {
+        await stat(p)
+        return null
+      } catch (err) {
+        noteDisconnect(libraryId, p, err)
+        return 'drive-disconnected'
+      }
+    } catch {
+      return null
+    }
+  }
+
+  function reportUnreadable(p: string, err: unknown): boolean {
+    try {
+      const code = (err as NodeJS.ErrnoException | null)?.code
+      if (!code || !DISCONNECT_CODES.has(code)) return false
+      const libraryId = libraryOf(p)
+      if (!libraryId) return false
+      noteDisconnect(libraryId, p, err)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Forget deletes the library's snapshot cache (#581's hook contract).
+  if (cache) registerForgetHook({ onForgotten: (libraryId) => cache.remove(libraryId) })
+
   return {
     init,
     refresh,
@@ -906,6 +1203,11 @@ export function createAttachedLibraryService(
     saveLastSeen,
     registerForgetHook,
     forget,
-    relocate
+    relocate,
+    reportWriteFailure,
+    onAvailabilityChanged: (listener) => transitions.add(listener),
+    classifyMissing,
+    reportUnreadable,
+    listWithRates
   }
 }

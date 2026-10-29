@@ -6,10 +6,15 @@ import FfmpegMissingBanner from './FfmpegMissingBanner.vue';
 import LibraryActionsMenu from './LibraryActionsMenu.vue';
 import { useLibraryStore } from '../../stores/library';
 import {
+  DRIVE_NOT_CONNECTED,
   FFMPEG_MISSING_REASON,
+  READ_ONLY_BADGE,
   ROLE_BADGE,
   lastSyncWhen,
+  notConnectedTitle,
   pathOverflowText,
+  rateText,
+  readOnlyTitle,
   useSharedLibrariesStore
 } from '../../stores/shared-libraries';
 import { usePlayFromDrive } from '../../composables/use-play-from-drive';
@@ -38,8 +43,17 @@ const ROLE_NOTE: Partial<Record<AttachedLibraryRole, string>> = {
 
 async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle): Promise<void> {
   const target = shared.playTarget(title);
-  if (!target) return;
+  if (!target || !lib.available) return;
   error.value = (await play(lib.libraryId, title.animeId, target)) ?? '';
+}
+
+/** Why Play is off, or undefined when it plays (#582: an unplugged drive first). */
+function playBlockedTitle(
+  lib: AttachedLibraryInfo,
+  title: AttachedLibraryTitle
+): string | undefined {
+  if (!lib.available) return notConnectedTitle(lib);
+  return shared.playTarget(title) ? undefined : FFMPEG_MISSING_REASON;
 }
 </script>
 
@@ -68,8 +82,13 @@ async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle):
         <h3 class="lib-name">{{ lib.name }}</h3>
         <span v-if="lib.ownerNickname" class="sl-muted">{{ lib.ownerNickname }}</span>
         <span class="sl-badge" data-testid="role-badge">{{ ROLE_BADGE[lib.role] }}</span>
-        <span v-if="lib.access === 'read-only'" class="sl-badge" data-testid="read-only-badge"
-          >Read-only</span
+        <span
+          v-if="lib.access === 'read-only'"
+          class="sl-badge"
+          data-testid="read-only-badge"
+          :data-reason="lib.accessReason"
+          :title="readOnlyTitle(lib)"
+          >{{ READ_ONLY_BADGE }}</span
         >
         <span v-if="!lib.available" class="sl-muted" data-testid="last-seen"
           >Last seen {{ formatAgo(lib.lastSeenAt) }}</span
@@ -89,7 +108,9 @@ async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle):
         {{ pathOverflowText(lib.pathOverflow) }}
       </p>
       <FfmpegMissingBanner v-if="!ffmpegAvailable && lib.mkvCount > 0" :mkv-count="lib.mkvCount" />
-      <p v-if="!lib.available" class="sl-muted">This library's folder can't be read right now.</p>
+      <p v-if="!lib.available" class="sl-muted" data-testid="not-connected-note">
+        {{ DRIVE_NOT_CONNECTED }}: this library's folder can't be read right now.
+      </p>
 
       <div v-if="lib.titles.length > 0" class="poster-grid">
         <div
@@ -97,20 +118,26 @@ async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle):
           :key="title.animeId"
           class="card-wrap"
           data-testid="drive-title"
+          :data-available="lib.available"
         >
           <AnimeCard
             :anime="title.anime"
             :starred="starredIds.has(title.animeId)"
+            :unavailable="!lib.available"
+            :unavailable-title="notConnectedTitle(lib)"
             @toggle-star="emit('toggleStar', $event)"
             @click="libraryStore.openAnime(title.animeId)"
           />
           <span v-if="title.onThisPc" class="on-pc-badge" data-testid="on-this-pc">On this PC</span>
           <div class="card-actions">
+            <span v-if="title.rate" class="sl-muted rate-line" data-testid="drive-title-rate">{{
+              rateText(title.rate)
+            }}</span>
             <button
               class="sl-btn primary"
               data-testid="play-from-drive"
-              :disabled="!shared.playTarget(title)"
-              :title="shared.playTarget(title) ? undefined : FFMPEG_MISSING_REASON"
+              :disabled="!lib.available || !shared.playTarget(title)"
+              :title="playBlockedTitle(lib, title)"
               @click.stop="playTitle(lib, title)"
             >
               Play from drive
@@ -201,6 +228,10 @@ async function playTitle(lib: AttachedLibraryInfo, title: AttachedLibraryTitle):
   font-size: 0.7rem;
   font-weight: 700;
   pointer-events: none;
+}
+
+.rate-line {
+  font-size: 0.75rem;
 }
 
 .card-actions {

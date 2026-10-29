@@ -284,6 +284,83 @@ describe('OpenLibraryDialog', () => {
   })
 })
 
+describe('an unplugged drive and a read-only library (#582)', () => {
+  async function sharedTab(lib: AttachedLibraryInfo) {
+    const w = mountLibrary({ libraries: [lib] })
+    await flushPromises()
+    await selectShared(w)
+    return w
+  }
+
+  it('cards are dimmed with "Drive not connected", and Play is disabled', async () => {
+    const lib = { ...library([title(101, 'Frieren', 'mp4')]), available: false }
+    const w = await sharedTab(lib)
+    const card = w.find('[data-testid="drive-title"]')
+    expect(card.find('.acard').classes()).toContain('unavailable')
+    expect(card.find('[data-testid="drive-not-connected"]').text()).toBe('Drive not connected')
+    expect(card.find('.acard').attributes('title')).toMatch(
+      /^Fixture library: drive not connected\. Last seen /
+    )
+    const play = card.find('[data-testid="play-from-drive"]')
+    expect(play.attributes('disabled')).toBeDefined()
+    expect(play.attributes('title')).toContain('drive not connected')
+    // Metadata still shows, from the snapshot.
+    expect(card.find('.acard-title').text()).toBe('Frieren')
+    expect(card.find('img.poster').attributes('src')).toBe('anime-poster://101')
+  })
+
+  it('back on re-plug: not dimmed, Play enabled', async () => {
+    const w = await sharedTab({ ...library([title(101, 'Frieren', 'mp4')]), available: false })
+    list = [library([title(101, 'Frieren', 'mp4')])]
+    changed!()
+    await flushPromises()
+    const card = w.find('[data-testid="drive-title"]')
+    expect(card.find('.acard').classes()).not.toContain('unavailable')
+    expect(card.find('[data-testid="drive-not-connected"]').exists()).toBe(false)
+    expect(card.find('[data-testid="play-from-drive"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it.each([
+    ['mount', 'The drive is mounted read-only on this computer.'],
+    [
+      'write-failed',
+      "A write to the drive failed, so it's treated as read-only until it's connected again."
+    ],
+    ['version', "The library's format is newer than this app."]
+  ] as const)('the read-only badge gives the reason (%s)', async (reason, text) => {
+    const w = await sharedTab({
+      ...library([title(101, 'Frieren', 'mp4')]),
+      access: 'read-only',
+      accessReason: reason
+    })
+    const badge = w.find('[data-testid="read-only-badge"]')
+    expect(badge.text()).toBe('Read-only on this computer')
+    expect(badge.attributes('title')).toBe(text)
+    // A read-only library still plays.
+    expect(w.find('[data-testid="play-from-drive"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it("a claim PC's card shows the base's rate, plugged in or not; no base, no rate", async () => {
+    const rated = {
+      ...title(101, 'Frieren', 'mp4'),
+      rate: { score: 9, status: 'watching', episodes: 7 }
+    }
+    const w = await sharedTab({
+      ...library([rated, title(202, 'Dungeon Meshi', 'mkv')]),
+      role: 'claim',
+      available: false
+    })
+    const rates = w
+      .findAll('[data-testid="drive-title"]')
+      .map(
+        (c) =>
+          c.find('[data-testid="drive-title-rate"]').exists() &&
+          c.find('[data-testid="drive-title-rate"]').text()
+      )
+    expect(rates).toEqual(['★ 9 · watching · 7 ep', false])
+  })
+})
+
 describe('PlayerView passes animeId to playerFindLocalFile', () => {
   // PlayerView has no mount harness (see episode-walk-release.test.ts), so the
   // source is read: next / previous / a translation switch from a drive
@@ -299,7 +376,8 @@ describe('PlayerView passes animeId to playerFindLocalFile', () => {
         .map((a) => a.trim())
         .filter(Boolean)
     )
-    expect(calls).toHaveLength(2)
+    // Next / previous, a translation switch, and the disconnect overlay's Retry (#582).
+    expect(calls).toHaveLength(3)
     for (const args of calls) {
       expect(args).toHaveLength(5)
       expect(args[4]).toBe('props.animeId')

@@ -82,7 +82,8 @@ export function usePlayFromDrive(): {
       })),
       episodeIndex: index,
       animeId,
-      malId: title.meta?.malId ?? 0
+      malId: title.meta?.malId ?? 0,
+      ...(found.libraryId ? { attachedLibraryId: found.libraryId } : {})
     })
     return null
   }

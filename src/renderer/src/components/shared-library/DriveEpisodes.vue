@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { storeToRefs } from 'pinia';
-import { FFMPEG_MISSING_REASON, useSharedLibrariesStore } from '../../stores/shared-libraries';
+import {
+  DRIVE_NOT_CONNECTED,
+  FFMPEG_MISSING_REASON,
+  notConnectedTitle,
+  useSharedLibrariesStore
+} from '../../stores/shared-libraries';
 import { usePlayFromDrive } from '../../composables/use-play-from-drive';
 
 // One attached library's episodes of a title (#578), with Play from drive. The
@@ -17,8 +22,17 @@ const error = ref('');
 const episodes = computed(() =>
   props.title.episodes.filter((e) => !props.exclude?.has(e.episodeInt))
 );
+// An unplugged drive's episodes still list, from the snapshot, with Play off (#582).
+const library = computed(() => shared.libraries.find((l) => l.libraryId === props.title.libraryId));
+const unplugged = computed(() => library.value?.available === false);
+
+function blockedTitle(item: AttachedTitleItem): string | undefined {
+  if (unplugged.value && library.value) return notConnectedTitle(library.value);
+  return item.container === 'mkv' && !ffmpegAvailable.value ? FFMPEG_MISSING_REASON : undefined;
+}
 
 async function playItem(ep: AttachedTitleEpisode, item: AttachedTitleItem): Promise<void> {
+  if (unplugged.value) return;
   error.value =
     (await play(
       props.title.libraryId,
@@ -34,6 +48,9 @@ async function playItem(ep: AttachedTitleEpisode, item: AttachedTitleItem): Prom
     <div class="section-head">
       <h3>On {{ title.libraryName }}</h3>
       <span class="sl-muted">{{ episodes.length }} on the drive</span>
+      <span v-if="unplugged" class="sl-badge" data-testid="drive-episodes-unplugged">{{
+        DRIVE_NOT_CONNECTED
+      }}</span>
     </div>
     <p v-if="error" class="sl-error">{{ error }}</p>
     <div v-for="ep in episodes" :key="ep.episodeInt" class="drive-row">
@@ -46,10 +63,8 @@ async function playItem(ep: AttachedTitleEpisode, item: AttachedTitleItem): Prom
           <button
             class="sl-btn primary"
             data-testid="play-episode-from-drive"
-            :disabled="item.container === 'mkv' && !ffmpegAvailable"
-            :title="
-              item.container === 'mkv' && !ffmpegAvailable ? FFMPEG_MISSING_REASON : undefined
-            "
+            :disabled="unplugged || (item.container === 'mkv' && !ffmpegAvailable)"
+            :title="blockedTitle(item)"
             @click="playItem(ep, item)"
           >
             Play from drive

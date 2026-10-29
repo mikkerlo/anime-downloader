@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { useMsePlayer } from '../../composables/use-mse-player';
+import {
+  useDriveDisconnect,
+  DRIVE_DISCONNECTED_TEXT
+} from '../../composables/use-drive-disconnect';
+import { useSharedLibrariesStore } from '../../stores/shared-libraries';
 import { useAnime4K } from '../../composables/use-anime4k';
 import { usePlayerKeyboard, type PlayerAction } from '../../composables/use-player-keyboard';
 import { useSubtitles } from '../../composables/use-subtitles';
@@ -57,6 +62,8 @@ const props = defineProps<{
   episodeIndex: number;
   animeId: number;
   malId: number;
+  // The attached Shared Library `filePath` is on (#582); absent for any other file.
+  attachedLibraryId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -117,8 +124,33 @@ const msePlayer = useMsePlayer({
   setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready),
   beginProgrammaticPlayback: (target, kind) => syncplay.beginProgrammaticPlayback(target, kind),
   beginProgrammaticSeek: (target) => syncplay.beginProgrammaticSeek(target),
-  hasRemoteStateApplied: () => roomOwnsPlayhead()
+  hasRemoteStateApplied: () => roomOwnsPlayhead(),
+  savePosition: () => void saveProgress(true),
+  onDriveDisconnected: () => driveDisconnect.onMseDisconnected()
 });
+
+// An attached Shared Library's drive going away mid-episode (#582). Which
+// library each opened file is on, as `player:find-local-file` reported it.
+const sharedLibraries = useSharedLibrariesStore();
+const fileLibraries = new Map<string, string>();
+if (props.attachedLibraryId) fileLibraries.set(props.filePath, props.attachedLibraryId);
+function noteFileLibrary(result: PlayerLocalFileResult): void {
+  if (result.libraryId) fileLibraries.set(result.filePath, result.libraryId);
+}
+const driveDisconnect = useDriveDisconnect({
+  getLibraryId: () => fileLibraries.get(activeFilePath.value) ?? '',
+  isAvailable: (id) => sharedLibraries.isAvailable(id),
+  waitForUnavailable: (id, ms) => sharedLibraries.waitForUnavailable(id, ms),
+  savePosition: () => void saveProgress(true),
+  pause: () => videoRef.value?.pause(),
+  reopen: () => reopenAfterDisconnect()
+});
+const {
+  disconnected: driveDisconnected,
+  retryEnabled: driveRetryEnabled,
+  retrying: driveRetrying,
+  retryError: driveRetryError
+} = driveDisconnect;
 const {
   mseSrcUrl,
   mkvBuffering,
@@ -1238,14 +1270,20 @@ const PLAYER_CLOSED_BAIL = { ok: false, error: 'player closed' } as const;
  * Identity against the singleton, not a string compare — a genuine open failure
  * that happened to carry the same message could not be mistaken for an unwind.
  */
-function reportPrepareError(prep: { ok: false; error: string }): void {
+// `reason` is main's `drive-disconnected` for a file whose drive is gone (#582).
+type PrepareFailure = { ok: false; error: string; reason?: PlayerFailureReason };
+
+function reportPrepareError(prep: PrepareFailure): void {
   if (prep === PLAYER_CLOSED_BAIL) return;
+  // The drive was already gone when the session opened (#582).
+  if (prep.reason === 'drive-disconnected') {
+    driveDisconnect.onMseDisconnected();
+    return;
+  }
   remuxError.value = prep.error;
 }
 
-async function prepareMkvForPlayback(
-  filePath: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
+async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | PrepareFailure> {
   // Take the supersede id FIRST, before any early return: entering at all is
   // what supersedes whatever open was in flight, and a bail that skipped the
   // bump would leave a parked predecessor believing it is still current.
@@ -1456,6 +1494,9 @@ async function prepareMkvForPlayback(
         if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
         return await prepareHevcTranscode(filePath, initialSeek, resumeTarget, myPrepare);
       }
+    } else if (streamResult.reason === 'drive-disconnected') {
+      // No legacy remux of a file whose drive is gone (#582).
+      return { ok: false, error: streamResult.error, reason: streamResult.reason };
     } else {
       console.warn(
         '[player] MSE stream open failed, falling back to legacy remux:',
@@ -1592,6 +1633,55 @@ function formatTime(seconds: number): string {
 }
 
 // Playback controls
+// The disconnect overlay's Retry (#582): the drive may be back at another path,
+// so the episode is resolved again through `player:find-local-file`, then
+// reopened at the position saved when the drive went away. An `.mkv` respawns
+// through the same open as any other, so ffmpeg gets `spawnPathFor`'s form of
+// the new path.
+async function reopenAfterDisconnect(): Promise<boolean> {
+  // The same key `selectTranslation` resolves the playing episode's file by.
+  const epLabel = activeEpisodeLabel.value;
+  const ep = props.allEpisodes[activeEpisodeIndex.value];
+  const trId = activeTranslationId.value;
+  if (!epLabel || trId === undefined || trId === null) return false;
+  const localResult = await window.api.playerFindLocalFile(
+    props.animeName,
+    epLabel,
+    trId,
+    ep?.episodeFull || epLabel,
+    props.animeId
+  );
+  if (unmounted || !localResult) return false;
+  noteFileLibrary(localResult);
+  activeStreamUrl.value = '';
+  activeFilePath.value = localResult.filePath;
+  activeSubtitleContent.value = localResult.subtitleContent || '';
+  if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
+    // A failed open keeps the overlay up, with Retry's own message.
+    const prep = await prepareMkvForPlayback(localResult.filePath);
+    if (!prep.ok) return false;
+  } else {
+    await nextTick();
+    const v = videoRef.value;
+    if (!v || unmounted) return false;
+    v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
+    v.load();
+  }
+  if (unmounted) return false;
+  const video = videoRef.value;
+  destroySubtitles();
+  if (video && activeSubtitleContent.value) initSubtitles(video);
+  if (video) playProgrammatically(video, 'restore');
+  return true;
+}
+
+// A `<video>` error on a file from an attached drive (`anime-video://`): the
+// overlay only once the store reports the library unavailable (#582).
+function onVideoElementError(): void {
+  syncplay.endEpisodeSwitchHold();
+  if (activeFilePath.value && !isMkv.value) void driveDisconnect.onVideoError();
+}
+
 function togglePlay(): void {
   cancelAutoAdvance();
   const video = videoRef.value;
@@ -1874,6 +1964,8 @@ function onCanPlay(): void {
 function onWaiting(): void {
   growingFile.onWaiting();
   onVideoWaiting();
+  // A drive gone under `anime-video://` stalls rather than errors (#582).
+  if (activeFilePath.value && !isMkv.value) void driveDisconnect.onVideoError();
 }
 
 function onSeekStart(): void {
@@ -2206,6 +2298,7 @@ async function selectTranslation(tr: {
       // writes below would persist the LOSING translation as the user's choice.
       if (translationEpoch !== mySwitch) return;
       if (localResult) {
+        noteFileLibrary(localResult);
         activeTranslationId.value = tr.id;
         persistSelectedTranslation(tr.id);
 
@@ -2610,6 +2703,7 @@ async function goToEpisode(
       // the source writes below belong to whichever run owns `myNav` now.
       if (navigationEpoch !== myNav) return 'moved';
       if (localResult) {
+        noteFileLibrary(localResult);
         activeFilePath.value = localResult.filePath;
         activeStreamUrl.value = '';
         activeSubtitleContent.value = localResult.subtitleContent || '';
@@ -3256,6 +3350,28 @@ const bufferedProgress = computed(() => {
       </div>
     </div>
 
+    <!-- An attached drive went away mid-episode (#582). Never retries by itself. -->
+    <div v-if="driveDisconnected" class="remux-overlay" data-testid="drive-disconnected">
+      <div class="remux-modal">
+        <p class="remux-title remux-error-title">{{ DRIVE_DISCONNECTED_TEXT }}</p>
+        <p v-if="driveRetryError" class="remux-hint">{{ driveRetryError }}</p>
+        <div class="hevc-prompt-buttons">
+          <button
+            class="remux-close-btn"
+            data-testid="drive-retry"
+            :disabled="!driveRetryEnabled"
+            :title="driveRetryEnabled ? undefined : 'Reconnect the drive first'"
+            @click="driveDisconnect.retry()"
+          >
+            {{ driveRetrying ? 'Retrying…' : 'Retry' }}
+          </button>
+          <button class="remux-close-btn" data-testid="drive-close" @click="emit('close')">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Auto-advance countdown -->
     <div v-if="autoAdvanceCountdown > 0" class="auto-advance-overlay">
       <div class="auto-advance-modal">
@@ -3324,7 +3440,7 @@ const bufferedProgress = computed(() => {
         @seeked="onVideoSeekedAll"
         @loadstart="onLoadStart"
         @loadedmetadata="syncplay.onVideoLoadedMetadata"
-        @error="syncplay.endEpisodeSwitchHold"
+        @error="onVideoElementError"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"

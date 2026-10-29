@@ -2,7 +2,12 @@
 import { ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import LibraryActionsMenu from './LibraryActionsMenu.vue';
-import { lastSyncWhen, useSharedLibrariesStore } from '../../stores/shared-libraries';
+import {
+  READ_ONLY_BADGE,
+  lastSyncWhen,
+  readOnlyTitle,
+  useSharedLibrariesStore
+} from '../../stores/shared-libraries';
 import { formatAgo } from '../../utils';
 
 // Settings → Storage → Shared Libraries (#581): every attached library, with
@@ -39,8 +44,14 @@ const MODE_LABEL: Record<SharedLibraryMode, string> = {
           </td>
           <td>{{ lib.ownerNickname ?? '—' }}</td>
           <td>
-            {{ MODE_LABEL[lib.mode]
-            }}<template v-if="lib.access === 'read-only'"> · Read-only</template>
+            {{ MODE_LABEL[lib.mode] }}
+            <span
+              v-if="lib.access === 'read-only'"
+              class="sl-badge"
+              data-testid="settings-read-only-badge"
+              :title="readOnlyTitle(lib)"
+              >{{ READ_ONLY_BADGE }}</span
+            >
           </td>
           <td class="root" :title="lib.root">{{ lib.root }}</td>
           <td>{{ lib.available ? 'Connected' : formatAgo(lib.lastSeenAt) }}</td>

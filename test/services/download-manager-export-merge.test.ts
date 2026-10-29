@@ -342,6 +342,39 @@ describe('DownloadManager ffmpeg mutex and mergeForExport (#576)', () => {
       expect(dm.getMergeStatus(1)).toBeNull()
     })
 
+    it('cancelExportMerge on a waiting export rejects at once, before the merge in front ends, and leaves the queue', async () => {
+      seedGroups(2)
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await until(() => ff.commands.length === 1, 'group 1')
+      const exp = dm.mergeForExport(exportOpts())
+      let outcome: string | null = null
+      void exp.then(
+        () => (outcome = 'resolved'),
+        (e: Error) => (outcome = e.name)
+      )
+      for (let i = 0; i < 5; i++) await flush()
+      dm.cancelExportMerge('job-1')
+      // Group 1 is still running: the export gave up its place anyway.
+      await until(() => outcome !== null, 'the export to give up its wait')
+      expect(outcome).toBe('AbortError')
+      expect(ff.commands[0].settled).toBe(false)
+
+      // Group 2 is next in line, and nothing of the export ever ran.
+      ff.commands[0].finish()
+      await until(() => ff.commands.length === 2, 'group 2')
+      expect(inputName(1)).toBe('ep2.mp4')
+      ff.commands[1].finish()
+      await cycle
+      expect(ff.probes.filter((p) => p.startsWith(exportSrc))).toEqual([])
+      expect(ff.commands).toHaveLength(2)
+
+      // The lock isn't stuck on the export that left.
+      const again = dm.mergeForExport(exportOpts())
+      await until(() => ff.commands.length === 3, 'a later export merge')
+      ff.commands[2].finish()
+      expect(await again).toBe('done')
+    })
+
     it('cancelExportMerge kills only its own job, and stops one still waiting before it spawns', async () => {
       seedGroups(1)
       const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)

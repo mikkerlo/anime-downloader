@@ -318,6 +318,69 @@ describe('merge on export (#576)', () => {
     expect(ff.commands).toHaveLength(2)
   })
 
+  for (const kind of ['pause', 'cancel'] as const) {
+    it(`${kind} while waiting behind a download merge returns before that merge ends, and nothing of the export runs (#576 review)`, async () => {
+      env = makeEnv()
+      fs.writeFileSync(path.join(dmDir, 'q1.mp4'), 'queue video')
+      ;(dm as unknown as { queue: DownloadItem[] }).queue = [
+        {
+          id: 'v1',
+          translationId: 900,
+          kind: 'video',
+          url: 'http://example.invalid/q1.mp4',
+          filename: 'q1.mp4',
+          animeName: 'Q',
+          episodeLabel: 'q1',
+          animeId: 9,
+          episodeInt: '1',
+          quality: 720,
+          translationType: 'subRu',
+          author: 'A',
+          status: 'completed',
+          bytesReceived: 0,
+          totalBytes: 0,
+          speed: 0
+        }
+      ]
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await until(() => ff.commands.length === 1, 'the download merge')
+
+      const p = pair(env)
+      const job = await start(env, [p.key], { unmerged: 'merge' })
+      await until(() => last(env).merge?.phase === 'waiting', 'Waiting for a download merge')
+
+      let stopped = false
+      void (kind === 'pause' ? env.svc.pause(job.jobId) : env.svc.cancel(job.jobId)).then(() => {
+        stopped = true
+      })
+      // Before the download merge ends: its command is still running.
+      await until(() => stopped, `the ${kind} to return`, 1500)
+      expect(ff.commands[0].settled).toBe(false)
+      expect(last(env).status).toBe(kind === 'pause' ? 'paused' : 'cancelled')
+      expect(last(env).merge).toBeNull()
+      expect(last(env).failed).toEqual([])
+      expect(ff.commands).toHaveLength(1)
+      expect(ff.probes).toEqual([path.join(dmDir, 'q1.mp4')])
+
+      ff.commands[0].finish()
+      await cycle
+      expect(dm.getMergeStatus(900)).toBe('completed')
+      expect(ff.commands).toHaveLength(1)
+
+      if (kind === 'pause') {
+        await env.svc.resume(job.jobId)
+        await until(() => ff.commands.length === 2, 'the export merge after Resume')
+        expect(ff.commands[1].inputs[0]).toBe(p.video)
+        ff.commands[1].finish()
+        await env.svc.settled(job.jobId)
+        expect(last(env).status).toBe('completed')
+        expect(manifestOf(root(env)).items.map((i) => i.path)).toEqual([
+          'Beta Show/Beta Show - 01 [Studio].mkv'
+        ])
+      }
+    })
+  }
+
   it('a Scan & merge that took the pair while the export waited: the export copies the .mkv it made', async () => {
     env = makeEnv()
     const p = pair(env)

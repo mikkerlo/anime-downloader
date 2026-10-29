@@ -437,8 +437,9 @@ export class DownloadManager {
   private ffmpegMutex = createMutex()
   private activeMergeOwner: 'queue' | 'scan' | 'export' | null = null
   private activeExportJobId: string | null = null
-  // Export merges waiting for the mutex, and those cancelled while waiting.
-  private exportMergesWaiting = new Set<string>()
+  // Export merges waiting for the mutex, by job, with the abort that takes one
+  // out of the queue; and those cancelled after the lock reached them.
+  private exportMergesWaiting = new Map<string, AbortController>()
   private exportMergesCancelled = new Set<string>()
 
   constructor(
@@ -1029,8 +1030,8 @@ export class DownloadManager {
 
   /**
    * Stops export `jobId`'s merge (#576): kills its ffmpeg, or, while it still
-   * waits for the mutex, makes it give the lock straight back. Never touches a
-   * queue or scan merge.
+   * waits for the mutex, takes it out of the queue at once, so a Pause doesn't
+   * wait for the merge in front of it. Never touches a queue or scan merge.
    */
   cancelExportMerge(jobId: string): void {
     if (this.activeMergeOwner === 'export' && this.activeExportJobId === jobId) {
@@ -1039,7 +1040,12 @@ export class DownloadManager {
       this.activeFfmpegCmd?.kill('SIGKILL')
       return
     }
-    if (this.exportMergesWaiting.has(jobId)) this.exportMergesCancelled.add(jobId)
+    const waiting = this.exportMergesWaiting.get(jobId)
+    if (!waiting) return
+    // The flag covers a lock handed over in the same tick, before the
+    // merge resumed from its wait: the abort is a no-op then.
+    this.exportMergesCancelled.add(jobId)
+    waiting.abort()
   }
 
   cancelByEpisode(animeName: string, episodeLabel?: string): void {
@@ -1169,7 +1175,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1879-1884`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1894-1899`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1198,7 +1204,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1875`)
+   * (`src/main/download-manager.ts:1890`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1812,9 +1818,18 @@ export class DownloadManager {
     const { jobId } = opts
     if (this.destroyed) throw new MergeQuitError()
     if (this.ffmpegMutex.isLocked()) opts.onWaiting?.()
-    this.exportMergesWaiting.add(jobId)
-    const release = await this.ffmpegMutex.acquire()
-    this.exportMergesWaiting.delete(jobId)
+    const waiting = new AbortController()
+    this.exportMergesWaiting.set(jobId, waiting)
+    let release: () => void
+    try {
+      release = await this.ffmpegMutex.acquire(waiting.signal)
+    } catch {
+      // Paused or cancelled while waiting: out of the queue, nothing ran.
+      this.exportMergesCancelled.delete(jobId)
+      throw mergeAbortError()
+    } finally {
+      this.exportMergesWaiting.delete(jobId)
+    }
     try {
       if (this.exportMergesCancelled.delete(jobId)) throw mergeAbortError()
       if (this.destroyed) throw new MergeQuitError()

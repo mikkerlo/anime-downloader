@@ -53,6 +53,94 @@ describe('createMutex (#576)', () => {
     expect(order).toEqual(['waiter', 'holder again'])
   })
 
+  describe('giving up a wait (#576 review)', () => {
+    const settled = async <T>(p: Promise<T>): Promise<boolean> => {
+      let done = false
+      void p.then(
+        () => (done = true),
+        () => (done = true)
+      )
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      return done
+    }
+
+    it('an aborted waiter rejects at once and leaves the queue; the waiters behind keep their order', async () => {
+      const m = createMutex()
+      const order: string[] = []
+      const holder = await m.acquire()
+      const ac = new AbortController()
+      const a = m.acquire(ac.signal)
+      const b = m.acquire().then((r) => {
+        order.push('b')
+        return r
+      })
+      const c = m.acquire().then((r) => {
+        order.push('c')
+        return r
+      })
+      ac.abort()
+      await expect(a).rejects.toMatchObject({ name: 'AbortError' })
+      // Still held: the abort neither took nor freed the lock.
+      expect(m.isLocked()).toBe(true)
+      expect(await settled(b)).toBe(false)
+      holder()
+      ;(await b)()
+      ;(await c)()
+      expect(order).toEqual(['b', 'c'])
+      expect(m.isLocked()).toBe(false)
+    })
+
+    it('no leak: with every waiter aborted, the holder’s release frees the lock', async () => {
+      const m = createMutex()
+      const holder = await m.acquire()
+      const acs = [new AbortController(), new AbortController(), new AbortController()]
+      const waits = acs.map((ac) => m.acquire(ac.signal).catch((e: Error) => e.name))
+      for (const ac of acs) ac.abort()
+      expect(await Promise.all(waits)).toEqual(['AbortError', 'AbortError', 'AbortError'])
+      holder()
+      expect(m.isLocked()).toBe(false)
+      const next = await m.acquire()
+      next()
+      expect(m.isLocked()).toBe(false)
+    })
+
+    it('an abort after the lock was handed over does nothing; the hold releases as usual', async () => {
+      const m = createMutex()
+      const holder = await m.acquire()
+      const ac = new AbortController()
+      const w = m.acquire(ac.signal)
+      const x = m.acquire()
+      holder()
+      const wRelease = await w
+      ac.abort()
+      expect(m.isLocked()).toBe(true)
+      expect(await settled(x)).toBe(false)
+      wRelease()
+      ;(await x)()
+      expect(m.isLocked()).toBe(false)
+
+      // Uncontended: acquired at once, and a later abort is a no-op too.
+      const ac2 = new AbortController()
+      const r = await m.acquire(ac2.signal)
+      ac2.abort()
+      expect(m.isLocked()).toBe(true)
+      r()
+      expect(m.isLocked()).toBe(false)
+    })
+
+    it('an already-aborted signal rejects without taking or queueing', async () => {
+      const m = createMutex()
+      const ac = new AbortController()
+      ac.abort()
+      await expect(m.acquire(ac.signal)).rejects.toMatchObject({ name: 'AbortError' })
+      expect(m.isLocked()).toBe(false)
+      const holder = await m.acquire()
+      await expect(m.acquire(ac.signal)).rejects.toMatchObject({ name: 'AbortError' })
+      holder()
+      expect(m.isLocked()).toBe(false)
+    })
+  })
+
   it('a release is idempotent: a second call does not free a lock someone else holds', async () => {
     const m = createMutex()
     const release = await m.acquire()

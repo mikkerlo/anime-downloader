@@ -93,11 +93,14 @@ const sizeWillChange = computed(
   () => choice.value.merge && choice.value.reencode && estimate.value.unmerged > 0
 );
 // Selected pairs already on the drive as an MKV an export merged (#623): a
-// re-encode doesn't redo them.
-const notReencoded = computed(() => {
-  if (!choice.value.merge || !choice.value.reencode) return 0;
-  return (target.value?.presentMerged ?? []).filter((k) => selected.value.has(k)).length;
-});
+// re-encode doesn't redo them. They keep the merge options on screen, so the
+// note always sits next to the codec it is about.
+const mergedThere = computed(
+  () => (target.value?.presentMerged ?? []).filter((k) => selected.value.has(k)).length
+);
+const notReencoded = computed(() =>
+  choice.value.merge && choice.value.reencode ? mergedThere.value : 0
+);
 const free = computed(() => target.value?.free ?? null);
 const fits = computed(() => fitsFreeSpace(estimate.value.bytes, free.value));
 const barPercent = computed(() => {
@@ -268,8 +271,18 @@ async function startExport(): Promise<void> {
         </label>
       </div>
 
-      <div v-if="estimate.unmerged > 0" class="unmerged" data-testid="export-unmerged">
-        <div class="unmerged-title">Unmerged episodes ({{ estimate.unmerged }}):</div>
+      <div
+        v-if="estimate.unmerged > 0 || mergedThere > 0"
+        class="unmerged"
+        data-testid="export-unmerged"
+      >
+        <div class="unmerged-title">
+          {{
+            estimate.unmerged > 0
+              ? `Unmerged episodes (${estimate.unmerged}):`
+              : 'Unmerged episodes: all already on the drive'
+          }}
+        </div>
         <div class="mode">
           <label>
             <input

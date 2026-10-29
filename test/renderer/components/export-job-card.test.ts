@@ -84,3 +84,27 @@ describe('ExportJobCard merge states (#576)', () => {
     expect(w.text()).toContain('Paused while the player is open')
   })
 })
+
+describe('ExportJobCard With metadata (#586)', () => {
+  const phase = (over: Partial<ExportJobView>) =>
+    mount(ExportJobCard, { props: { job: job({ mode: 'metadata', ...over }) } })
+
+  it('"Copying", then "Saving watch state", then done', () => {
+    const copying = phase({ status: 'running', phase: 'copy', current: 'Show — Episode 1' })
+    expect(copying.find('[data-testid="export-job-step"]').text()).toBe('Copying: Show — Episode 1')
+    expect(copying.find('[data-testid="export-job-phase"]').exists()).toBe(false)
+
+    const saving = phase({ status: 'running', phase: 'state' })
+    expect(saving.find('[data-testid="export-job-phase"]').text()).toBe('Saving watch state')
+
+    const done = phase({ status: 'completed', phase: 'done' })
+    expect(done.find('[data-testid="export-job-phase"]').exists()).toBe(false)
+    expect(done.text()).toContain('Exported to Trip')
+  })
+
+  it('a job killed while saving shows "Saving watch state" after the restart, paused', () => {
+    const w = phase({ status: 'paused', phase: 'state' })
+    expect(w.find('.waiting').text()).toBe('Paused · Saving watch state')
+    expect(w.find('[data-testid="export-job-phase"]').text()).toBe('Saving watch state')
+  })
+})

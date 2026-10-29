@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSettingsStore } from '../../stores/settings';
 import { useOfflineStore } from '../../stores/offline';
+import { usePrepareOfflineStore } from '../../stores/prepare-offline';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
@@ -16,6 +17,13 @@ const { isManual: workOffline } = storeToRefs(offlineStore);
 
 function setWorkOffline(on: boolean): void {
   void offlineStore.setManual(on).then(() => showSaved());
+}
+
+const prepareOffline = usePrepareOfflineStore();
+
+function openPrepareOffline(): void {
+  if (prepareOffline.running) prepareOffline.openPanel();
+  else void prepareOffline.start().catch((err) => console.warn('Prepare for offline:', err));
 }
 
 const loaded = ref(false);
@@ -223,6 +231,23 @@ watch(autoDownloadEnabled, (val) => {
           @update:model-value="setWorkOffline"
         />
       </SettingsRow>
+      <SettingsRow
+        label="Prepare for offline"
+        desc="Refresh your titles, install and check ffmpeg, check your downloads and Shared Libraries, and sync the libraries you own."
+      >
+        <div class="prepare-offline">
+          <button
+            class="btn btn-outline btn-sm"
+            data-testid="prepare-offline-button"
+            @click="openPrepareOffline"
+          >
+            {{ prepareOffline.running ? 'Show progress' : 'Prepare for offline' }}
+          </button>
+          <span class="prepare-offline-last" data-testid="prepare-offline-last">
+            {{ prepareOffline.lastPreparedText }}
+          </span>
+        </div>
+      </SettingsRow>
     </SettingsGroup>
 
     <SettingsGroup title="Downloads">
@@ -385,6 +410,18 @@ watch(autoDownloadEnabled, (val) => {
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
 
 <style scoped>
+.prepare-offline {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.prepare-offline-last {
+  color: var(--text-3);
+  font-size: 0.75rem;
+}
+
 .dl-speed {
   display: flex;
   align-items: center;

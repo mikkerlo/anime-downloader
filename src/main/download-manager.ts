@@ -2288,4 +2288,34 @@ export class DownloadManager {
       }
     }
   }
+
+  // Runs of ffmpeg/ffprobe outside the queue (#592), see `beginFfmpegTask`.
+  private ffmpegTasks = 0
+
+  /**
+   * What runs the ffmpeg binaries now (#592), so Prepare for offline never
+   * deletes one under it: a merge (the mutex, a cycle, a command), or a task
+   * outside the queue (`beginFfmpegTask`: Fix metadata, chapter injection).
+   */
+  ffmpegUser(): 'merge' | 'task' | null {
+    if (this.ffmpegMutex.isLocked() || this.merging || this.activeFfmpegCmd !== null) {
+      return 'merge'
+    }
+    return this.ffmpegTasks > 0 ? 'task' : null
+  }
+
+  isFfmpegBusy(): boolean {
+    return this.ffmpegUser() !== null
+  }
+
+  /** Counts a run of ffmpeg/ffprobe outside the queue; call the returned release once it ends. */
+  beginFfmpegTask(): () => void {
+    this.ffmpegTasks++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.ffmpegTasks--
+    }
+  }
 }

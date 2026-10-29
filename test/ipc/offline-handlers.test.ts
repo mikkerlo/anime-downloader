@@ -202,4 +202,36 @@ describe('offline IPC router', () => {
     expect(await h.invoke(CHANNELS.OFFLINE_SET_MANUAL, false)).toMatchObject({ mode: 'online' })
     expect(h.store.get('workOffline')).toBe(false)
   })
+
+  it('Prepare for offline (#592): start, cancel and get-state go to the service', async () => {
+    const h = harness()
+    // Without the service: an empty state, and Start refuses.
+    expect(await h.invoke(CHANNELS.PREPARE_OFFLINE_GET_STATE)).toEqual({
+      running: false,
+      run: null,
+      lastRun: null
+    })
+    expect(await h.invoke(CHANNELS.PREPARE_OFFLINE_CANCEL)).toBe(false)
+    await expect(h.invoke(CHANNELS.PREPARE_OFFLINE_START)).rejects.toThrow(/not available/)
+
+    const prepareOffline = {
+      start: vi.fn(() => ({ runId: 'r1' })),
+      cancel: vi.fn(() => true),
+      getState: vi.fn(() => ({ running: true, run: null, lastRun: null }))
+    }
+    ;(ipcMain.handle as Mock).mockClear()
+    registerOffline({
+      offlineService: { onChange: () => () => {} },
+      broadcast: vi.fn(),
+      prepareOffline
+    } as unknown as AppDeps)
+    const handlers = new Map<string, (...args: unknown[]) => unknown>(
+      (ipcMain.handle as Mock).mock.calls.map(([channel, handler]) => [channel, handler])
+    )
+    expect(await handlers.get(CHANNELS.PREPARE_OFFLINE_START)!({})).toEqual({ runId: 'r1' })
+    expect(await handlers.get(CHANNELS.PREPARE_OFFLINE_CANCEL)!({})).toBe(true)
+    expect(await handlers.get(CHANNELS.PREPARE_OFFLINE_GET_STATE)!({})).toMatchObject({
+      running: true
+    })
+  })
 })

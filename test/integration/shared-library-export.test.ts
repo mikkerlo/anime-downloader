@@ -14,7 +14,6 @@ import {
   TMP_SUFFIX,
   type ExportFs
 } from '../../src/main/services/shared-library-export/copy'
-import { BLOCKED_OWN_METADATA } from '../../src/main/services/shared-library-export/plan'
 import {
   createAttachedLibraryService,
   type AttachedLibraryService,
@@ -32,7 +31,6 @@ import {
 
 const OTHER_LIB = '9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e5f'
 const IMPOSTOR_LIB = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d'
-const ME = { id: 4242, nickname: 'me' }
 
 let env: ExportEnv
 afterEach(() => env?.cleanup())
@@ -648,27 +646,6 @@ describe('Shared Library export (#574) — integration', () => {
     expect(m.items.map(itemKey).sort()).toEqual([a1, a2, b1].sort())
     // a1 was not copied again.
     expect(sha256(path.join(root, 'Alpha Show', 'Alpha Show - 01 [Studio].mkv'))).toBe(a1Before)
-  })
-
-  it('an own With metadata target: the plan reports the blocker, the start refuses, and nothing under it changes', async () => {
-    env.cleanup()
-    env = makeExportEnv({}, { shikimoriUser: ME })
-    const { a1 } = seedPc(env)
-    const root = path.join(env.drive, 'Mine')
-    await seedLibrary(root, {
-      libraryId: OTHER_LIB,
-      name: 'Mine',
-      owner: { shikimoriId: ME.id, nickname: ME.nickname }
-    })
-    const before = scan(env.drive)
-
-    const plan = await env.svc.plan({ animeIds: [101], target: env.drive, name: 'Mine' })
-    expect(plan.target?.kind).toBe('own-metadata')
-    expect(plan.target?.blocked).toBe(BLOCKED_OWN_METADATA)
-    const r = await env.svc.start({ selection: sel(a1), target: env.drive, name: 'Mine' })
-    expect(r).toEqual({ ok: false, reason: BLOCKED_OWN_METADATA })
-    expect(scan(env.drive)).toEqual(before)
-    expect(env.svc.list()).toEqual([])
   })
 
   it('a foreign library at the target is never written; a sibling is created instead', async () => {

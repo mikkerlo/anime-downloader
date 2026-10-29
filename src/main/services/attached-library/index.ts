@@ -99,6 +99,8 @@ export interface AttachedLibraryService {
     episodeInt: string,
     translationId: number
   ): Promise<AttachedResolvedItem | null>
+  /** The manifest's `items[]` as last read (S12 #592); reads no drive. Empty when not open. */
+  items(libraryId: string): SharedLibraryItem[]
   /** S12 (#592)'s integrity step: the same play-time check, plus the size. */
   checkItem(
     libraryId: string,
@@ -852,6 +854,10 @@ export function createAttachedLibraryService(
     return null
   }
 
+  function items(libraryId: string): SharedLibraryItem[] {
+    return [...(opened.get(libraryId)?.manifest?.items ?? [])]
+  }
+
   async function checkItem(
     libraryId: string,
     item: Pick<SharedLibraryItem, 'path' | 'subtitlePath' | 'size'>
@@ -1220,6 +1226,7 @@ export function createAttachedLibraryService(
     get,
     getTitle,
     resolveItem,
+    items,
     checkItem,
     availableSnapshots,
     posterFor,

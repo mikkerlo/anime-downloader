@@ -21,7 +21,6 @@ import {
   type QueuedShikimoriUpdate
 } from '../lib/shikimori-queue'
 import {
-  buildRateCacheEntries,
   findRateEntry,
   rateFromCacheEntry,
   type StoredRateEntry
@@ -79,36 +78,21 @@ export function register({
 }: AppDeps) {
   // Null when the account changed while the list was in flight: it is the
   // previous account's list and must not land in the new one's cache (#588).
+  // The fetch lives in the sync service (#592), shared with Prepare for offline.
   async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[] | null> {
-    const accessToken = await shikimori.ensureFreshToken(store)
-    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-    if (!user) throw new Error('Not logged in to Shikimori')
-    const rates = await shikimori.getUserAnimeRates(
-      accessToken,
-      user.id,
-      status as shikimori.ShikiUserRateStatus | undefined
-    )
-    const malIds = rates.map((r) => r.anime.id)
-    const malMap = await lookupByMalIds(malIds)
-    if (currentUserId() !== user.id) return null
-    const entries = buildRateCacheEntries(rates, malMap)
-    if (!status) {
-      store.set('shikimoriUserRates', entries)
-    }
-    return entries
+    const result = await sync.fetchAndCacheRates({
+      status: status as shikimori.ShikiUserRateStatus | undefined
+    })
+    return result ? result.entries : null
   }
 
   function refreshShikimoriRatesInBackground(): void {
     if (offlineService?.isOffline()) return
-    fetchAndCacheShikimoriRates()
-      .then((entries) => {
-        if (!entries) return
-        sync.invalidateCalendarCache()
-        // A full rate refresh can carry completions made outside the app (e.g.
-        // on shikimori.one); clear the recs cache so it rebuilds from the
-        // updated list rather than surfacing a now-rated title (#193 follow-up).
-        invalidateRecommendations()
-        broadcast(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, entries)
+    // The calendar, recs and `SHIKIMORI_RATES_REFRESHED` go with the refresh.
+    sync
+      .refreshRates({ keepQueued: false })
+      .then((result) => {
+        if (!result) return
         void sync.syncShikimoriQueue()
         void sync.prefetchShikimoriDetails()
         void runAutoDownloadTick('rates-refreshed').catch((err) =>
@@ -503,11 +487,8 @@ export function register({
       .catch((err) => console.warn('[shikimori] recommendations background refresh failed:', err))
   }
 
-  // A rate change shifts the taste signal, so the cached feed is stale. Clear it
-  // (rather than recompute eagerly — that costs N `/similar` calls) so the next
-  // tab open rebuilds from fresh taste.
   function invalidateRecommendations(): void {
-    store.set('shikimoriRecommendations', [])
+    sync.invalidateRecommendations()
   }
 
   function currentUserId(): number | undefined {

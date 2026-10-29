@@ -8,6 +8,7 @@ import {
   archiveUrl,
   detectFfmpegPlatform,
   ensureFfmpeg,
+  verifyBinary,
   getFfmpegDir,
   getFfmpegPath,
   getFfprobePath,
@@ -493,5 +494,108 @@ describe('ensureFfmpeg zip install', () => {
     expect(failed![1].message).toBe('ffmpeg: unsupported platform linux/mips')
     // And nothing claimed the download had started.
     expect(send.mock.calls.some((c) => c[1]?.status === 'downloading')).toBe(false)
+  })
+})
+
+// #592: Prepare for offline can start while the boot install still downloads.
+// Two installs into one directory would each extract to the same
+// `<name>.partial` and race on the rename.
+describe('ensureFfmpeg single flight', () => {
+  const ext = process.platform === 'win32' ? '.exe' : ''
+  const ffmpegEntry = `ffmpeg${ext}`
+  const ffprobeEntry = `ffprobe${ext}`
+
+  beforeEach(() => {
+    clearFfmpegPaths()
+    fs.rmSync(getFfmpegDir(), { recursive: true, force: true })
+  })
+
+  afterEach(() => {
+    fs.rmSync(getFfmpegDir(), { recursive: true, force: true })
+    clearFfmpegPaths()
+    vi.restoreAllMocks()
+  })
+
+  it('a call while the first is still downloading joins it: one download, one result', async () => {
+    const archives: Record<string, Buffer> = {
+      [`ffmpeg-6.1-`]: buildSingleEntryZip(ffmpegEntry, Buffer.from('ffmpeg-bytes')),
+      [`ffprobe-6.1-`]: buildSingleEntryZip(ffprobeEntry, Buffer.from('ffprobe-bytes'))
+    }
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    const fetched: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      fetched.push(url)
+      // The first archive is held, so the second caller arrives mid-download.
+      if (fetched.length === 1) await held
+      const key = Object.keys(archives).find((prefix) => url.includes(prefix))!
+      return new Response(new Uint8Array(archives[key]), { status: 200 })
+    })
+
+    const boot = ensureFfmpeg()
+    await vi.waitFor(() => expect(fetched).toHaveLength(1))
+    const second = ensureFfmpeg()
+    release()
+    const [a, b] = await Promise.all([boot, second])
+
+    expect(a).toBe(path.join(getFfmpegDir(), ffmpegEntry))
+    expect(b).toBe(a)
+    // One download of each archive. On main the second call starts its own.
+    expect(fetched.filter((u) => u.includes('ffmpeg-6.1-'))).toHaveLength(1)
+    expect(fetched.filter((u) => u.includes('ffprobe-6.1-'))).toHaveLength(1)
+
+    // Settled: the next call starts afresh (here, the files exist).
+    const fetchCount = fetched.length
+    await expect(ensureFfmpeg()).resolves.toBe(a)
+    expect(fetched).toHaveLength(fetchCount)
+  })
+})
+
+describe('verifyBinary', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-bin-'))
+  })
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  function script(name: string, body: string): string {
+    const p = path.join(dir, name)
+    fs.writeFileSync(p, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+    return p
+  }
+
+  it.skipIf(process.platform === 'win32')('ok with the first line of -version', async () => {
+    const bin = script('good', 'echo "ffmpeg version 6.1 Copyright"; echo second')
+    await expect(verifyBinary(bin)).resolves.toEqual({
+      ok: true,
+      version: 'ffmpeg version 6.1 Copyright'
+    })
+  })
+
+  it.skipIf(process.platform === 'win32')('a binary that exits non-zero fails', async () => {
+    const bin = script('bad', 'exit 3')
+    const r = await verifyBinary(bin)
+    expect(r.ok).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('a file that is not a program fails', async () => {
+    const p = path.join(dir, 'garbage')
+    fs.writeFileSync(p, Buffer.from([0, 1, 2, 3]), { mode: 0o755 })
+    expect((await verifyBinary(p)).ok).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('a hung binary fails at the timeout', async () => {
+    const bin = script('hang', 'sleep 5')
+    const r = await verifyBinary(bin, 200)
+    expect(r.ok).toBe(false)
+  })
+
+  it('a missing path fails without spawning', async () => {
+    expect(await verifyBinary(path.join(dir, 'nope'))).toEqual({
+      ok: false,
+      error: `not found: ${path.join(dir, 'nope')}`
+    })
+    expect((await verifyBinary('')).ok).toBe(false)
   })
 })

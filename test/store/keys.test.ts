@@ -65,7 +65,8 @@ describe('PERSISTED_STORE_KEYS', () => {
     'syncMeta',
     'workOffline',
     'attachedLibraries',
-    'sharedLibraryPromptDismissed'
+    'sharedLibraryPromptDismissed',
+    'prepareOfflineLastRun'
   ] as const
 
   it('matches the frozen expected key set exactly (order and content)', () => {

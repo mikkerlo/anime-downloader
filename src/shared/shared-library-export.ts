@@ -113,3 +113,18 @@ export function preflightForSelection(
   out.warnings = [...p.driveWarnings, ...preflightItemWarnings(out)]
   return out
 }
+
+// With metadata (S6e #586): the dialog's texts, and main's refusals, in one place.
+/** A new With metadata library's default name. */
+export const metadataLibraryName = (nickname: string): string => `Anime Library (${nickname})`
+export const LOG_IN_FOR_METADATA = 'Log in to Shikimori to include watch state'
+export const METADATA_HELP =
+  'Includes watch progress, Shikimori status, stars and priority for these titles only. Never includes passwords or tokens.'
+export const CLAIMED_TARGET =
+  'You use this library through a claim. Your export goes into a new library next to it.'
+export const ROUTED_TO_METADATA =
+  'This library carries watch state, so new titles are added with it.'
+export const takeoverWarning = (nickname: string): string =>
+  `You'll become the owner of this library. Other PCs that use it will see it as ${nickname}'s library.`
+export const takeoverUnconfirmed = (name: string): string =>
+  `Upgrading '${name}' to With metadata makes you its owner: confirm it first.`

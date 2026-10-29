@@ -391,7 +391,7 @@ describe('DownloadManager merge hold (#516)', () => {
         },
         skipAnalysisService: { scheduleAutoSkipAnalysis: () => {} },
         mp4StatsService: { recordCheck: async () => {} },
-        ffmpegReady: Promise.resolve({ available: true }),
+        getFfmpegInfo: () => Promise.resolve({ available: true }),
         getFfmpegPath: () => FFMPEG,
         getFfprobePath: () => FFPROBE,
         notify: () => {}

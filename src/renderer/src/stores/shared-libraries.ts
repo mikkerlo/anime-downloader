@@ -68,8 +68,8 @@ export function lastSyncWhen(lastSyncAt: number | null, now = Date.now()): strin
 }
 
 /**
- * A library row's status line (#584), until S10 (#585)'s toast and review
- * sheet: "N changes synced, M need review", or why the last run didn't write.
+ * A library row's status line (#584), beside #585's toast and review sheet:
+ * "N changes synced, M need review", or why the last run didn't write.
  */
 export function syncStatusText(
   entry: { last: SyncLibraryResult | null; needReview: number } | undefined

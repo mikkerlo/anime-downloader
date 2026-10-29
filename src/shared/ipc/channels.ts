@@ -183,6 +183,10 @@ export const CHANNELS = {
 
   // Shared Library merge (#584)
   SYNC_GET_STATUS: 'sync:get-status',
+  // The review sheet and the history (#585)
+  SYNC_LIST_CONFLICTS: 'sync:list-conflicts',
+  SYNC_RESOLVE: 'sync:resolve',
+  SYNC_LIST_HISTORY: 'sync:list-history',
 
   // Syncplay
   SYNCPLAY_CONNECT: 'syncplay:connect',

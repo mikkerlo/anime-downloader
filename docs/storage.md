@@ -20,7 +20,7 @@ Each PC keeps its own merge base per party in `userData/sync-bases/<party>.json`
 
 - `userData/sync-pending/<ownerId>.json`: `{ version: 1, ownerId, rates: { [malId]: { [field]: { value, clock, provenance, prePatch, unconfirmedRewatch?, drops? } } } }`, the Shikimori-bound merge results per owner, written tmp + rename and deleted when empty. Logout and an account switch leave it.
 - `userData/sync-state/conflicts.json`: `{ version: 1, records }`, the held conflicts, one per `(ownerScope, animeId, fieldPath)`.
-- `userData/sync-log/<yyyy-mm>.jsonl`: one JSON record per run (`kind: 'run'`, with the run's `SyncRunResult` as `result`), per superseded rewatch (`kind: 'rewatch-superseded'`) and per field Shikimori rejected three times (`kind: 'shikimori-rejected'`). Each month's file is bounded at 4 MB: past it, the older half is dropped.
+- `userData/sync-log/<yyyy-mm>.jsonl`: one JSON record per run (`kind: 'run'`, with the run's `SyncRunResult` as `result`), per superseded rewatch (`kind: 'rewatch-superseded'`), per field Shikimori rejected three times (`kind: 'shikimori-rejected'`) and per review-sheet choice (`kind: 'resolution'`, #585). A run record written since #585 also carries up to 200 `details` (each silent change's path, side and `before` / `after` values) and each raise's `from`, for the history. Each month's file is bounded at 4 MB: past it, the older half is dropped; the history reads at most the newest 4 MB of a file and skips a torn line.
 
 See [Shared Library](./shared-library.md#merge-584).
 

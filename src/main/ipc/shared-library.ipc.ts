@@ -83,6 +83,38 @@ export function register({
       syncRunner?.status() ?? Promise.resolve({ running: [], libraries: {} })
   )
 
+  // --- The review sheet and the read-only history (#585)
+  ipcMain.handle(
+    CHANNELS.SYNC_LIST_CONFLICTS,
+    (): Promise<SyncConflictItem[]> => syncRunner?.listConflicts() ?? Promise.resolve([])
+  )
+
+  ipcMain.handle(
+    CHANNELS.SYNC_RESOLVE,
+    (
+      _event,
+      conflictIds: unknown,
+      choices: unknown
+    ): Promise<SyncResolveResult> | SyncResolveResult => {
+      const ids = Array.isArray(conflictIds)
+        ? conflictIds.filter((id): id is string => typeof id === 'string')
+        : []
+      const map =
+        choices && typeof choices === 'object'
+          ? (choices as Record<string, SyncConflictChoice>)
+          : {}
+      if (!syncRunner) return { resolved: [], failed: [], notes: [] }
+      return syncRunner.resolve(ids, map)
+    }
+  )
+
+  ipcMain.handle(
+    CHANNELS.SYNC_LIST_HISTORY,
+    (_event, req?: SyncHistoryRequest): Promise<SyncHistoryPage> =>
+      syncRunner?.listHistory(req && typeof req === 'object' ? req : {}) ??
+      Promise.resolve({ entries: [], nextBefore: null })
+  )
+
   // An unplugged library lists from the snapshot cache; a claim PC's rates come
   // from the library base (#582).
   ipcMain.handle(

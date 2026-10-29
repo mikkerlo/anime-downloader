@@ -35,12 +35,23 @@ src/renderer/src/
       IdentityWarning.vue       Someone else's library, or the no-account videos-only / claim choice
       FfmpegMissingBanner.vue   props { mkvCount }
       SharedLibrariesTab.vue    Library → Shared Libraries: a section and title grid per attached library;
-                                each header is its management row (#581)
+                                each header is its management row (#581); Sync now (#584), "Needs your
+                                input" and Sync history in the tab header, Sync history per library (#585)
       LibraryActionsMenu.vue    A library's ⋯ menu: Open folder, Re-locate…, Forget (#581)
       ForgetLibraryDialog.vue   The Forget confirmation, then the N/M warning when main asks (#581)
       SharedLibrariesTable.vue  Settings → Storage → Shared Libraries table (#581)
       DriveEpisodes.vue         A title's drive episodes with Play from drive (detail page)
       shared-library.css        Imported scoped into each of them
+    sync/                      The merge's results (#585), mounted once in App.vue, over any view
+      SyncToast.vue             After a run: "Synced with <library>: N updates, M need your input" → Review,
+                                "… N updates" → Details, a manual run's "Everything is up to date"; the
+                                `.cleanup-toast` look, raised above another toast
+      ConflictReviewSheet.vue   "Needs your input (M)": rows grouped by title then field, "Apply all
+                                suggested" (each row's newest-`at` suggestion; "K rows need a choice") and Apply
+      ConflictRow.vue           Before / This PC / Shared Library / Shikimori, uninvolved columns greyed;
+                                Keep mine / Keep theirs / Combine, or One / Two for "one rewatch or two?"
+      SyncHistory.vue           The read-only history, newest first, expandable, "Show older"; no undo
+      format.ts                 Value wording as the Shikimori panel ("5 / 12", ★, status labels), choice labels
     detail/                    AnimeDetailView sub-components + injection keys
       AnimeDetailShell.vue (= views/AnimeDetailView.vue acts as shell)
       ChronologyPanel.vue
@@ -112,6 +123,7 @@ The stores in `src/renderer/src/stores/` own cross-view state and, where applica
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
 | `useOfflineStore` | `offline.ts` | `state` (`OfflineState`), `isOffline`/`isManual` (computed), `retrying`, `setManual(on)`, `retry()` — backs the Sidebar Offline pill and the Settings › General Work offline switch (#567), `OfflineNotice`, and each view's offline state (#568, see below) | `onOfflineStateChanged` (lifetime-scoped) |
 | `useSharedLibrariesStore` | `shared-libraries.ts` | `libraries` (`AttachedLibraryInfo[]`), `attachedCount`, `librariesByAnimeId` (computed), `ffmpegAvailable` (read through `ffmpeg:check` once the first `refresh()` lists a library, on window focus while one is attached, and before each `.mkv` Play; a PC with none never spawns it), `focusTab` (Settings' "Show in Library"), `refresh()`, `checkFfmpeg()`, `playTarget(title)` — backs Library → Shared Libraries, the "Also on <library>" badge and the detail page's attached form (#578); `found` (the found-on-a-drive toast queue, one entry per drive, pruned of libraries attached meanwhile), `openingFound`, `openFound` / `dropFound` / `dontAskFound` (#581). Created by `App.vue`, so a toast shows on any view | `onSharedLibrariesChanged`, `onSharedLibraryFound` (lifetime-scoped) |
+| `useSyncStore` | `sync.ts` | `conflicts` (`SyncConflictItem[]` from `sync:list-conflicts`), `conflictCount` (the badges on Library's Shared Libraries tab, Settings' Storage tab and its Sync row), `toast` / `toastLine` (runs that finish while it shows coalesce; nothing for an automatic run with no change and no conflict), `lastRuns`, `reviewOpen`, `history` (pages of `sync:list-history`, optionally one library's); `resolve(choices)` (`sync:resolve`, sent as plain data), `openReview`, `openHistory(libraryId?)`, `loadMoreHistory` (#585). Re-reads the conflicts when `useSharedLibrariesStore().libraries` changes (a Forget drops a party). Created by `App.vue` | `onSyncRunFinished` (scope-disposed) |
 | `useSyncplayStore` | `syncplay.ts` | `status` (`SyncplayStatus`), `roomUsers`, `isActive` (computed), `refresh()` re-seed from `get-status`/`get-room-users` | `onSyncplayConnectionStatus`, `onSyncplayRoomUsers` (lifetime-scoped) |
 | `useExportStore` | `export.ts` | `jobs` (`ExportJobView[]`, seeded from `export:list-jobs`), `activeJob` (computed), `locateErrors`; `start`, `pause`, `resume`, `cancel` (dismisses a finished job), `locate` — the Shared Library export jobs (#574) shown by `ExportJobCard` in Downloads | `onExportJobUpdated` (lifetime-scoped) |
 | `useImportStore` | `import.ts` | `jobs` (`ImportJobView[]`, seeded from `import:list-jobs`), `activeJob`, `asking` (the job on the duplicate prompt), `itemsDone` (LibraryView reloads as it grows); `start`, `answer`, `pause`, `resume`, `cancel` (dismisses a finished job) — the copy-to-this-PC jobs (#579) shown by `ImportJobCard` and `DuplicatePrompt` | `onImportJobUpdated` (lifetime-scoped) |

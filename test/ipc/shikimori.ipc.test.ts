@@ -51,6 +51,9 @@ type SyncStub = {
   setOnDetailsPrefetched: Mock
   prefetchShikimoriDetails: Mock
   getSyncStatus: Mock
+  fetchAndCacheRates: ReturnType<typeof createShikimoriSyncService>['fetchAndCacheRates']
+  refreshRates: ReturnType<typeof createShikimoriSyncService>['refreshRates']
+  invalidateRecommendations: () => void
 }
 
 /**
@@ -95,7 +98,23 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     abortPrefetch: vi.fn(),
     setOnDetailsPrefetched: vi.fn(),
     prefetchShikimoriDetails: vi.fn(async () => undefined),
-    getSyncStatus
+    getSyncStatus,
+    // The rate refresh moved into the service (#592): the real one, on this store.
+    ...(() => {
+      const real = createShikimoriSyncService({
+        store,
+        broadcast,
+        syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
+        offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
+        rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+        animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
+      } as unknown as Parameters<typeof createShikimoriSyncService>[0])
+      return {
+        fetchAndCacheRates: real.fetchAndCacheRates,
+        refreshRates: real.refreshRates,
+        invalidateRecommendations: real.invalidateRecommendations
+      }
+    })()
   }
   const funnels = register({
     store,
@@ -1194,5 +1213,37 @@ describe('shikimori IPC — rate clocks', () => {
 
     expect(store.get('shikimoriUserRates')).toEqual([])
     expect(rateClocks(store)).toEqual({ '7:42': { episodes: clock(4) } })
+  })
+})
+
+describe('shikimori IPC — the background rate refresh goes through refreshRates (#592)', () => {
+  it('invalidates the recs and broadcasts SHIKIMORI_RATES_REFRESHED with the new entries', async () => {
+    const { invoke, store, broadcast, sync } = registerRouter({
+      shikimoriUserRates: [cachedRate(42)],
+      shikimoriRecommendations: [{ malId: 1 }]
+    })
+    ensureFreshToken.mockResolvedValue('tok')
+    getUserAnimeRates.mockResolvedValue([
+      {
+        id: 942,
+        score: 9,
+        status: 'completed',
+        episodes: 12,
+        rewatches: 0,
+        updated_at: '2026-01-01T00:00:00Z',
+        anime: { id: 42 }
+      }
+    ])
+    // A cached list answers at once and refreshes in the background.
+    await invoke(CHANNELS.SHIKIMORI_GET_ANIME_RATES)
+    await vi.waitFor(() =>
+      expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, [
+        expect.objectContaining({ rate: expect.objectContaining({ target_id: 42, score: 9 }) })
+      ])
+    )
+    expect(store.get('shikimoriRecommendations')).toEqual([])
+    // Its own tail stays: the drain and the details prefetch.
+    await vi.waitFor(() => expect(sync.syncShikimoriQueue).toHaveBeenCalled())
+    expect(sync.prefetchShikimoriDetails).toHaveBeenCalled()
   })
 })

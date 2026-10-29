@@ -65,7 +65,8 @@ export const PERSISTED_STORE_KEYS = [
   'syncMeta',
   'workOffline',
   'attachedLibraries',
-  'sharedLibraryPromptDismissed'
+  'sharedLibraryPromptDismissed',
+  'prepareOfflineLastRun'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

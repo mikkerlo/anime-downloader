@@ -5,8 +5,9 @@ import { randomUUID } from 'crypto'
 import { type ChildProcess } from 'child_process'
 import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
-import { VIDEO_EXTS, VIDEO_EXT_RE, VIDEO_EXT_OR_PART_RE } from '@shared/episode-files'
+import { VIDEO_EXT_RE, VIDEO_EXT_OR_PART_RE } from '@shared/episode-files'
 import { sanitizeFilename } from '../download-manager'
+import { episodeVideoCandidates } from '../lib/episode-video-path'
 import { probeMp4Faststart } from '../mp4-faststart'
 import type { MseSession } from '../streaming'
 import type { AppDeps } from './index'
@@ -323,12 +324,6 @@ export function register({
       }
       if (!meta) return (await findPartial()) ?? fromDrive()
 
-      const animeDirName = sanitizeFilename(animeName)
-      const padded = episodeInt.padStart(2, '0')
-      const base = sanitizeFilename(`${animeName} - ${padded}`)
-      const authorTag = sanitizeFilename(meta.author)
-      const taggedBase = `${base} [${authorTag}]`
-
       const dirsToCheck = [coldStorageService.getDownloadDir()]
       if (coldStorageService.isAdvanced()) {
         const coldDir = coldStorageService.getColdStorageDir()
@@ -350,39 +345,25 @@ export function register({
         }
       }
 
-      for (const dir of dirsToCheck) {
-        const animeDir = path.join(dir, animeDirName)
-        // Try tagged filename first
-        for (const ext of VIDEO_EXTS) {
-          const fp = path.join(animeDir, `${taggedBase}${ext}`)
-          if (fs.existsSync(fp)) {
-            const subtitleContent = await (async () => {
-              const assPath = fp.replace(VIDEO_EXT_RE, '.ass')
-              try {
-                return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
-              } catch {
-                return null
-              }
-            })()
-            onResolved(fp)
-            return { filePath: fp, subtitleContent }
+      // Per root: the author-tagged name first, then the legacy one.
+      const candidates = episodeVideoCandidates({
+        dirs: dirsToCheck,
+        animeName,
+        episodeInt,
+        author: meta.author,
+        sanitizeFilename
+      })
+      for (const fp of candidates) {
+        if (fs.existsSync(fp)) {
+          const assPath = fp.replace(VIDEO_EXT_RE, '.ass')
+          let subtitleContent: string | null = null
+          try {
+            subtitleContent = fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
+          } catch {
+            subtitleContent = null
           }
-        }
-        // Try legacy filename
-        for (const ext of VIDEO_EXTS) {
-          const fp = path.join(animeDir, `${base}${ext}`)
-          if (fs.existsSync(fp)) {
-            const subtitleContent = await (async () => {
-              const assPath = fp.replace(VIDEO_EXT_RE, '.ass')
-              try {
-                return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
-              } catch {
-                return null
-              }
-            })()
-            onResolved(fp)
-            return { filePath: fp, subtitleContent }
-          }
+          onResolved(fp)
+          return { filePath: fp, subtitleContent }
         }
       }
       // Meta existed (e.g. an older completed download of this translation)

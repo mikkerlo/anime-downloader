@@ -110,6 +110,71 @@ describe('AnimeCacheService', () => {
     expect(fs.existsSync(path.join(tmpDir, 'poster-cache', '42.jpg'))).toBe(false)
   })
 
+  it('cachePosterImage reports whether the file exists afterwards (#592)', async () => {
+    const failing = createAnimeCacheService({
+      store: new InMemoryStorage({ animeCache: {}, downloadedAnime: {}, library: {} }),
+      userDataDir: tmpDir,
+      fetchPoster: async () => {
+        throw new Error('network')
+      },
+      isCachable: () => true
+    })
+    await expect(failing.cachePosterImage(42, 'https://example/x.jpg')).resolves.toBe(false)
+    await expect(failing.cachePosterImage(42, '')).resolves.toBe(false)
+    await expect(svc.cachePosterImage(1, 'https://example/a.jpg')).resolves.toBe(true)
+    // Already on disk: true without a fetch.
+    fetchedUrls = []
+    await expect(svc.cachePosterImage(1, '')).resolves.toBe(true)
+    expect(fetchedUrls).toEqual([])
+  })
+
+  it('updateAnimeDetail leaves posterCached false when the poster fetch fails (#592)', async () => {
+    // On main the flag went to true anyway: `cachePosterImage` swallowed the error.
+    const failingStore = new InMemoryStorage({ animeCache: {}, downloadedAnime: {}, library: {} })
+    const failing = createAnimeCacheService({
+      store: failingStore,
+      userDataDir: tmpDir,
+      fetchPoster: async () => null,
+      isCachable: () => true
+    })
+    failing.updateAnimeDetail(5, mkDetail())
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    expect(failing.getEntry(5)?.posterCached).toBe(false)
+
+    svc.updateAnimeDetail(1, mkDetail())
+    await vi.waitFor(() => expect(svc.getEntry(1)?.posterCached).toBe(true))
+  })
+
+  it('refreshAnimeDetail awaits the poster, and repairs a posterCached: true with no file (#592)', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const gated = createAnimeCacheService({
+      store,
+      userDataDir: tmpDir,
+      fetchPoster: async () => {
+        await gate
+        return Buffer.from('late')
+      },
+      isCachable: (id) => cachable.has(id)
+    })
+    svc.setEntry(2, { ...svc.ensureEntry(2), posterCached: true })
+    const posterPath = path.join(tmpDir, 'poster-cache', '2.jpg')
+    let settled = false
+    const done = gated.refreshAnimeDetail(2, mkDetail()).then((r) => {
+      settled = true
+      return r
+    })
+    await new Promise((r) => setImmediate(r))
+    expect(settled).toBe(false)
+    expect(svc.getEntry(2)?.animeDetail).not.toBeNull()
+    release()
+    await expect(done).resolves.toEqual({ posterOk: true })
+    expect(fs.readFileSync(posterPath, 'utf8')).toBe('late')
+    expect(svc.getEntry(2)?.posterCached).toBe(true)
+    await expect(gated.refreshAnimeDetail(99, mkDetail())).resolves.toEqual({ posterOk: false })
+  })
+
   it('updateEpisodes persists a whole batch with a single store write', () => {
     const setSpy = vi.spyOn(store, 'set')
     svc.updateEpisodes(1, [

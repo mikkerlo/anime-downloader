@@ -304,11 +304,12 @@ export function makePrefetchRig(
       },
       skipAnalysisService: { scheduleAutoSkipAnalysis: () => {} },
       mp4StatsService: { recordCheck: async () => {} },
-      ffmpegReady: Promise.resolve({
-        get available() {
-          return ffmpeg.available
-        }
-      }),
+      getFfmpegInfo: () =>
+        Promise.resolve({
+          get available() {
+            return ffmpeg.available
+          }
+        }),
       getFfmpegPath: () => FFMPEG,
       getFfprobePath: () => FFMPEG,
       notify: () => {}

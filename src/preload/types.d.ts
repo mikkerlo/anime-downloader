@@ -372,6 +372,11 @@ interface Api {
   offlineSetManual: (on: boolean) => Promise<OfflineState>
   offlineRetry: () => Promise<OfflineState>
   onOfflineStateChanged: (callback: (state: OfflineState) => void) => Unsubscribe
+  // Prepare for offline (#592)
+  prepareOfflineStart: () => Promise<{ runId: string }>
+  prepareOfflineCancel: () => Promise<boolean>
+  prepareOfflineGetState: () => Promise<PrepareOfflineState>
+  onPrepareOfflineProgress: (callback: (run: PrepareOfflineRun) => void) => Unsubscribe
 
   // Shared Library export (#574)
   exportPlan: (req: ExportPlanRequest) => Promise<ExportPlan>

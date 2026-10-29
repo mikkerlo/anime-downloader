@@ -22,6 +22,8 @@ import HomeView from './components/views/HomeView.vue';
 import PlayerView from './components/views/PlayerView.vue';
 import OpenLibraryDialog from './components/shared-library/OpenLibraryDialog.vue';
 import DuplicatePrompt from './components/shared-library/DuplicatePrompt.vue';
+import PrepareOfflinePanel from './components/settings/PrepareOfflinePanel.vue';
+import { usePrepareOfflineStore } from './stores/prepare-offline';
 import { foundText, useSharedLibrariesStore } from './stores/shared-libraries';
 import { formatBytes } from './utils';
 
@@ -32,6 +34,7 @@ const shikimoriStore = useShikimoriStore();
 // Shared Libraries found on a newly mounted drive (#581): one toast per drive.
 const sharedLibraries = useSharedLibrariesStore();
 const { found: foundLibraries, openingFound } = storeToRefs(sharedLibraries);
+const { panelOpen: prepareOfflinePanelOpen } = storeToRefs(usePrepareOfflineStore());
 
 function showFoundLibrary(): void {
   openingFound.value = null;
@@ -259,6 +262,8 @@ onBeforeUnmount(() => {
     />
     <!-- A copy to this PC asks about an episode this PC already has (#579), over any view. -->
     <DuplicatePrompt />
+    <!-- Prepare for offline (#592): opened from Settings or a missing-ffmpeg banner. -->
+    <PrepareOfflinePanel v-if="prepareOfflinePanelOpen" />
     <div v-if="ffmpegDownloading || ffmpegError" class="ffmpeg-overlay">
       <div v-if="ffmpegError" class="ffmpeg-modal">
         <p class="ffmpeg-title">ffmpeg install failed</p>

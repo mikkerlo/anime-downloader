@@ -222,7 +222,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
       },
       skipAnalysisService: { scheduleAutoSkipAnalysis: () => {} },
       mp4StatsService: { recordCheck: async () => {} },
-      ffmpegReady: Promise.resolve({ available: false }),
+      getFfmpegInfo: () => Promise.resolve({ available: false }),
       getFfmpegPath: () => '',
       getFfprobePath: () => '',
       notify: () => {}

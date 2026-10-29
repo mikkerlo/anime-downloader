@@ -13,6 +13,13 @@ import {
   type QueuedShikimoriUpdate
 } from '../../lib/shikimori-queue'
 import type { StorageService } from '../../store/types'
+import {
+  buildRateCacheEntries,
+  keepQueuedEntries,
+  type CachedRateEntry
+} from '../../lib/shikimori-rate-cache'
+import type { AnimeSearchResult } from '../../smotret-api'
+import { EVENT_CHANNELS } from '@shared/ipc/channels'
 
 export type ShikiSyncState = 'idle' | 'syncing'
 
@@ -108,6 +115,16 @@ export interface ShikimoriSyncServiceDeps {
    * creation for the signed-in user only. Unset keeps them in memory.
    */
   snapshotsPath?: string
+  /** Smotret entries for the cached rates' `smotretAnime` (`index.ts`'s `lookupByMalIds`). */
+  lookupByMalIds?: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
+  /** `EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED`, broadcast by `refreshRates`. */
+  ratesRefreshedChannel?: string
+}
+
+export interface RefreshRatesResult {
+  entries: CachedRateEntry[]
+  /** MAL ids whose cached entry was kept for a queued edit (`keepQueued`). */
+  waitingMalIds: number[]
 }
 
 export interface ShikimoriSyncService {
@@ -139,6 +156,24 @@ export interface ShikimoriSyncService {
   withQueueLock<T>(fn: () => T | Promise<T>): Promise<T>
   /** Every consumed work item's outcome (#584). Multi-listener; returns an unsubscribe. */
   onItemSettled(listener: (e: ShikiItemSettled) => void): () => void
+  /**
+   * Fetches the signed-in user's rates (#592). Without `status` it replaces
+   * `shikimoriUserRates`; with `keepQueued`, every MAL id with a live queue
+   * entry at the moment of that write keeps its cached entry. Null when the
+   * account changed while the list was in flight (#588).
+   */
+  fetchAndCacheRates(opts?: {
+    status?: shikimori.ShikiUserRateStatus
+    keepQueued?: boolean
+  }): Promise<RefreshRatesResult | null>
+  /**
+   * The wholesale refresh with its side effects (#592): the calendar and the
+   * recommendations are invalidated and `SHIKIMORI_RATES_REFRESHED` carries
+   * the new entries.
+   */
+  refreshRates(opts: { keepQueued: boolean }): Promise<RefreshRatesResult | null>
+  /** Clears the cached recommendations feed; it rebuilds on the next open. */
+  invalidateRecommendations(): void
 }
 
 /**
@@ -753,6 +788,56 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     if (calendarCache) calendarCache = { ...calendarCache, invalidated: true }
   }
 
+  // A rate change shifts the taste signal, so the cached feed is stale. Clear it
+  // (rather than recompute eagerly — that costs N `/similar` calls) so the next
+  // tab open rebuilds from fresh taste.
+  function invalidateRecommendations(): void {
+    store.set('shikimoriRecommendations', [])
+  }
+
+  async function fetchAndCacheRates(
+    opts: { status?: shikimori.ShikiUserRateStatus; keepQueued?: boolean } = {}
+  ): Promise<RefreshRatesResult | null> {
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) throw new Error('Not logged in to Shikimori')
+    const rates = await shikimori.getUserAnimeRates(accessToken, user.id, opts.status)
+    const malMap = deps.lookupByMalIds
+      ? await deps.lookupByMalIds(rates.map((r) => r.anime.id))
+      : {}
+    if (currentUserId() !== user.id) return null
+    let entries = buildRateCacheEntries(rates, malMap)
+    let waitingMalIds: number[] = []
+    if (!opts.status) {
+      // Read now, at the write, not before the request: an edit queued while
+      // the list was in flight is kept as well.
+      if (opts.keepQueued) {
+        const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+        const queued = new Set(queue.map((q) => q.malId))
+        const cached = (store.get('shikimoriUserRates') as CachedRateEntry[] | undefined) ?? []
+        entries = keepQueuedEntries(entries, cached, queued)
+        waitingMalIds = [...queued]
+      }
+      store.set('shikimoriUserRates', entries)
+    }
+    return { entries, waitingMalIds }
+  }
+
+  async function refreshRates(opts: { keepQueued: boolean }): Promise<RefreshRatesResult | null> {
+    const result = await fetchAndCacheRates({ keepQueued: opts.keepQueued })
+    if (!result) return null
+    invalidateCalendarCache()
+    // A full rate refresh can carry completions made outside the app (e.g.
+    // on shikimori.one); clear the recs cache so it rebuilds from the
+    // updated list rather than surfacing a now-rated title (#193 follow-up).
+    invalidateRecommendations()
+    broadcast(
+      deps.ratesRefreshedChannel ?? EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED,
+      result.entries
+    )
+    return result
+  }
+
   function getCachedCalendar(): CachedCalendar | null {
     return ownSnapshot(calendarCache)
   }
@@ -891,6 +976,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     clearOfflineSnapshots,
     drainNow,
     withQueueLock,
-    onItemSettled: (listener) => settled.add(listener)
+    onItemSettled: (listener) => settled.add(listener),
+    fetchAndCacheRates,
+    refreshRates,
+    invalidateRecommendations
   }
 }

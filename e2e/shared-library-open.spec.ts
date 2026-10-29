@@ -152,6 +152,8 @@ test('Copy to this PC: the title lands in Library and plays with the drive unplu
       playerMuted: true,
       playerMode: 'builtin',
       workOffline: true,
+      // Never a real next-episode download, whatever the playback does.
+      prefetchNextEpisode: 'off',
       downloadDir: downloads
     }),
     { mode: 0o600 }

@@ -46,7 +46,10 @@ import { createShikimoriRatesStep } from './services/prepare-offline/steps/shiki
 import { cachableIdsFrom, createMetadataStep } from './services/prepare-offline/steps/metadata'
 import { createLocalIntegrityStep } from './services/prepare-offline/steps/local-integrity'
 import { createAttachedIntegrityStep } from './services/prepare-offline/steps/attached-integrity'
-import { createLibrarySyncStep } from './services/prepare-offline/steps/library-sync'
+import {
+  needReviewFrom,
+  createLibrarySyncStep
+} from './services/prepare-offline/steps/library-sync'
 import { probeDuration } from './lib/probe-duration'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
@@ -688,7 +691,8 @@ prepareOffline.registerStep(createAttachedIntegrityStep(attachedLibraryService))
 prepareOffline.registerStep(
   createLibrarySyncStep({
     list: () => attachedLibraryService.list(),
-    runAll: (trigger) => syncRunner!.runAll(trigger)
+    runAll: (trigger) => syncRunner!.runAll(trigger),
+    needReview: () => needReviewFrom(syncRunner!)()
   })
 )
 

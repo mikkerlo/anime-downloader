@@ -15,7 +15,7 @@ This document is an index. Each subsystem lives in its own page under [`docs/`](
 | `electron-store` settings schema | [docs/settings.md](./docs/settings.md) |
 | Watch progress + auto-resume + Shikimori sync on watched | [docs/watch-progress.md](./docs/watch-progress.md) |
 | Hot/cold storage and on-disk file layout | [docs/storage.md](./docs/storage.md) |
-| Shared Library on-drive format: manifest, state, pairing, torn-pair repair, naming rule, untrusted input | [docs/shared-library.md](./docs/shared-library.md) |
+| Shared Library (epic #563): overview and roles, on-drive format, export, open and claim, copy to this PC, drive detection, the Shared Libraries tab, lifecycle, the 3-way merge, review and history, Prepare for offline, privacy, per-OS limits | [docs/shared-library.md](./docs/shared-library.md) |
 | Built-in video player (MSE, Anime4K, SubtitlesOctopus, prefetch, episode nav) | [docs/player.md](./docs/player.md) |
 | Auto-update via `electron-updater` | [docs/auto-update.md](./docs/auto-update.md) |
 | Shikimori integration: OAuth, rate cache, offline queue, Friends, Calendar, Chronology, auto-download | [docs/shikimori.md](./docs/shikimori.md) |

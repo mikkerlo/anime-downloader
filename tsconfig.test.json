@@ -18,12 +18,14 @@
     "conformance/**/*",
     "e2e/**/*",
     "e2e-syncplay/**/*",
+    "e2e-shared-library/**/*",
     "src/shared/types/**/*.d.ts",
     "src/preload/types.d.ts",
     "src/renderer/src/env.d.ts",
     "vitest.config.ts",
     "vitest.conformance.config.ts",
     "playwright.config.ts",
-    "playwright.syncplay.config.ts"
+    "playwright.syncplay.config.ts",
+    "playwright.shared-library.config.ts"
   ]
 }

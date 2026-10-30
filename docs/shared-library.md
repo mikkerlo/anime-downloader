@@ -1,8 +1,30 @@
 # Shared Library
 
-A Shared Library is a folder (usually on a removable drive) that carries videos, and optionally watch state, between installs. It must be readable by another install, by an older or newer app version, and by a person with VLC and no app at all. This page describes the on-drive format, v1 (#573, epic #563). The export, open and sync flows that use it (S6a #574, S7a #578, S9 #584) are documented as they land; S11 (#587) completes the page.
+A Shared Library is a folder (usually on a removable drive) that carries videos, and optionally watch state, between installs (epic #563, released as 6.0.0). It must be readable by another install, by an older or newer app version, and by a person with VLC and no app at all.
 
-The code lives in `src/main/lib/shared-library/`, and its types in `src/shared/types/shared-library.d.ts`:
+## Overview
+
+The story it serves, end to end: export on PC A → open on PC B, offline → watch there → bring the drive back → merge on A → Shikimori ends up right. `e2e-shared-library/round-trip.spec.ts` runs exactly that on two app instances ([Tests](#tests)).
+
+1. **Export** ([Export](#export-videos-only-574)). "Export…" on a title's page, Library's Select → "Export N titles…", or Settings → Storage → "Export to a Shared Library…". *Videos only* writes the episodes and their metadata snapshots; any PC can make one, or add to one. *With metadata* ([#586](#export-with-metadata-586)) also writes the watch state of the exported titles, and needs a PC logged in to Shikimori, whose account becomes the library's owner.
+2. **Open** ([Opening a library](#opening-a-library-578)). "Open Shared Library…" (Settings → Storage, the Library header), or the toast a newly plugged drive raises ([Drive detection](#drive-detection-581)). The identity check gives the library a role on this PC (below). Nothing on the drive is written by opening, playing, searching or copying.
+3. **Use it** there, online or not: Play from drive, Search ([#583](#search-583)), Copy to this PC ([#579](#copy-to-this-pc-579)), stars. An owned or claimed library merges this PC's watch state with the drive on attach, on every plug and on Sync now ([Merge](#merge-584)).
+4. **Bring it back.** The poller finds the drive under any letter or mount point, the merge runs local ↔ library, then Shikimori on the owner's logged-in PC, the obvious changes apply silently, and the real conflicts wait for the user ([Review and history](#review-and-history-585)).
+
+Around it: the [Shared Libraries tab](#the-shared-libraries-tab-581), the [lifecycle](#lifecycle-582) of a library whose drive comes and goes, [Prepare for offline](#prepare-for-offline-592) before a trip, [privacy](#privacy), and the [per-OS limits](#per-os-limits).
+
+**Roles.** Derived again on every read, against `shikimoriUser.id` (never the credentials):
+
+| Role | This PC | Plays | Writes watch state to the drive | Sends to Shikimori |
+|---|---|---|---|---|
+| `owner` | logged in as the library's owner (or that session expired) | yes | yes, through the merge | yes, logged in and online |
+| `claim` | no Shikimori account, chose "Use this library as <nickname>" | yes | yes, through the merge | never |
+| `foreign` | logged in as someone else | yes | never | never |
+| `videos` | a *Videos only* library, or "Use as videos only" | yes | never (an export may add videos to a *Videos only* library) | never |
+
+**ffmpeg isn't bundled** (owner decision 1): every PC that plays from a Shared Library downloads ffmpeg, ffprobe and fpcalc once while online, or through Prepare for offline. Without it `.mp4` episodes (with their `.ass` sidecars) still play and `.mkv` ones don't; see [FFmpeg](./ffmpeg.md) and the [per-OS limits](#per-os-limits).
+
+The on-drive format, v1, is S5's (#573). Its code lives in `src/main/lib/shared-library/`, and its types in `src/shared/types/shared-library.d.ts`:
 
 | File | What |
 |---|---|
@@ -19,7 +41,7 @@ The code lives in `src/main/lib/shared-library/`, and its types in `src/shared/t
 
 The export (S6a #574) lives in `src/main/services/shared-library-export/` (`plan.ts`, `copy.ts`, `snapshot.ts`, `locate.ts`, `job.ts`, `index.ts`); see [Export](#export-videos-only-574). The copy to this PC (S7b #579) lives in `src/main/services/shared-library-import/` (`plan.ts`, `job.ts`, `index.ts`); see [Copy to this PC](#copy-to-this-pc-579).
 
-The merge runner (S9 #584, `src/main/services/sync-runner/`) is the only caller of `writeState`; see [Merge](#merge-584).
+The merge runner (S9 #584, `src/main/services/sync-runner/`) is the only caller of `writeState`; see [Merge](#merge-584). Attached libraries, their availability and the drive poller live in `src/main/services/attached-library/`; Prepare for offline in `src/main/services/prepare-offline/`. The IPC is `src/main/ipc/shared-library.ipc.ts` ([IPC](./ipc.md)); the renderer side is `components/shared-library/`, `components/sync/` and the `shared-libraries`, `sync`, `export` and `import` stores ([Renderer](./renderer.md)).
 
 ## Layout
 
@@ -253,7 +275,7 @@ The manifest is written through `writeManifest` every 10 items and at the end (a
 
 #### Per-filesystem limits
 
-S11 (#587) finalizes this table.
+What each filesystem allows, as the preflight applies it. The per-OS view (drivers, ffmpeg, clocks) is [Per-OS limits](#per-os-limits).
 
 | Filesystem | Largest file | Name length | Notes |
 |---|---|---|---|
@@ -443,6 +465,17 @@ It runs only when the candidate set gains a path it hasn't classified, and each 
 
 **Re-locate** (`shared-library:relocate`) picks a folder and accepts it only when it, or a folder directly inside it, holds the same `libraryId`; that root is re-read through `reopenAt`, saved, and available.
 
+## The Shared Libraries tab (#581)
+
+Library → **Shared Libraries** (`SharedLibrariesTab.vue`) is where every attached library lives (owner decision 3). "Show in Library" at the end of the open flow lands on it.
+
+- **The header**, shown once any library is attached: **Sync now** (every owned or claimed library, then Shikimori, `shared-library:sync-now`), **Needs your input (M)** while conflicts are held ([Review and history](#review-and-history-585)), and **Sync history**. The tab's pill carries the held count as a badge.
+- **One section per library**: the availability dot ("Connected" / "Not connected"), the name, the owner's nickname, the role badge (Owner, Claimed, or Videos only, which a foreign library also shows), "Read-only on this computer" with its reason ([Lifecycle](#lifecycle-582)), "Last seen" while unplugged, "Last sync", the last run's status ("N changes synced, M need review", or the drive error), its own Sync history link, **Import all** ([Copy to this PC](#copy-to-this-pc-579)) and the ⋯ menu: Open folder, Re-locate…, Forget ([Forget and Re-locate](#forget-and-re-locate-581)). A claimed library says "Used on this PC as its owner."; a foreign one that its watch state is ignored. The path-length warning ([Opening a library](#opening-a-library-578)) and the missing-ffmpeg banner show here too.
+- **One card per title**, from the drive's metadata snapshot: the star (stored like any star, with the bare `anime-poster://<id>` poster), "On this PC" for a title this PC also has, the rate line on a claim PC (from the library base, [Lifecycle](#lifecycle-582)), **Play from drive** (the first episode in order; off for an `.mkv`-only title without ffmpeg) and **Copy to this PC**. A click opens the title's page: the attached form with every drive episode and its own Play from drive, or, for a title this PC also has, its normal page with an "On <library>" group.
+- **Unplugged** libraries keep their section and cards, dimmed, with "Drive not connected" and Play and Copy off.
+
+Settings → Storage lists the same libraries in a table (name, owner, mode, root, last seen, last sync, read-only badge, the ⋯ menu), with "Open Shared Library…", "Export to a Shared Library…", the Sync row with its held-count badge, and the history link.
+
 ## Lifecycle (#582)
 
 How the rest of the app behaves as a library's availability changes.
@@ -519,7 +552,34 @@ The merge applies the obvious changes silently; the user sees that a sync happen
 
 **History** (`sync:list-history`, `src/main/services/sync-runner/history.ts`) pages the month files newest first, optionally for one library. A file isn't in `at` order (a run is stamped when it starts and appended when it ends; a resolution or a settle can append in between), so each month is sorted by `at` before the walk; with records filed by `monthOf(at)`, that is the global order, and the `before` cursor skips nothing (an append-position cursor would shift when the size bound rewrites a file). Records sharing the boundary `at` stay on one page; each file is read once per page, from its newest `LOG_MAX_BYTES`. Each entry has a summary and expandable lines: the silent changes with their values ("Frieren: Ep 5 position 12:30 → 18:02 from Drive"; a run record carries up to 200 `details` with `before` / `after` beside its `changes`, and an older record falls back to its paths), the decision-5 raise ("Shikimori episodes 3 → 6 from episodes watched on Drive"), the MAL ids skipped while queued edits wait, clamped clocks, the conflicts found, conflicts resolved elsewhere, superseded rewatches ("Your rewatch of ‹title› (episode N) didn't count because Shikimori changed after it."), Shikimori rejections and resolutions. The links are in the Shared Libraries tab header (every library), on each library row (that library) and in Settings → Storage. The held count is a badge on the Shared Libraries tab, on Settings' Storage tab and on its Sync row.
 
+## Prepare for offline (#592)
+
+One action before a trip, from Settings → General and from the missing-ffmpeg banner's "Prepare for offline" (owner decision 2): it installs and verifies ffmpeg, ffprobe and fpcalc, refreshes Shikimori rates and every cached title's details and poster, checks the local downloads and every item of each connected attached library (`checkItem`), and runs S9's `runAll('prepare')` over the owned and claimed libraries. The network steps are skipped offline and the local ones still run. A never-online PC that ran it once while online then plays `.mkv` from a drive. The steps, their order and their results are in [Architecture › Prepare for offline](./architecture.md#prepare-for-offline-592); the binaries' check and repair in [FFmpeg](./ffmpeg.md#verification-and-repair-prepare-for-offline-592).
+
+## Privacy
+
+- **What a drive holds.** Videos, their names, per-title metadata snapshots and posters, and, for a *With metadata* library only, the watch state of the titles in its `titles[]`: positions, `watched`, the owner's Shikimori rates, stars, priority and its order, dismissed continue-watching and skip detections. Never any other title. `state.json` is plain JSON, so whoever holds the drive can read that watch state; that is what *With metadata* means.
+- **What never does.** `token`, `shikimoriCredentials`, `syncplayPassword`, any absolute local path, or any field off S5's allow-list ([Never on the drive](#never-on-the-drive)). `test/integration/shared-library-export-metadata.test.ts` and the two-instance e2e scan every byte on the drive for the seeded secrets.
+- **What stays on the PC.** The bases (`sync-bases/`), the pending store (`sync-pending/`), the conflicts (`sync-state/`), the sync log (`sync-log/`), the snapshot cache (`shared-library-cache/`), a claim, and the job files ([Storage](./storage.md)). Opening, playing, searching and copying make no network request, and neither does a merge's library leg; only the Shikimori leg below talks to the network.
+- **Shikimori** only ever hears from the owner's logged-in PC, through the existing queue. A claim PC never sends, and a foreign one never merges.
+
+## Per-OS limits
+
+| Topic | Windows | macOS | Linux |
+|---|---|---|---|
+| FAT32 | 4 GiB − 1 bytes per file: larger items are skipped by the preflight and at run time | same | same |
+| exFAT | native | native | native from kernel 5.7 (`exfatprogs` for `mkfs` / `fsck`); older kernels need exfat-fuse |
+| NTFS | native | **read-only** without a third-party driver: plays, never written (the write probe decides) | `ntfs3` or ntfs-3g |
+| Path length | 259 UTF-16 units for the absolute path (MAX_PATH): the naming rule keeps the relative path within 200, and `index.html` lists any renamed item; a deep root is reported, not prevented | 255 bytes per component | 255 bytes per component |
+| ffmpeg (not bundled) | downloaded once online (`win-64`) | downloaded once online; the `macos-64` build is x86_64, so Apple Silicon runs it under **Rosetta** | downloaded once online (x64, x86, arm64, armhf) |
+| Without ffmpeg | `.mp4` + `.ass` play; `.mkv` doesn't; no merging | same | same |
+| Clocks | the field clocks trust each PC's clock; a clock more than 120 s in the future is clamped to now; a PC that was never online may have a skewed clock | same | same |
+
+`detectFfmpegPlatform` (`src/main/ffmpeg-binaries.ts`) picks the build; fpcalc follows the same pattern ([Skip detection](./skip-detection.md)). The per-filesystem details are in [the preflight's table](#per-filesystem-limits). A network share opened by hand works but is never auto-detected ([Drive detection](#drive-detection-581)).
+
 ## Tests
+
+**The story end to end** (#587): `e2e-shared-library/round-trip.spec.ts`, two built app instances (`helpers/duo.ts`) against local Shikimori and smotret stubs (`helpers/stub-servers.ts`), run by `npm run test:e2e:shared-library` and the `shared-library-e2e.yml` workflow ([Testing](./testing.md)). PC A, logged in, exports *With metadata* and attaches the library; the drive moves to PC B, offline with no account, which claims it, watches episode 2, re-watches episode 1, stars a second title and presses Sync now; A, offline, rates the title 7 and unwatches episode 1; the drive returns and A's poller merges it (episode 2 and the star come in, episode 1 is held as a rule 2 conflict, the score stays A's, the raise reaches the drive); A goes online and the stub ends at `{ episodes: 2, score: 7, status: 'watching' }`; Keep mine leaves episode 1 unwatched on A and on the drive and the stub unchanged. Around every merge it triggers, the drive's state `generation` goes up by exactly 1; no file on the drive holds a seeded secret; the sync log holds the conflict's run and, later, its resolution.
 
 `test/lib/shared-library/`: the golden and edge-case trees under `test/fixtures/shared-library/v1/` (byte-compared, so excluded from Prettier), the schema fingerprint `test/fixtures/shared-library/schema-v1.json`, and over-cap trees built at test time with sparse files. `write.test.ts` injects a crash at every mutating `fs.promises` call of every write and checks the tree reads as a matching pair after each one.
 

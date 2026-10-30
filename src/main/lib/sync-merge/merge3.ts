@@ -3,9 +3,11 @@
 // as written. Side A is this PC; side B the library or Shikimori. Pure: no
 // store, no `fs`, no clock but `opts.now`.
 //
-// - "Changed" is a value difference from the base; clocks only break ties.
+// - "Changed" is a value difference from the base; clocks only break ties. A
+//   re-watch's `watched` clock is the one clock-only change carried (#645).
 // - Clocks more than 120 s in the future are clamped to `now` on input, and
-//   each clamp is reported. File mtimes are never a clock.
+//   each clamp is reported. An in-scope library `watched` clamp is written
+//   back clamped. File mtimes are never a clock.
 // - A conflict leaves the field as it was on both sides, and the base for that
 //   field doesn't advance, so the conflict surfaces again until resolved.
 // - Only titles in `opts.scope` take part; the result docs hold only those.
@@ -23,6 +25,8 @@ import { normalizeDoc } from './no-base'
 import { mergeTitle, ruleFn, type FieldConflict, type MergeAcc, type MergeLogEntry } from './rules'
 
 export type { FieldConflict, MergeLogEntry } from './rules'
+
+const WATCHED_CLOCK = /^titles\.([^.]+)\.watch\..+\.watched$/
 
 export interface Merge3Options {
   now: number
@@ -89,6 +93,18 @@ export function merge3(
     put(nextBase, t.base, t.stones.base)
   }
 
+  // A clamped drive `watched` clock is written back clamped (#645), or every
+  // later merge would read the re-clamped clock as a new re-watch. In-scope
+  // titles only: the runner writes the others back exactly as the drive has them.
+  const inScope = new Set(ids)
+  const conflicted = new Set(acc.conflicts.map((c) => `titles.${c.animeId}.${c.fieldPath}`))
+  for (const c of cb.clamped) {
+    const w = WATCHED_CLOCK.exec(c.path)
+    if (!w || !inScope.has(w[1]) || conflicted.has(c.path) || acc.changesB.includes(c.path))
+      continue
+    acc.changesB.push(c.path)
+  }
+
   if (opts.order !== false) {
     // Rule 10, over the merged priority membership of in-scope ids.
     const decideOrder = ruleFn<
@@ -99,7 +115,6 @@ export function merge3(
         ctx: { members: readonly string[] }
       ) => Decision<SyncField<string[]>>
     >(table, 10)
-    const inScope = new Set(ids)
     const scoped = (o: SyncField<string[]>): SyncField<string[]> => ({
       ...o,
       value: o.value.filter((id) => inScope.has(id))

@@ -394,9 +394,15 @@ test('export on A → watch on B offline → merge back on A → Shikimori ends 
         },
         rootB
       )
-      // The run's toast (8 s) offers Review (S10 #585).
-      await expect(pageA.getByTestId('sync-toast')).toContainText('1 needs your input')
-      await expect(pageA.getByTestId('sync-toast-review')).toBeVisible()
+      // Held for review (S10 #585): the header's entry and the tab's badge, which
+      // stay; the run's own toast lasts 8 s, so step 5 takes Review from the
+      // toast of a Sync now it presses itself.
+      await expect(pageA.getByTestId('review-conflicts')).toContainText('Needs your input1')
+      await expect(
+        pageA
+          .locator('.library-view .pill-tab', { hasText: 'Shared Libraries' })
+          .getByTestId('conflict-badge')
+      ).toHaveText('1')
       await expect(pageA.getByTestId('availability-dot')).toHaveAttribute('data-available', 'true')
       // local ↔ library: B's episode 2 and star come in. (The store reaches
       // `config.json` on a 500 ms coalescing timer, hence the polls.)

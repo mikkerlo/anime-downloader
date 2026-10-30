@@ -12,8 +12,8 @@ name: Shared Library e2e
 # manual matrix in #587. Runs nightly, on dispatch, and on PRs that touch the
 # code behind the round trip: the Shared Library, the merge, the watched rule
 # and its clock stamp, the decision 5 raise and the Shikimori drain, the
-# offline edge, the API-base seam, the wiring, the UI the spec clicks, the
-# profile helper or the rig. `test/shared-library-e2e-workflow.test.ts` pins
+# offline edge, the API-base seam, the wiring, the settings store the seeded
+# profiles boot through, the UI the spec clicks, the profile helper or the rig. `test/shared-library-e2e-workflow.test.ts` pins
 # the list.
 
 on:
@@ -40,6 +40,8 @@ on:
       - 'src/main/lib/shikimori-rate-cache.ts'
       - 'src/main/lib/api-bases.ts'
       - 'src/main/store/sync-meta.ts'
+      - 'src/main/store/index.ts'
+      - 'src/main/store/config-recovery.ts'
       - 'src/main/index.ts'
       - 'src/preload/index.ts'
       - 'src/shared/ipc/channels.ts'

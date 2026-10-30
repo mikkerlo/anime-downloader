@@ -9,3 +9,11 @@ interface UpdateStatus {
   /** Portable build: update can't self-install, "download" opens the release page. */
   manual?: boolean
 }
+
+/**
+ * Why this launch didn't start from the `config.json` it found (#648). A
+ * `config-restored` without `corruptPath` found no `config.json` at all.
+ */
+type StartupNotice =
+  | { kind: 'config-restored'; corruptPath?: string; backupSavedAt: number }
+  | { kind: 'config-reset'; corruptPath: string }

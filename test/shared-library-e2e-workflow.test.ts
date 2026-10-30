@@ -68,7 +68,8 @@ describe('shared-library-e2e workflow', () => {
     // A PR breaking one of these would otherwise be caught only by the nightly,
     // after it merged: the drive and the merge; the watched rule and its clock
     // stamp; the decision 5 raise and the drain; the offline edge, the API-base
-    // seam and the wiring; the UI the spec clicks.
+    // seam and the wiring; the settings store every seeded profile boots
+    // through (#648's recovery included); the UI the spec clicks.
     const paths = yml.slice(yml.indexOf('    paths:'), yml.indexOf('permissions:'))
     for (const p of [
       'src/main/lib/shared-library/**',
@@ -88,6 +89,8 @@ describe('shared-library-e2e workflow', () => {
       'src/main/lib/shikimori-rate-cache.ts',
       'src/main/lib/api-bases.ts',
       'src/main/store/sync-meta.ts',
+      'src/main/store/index.ts',
+      'src/main/store/config-recovery.ts',
       'src/main/index.ts',
       'src/preload/index.ts',
       'src/shared/ipc/channels.ts',

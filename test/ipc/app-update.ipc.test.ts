@@ -28,7 +28,9 @@ function setPlatform(platform: string): void {
 }
 
 /** Registers the router against a fresh store and returns the captured handlers + a broadcast spy. */
-function registerRouter(opts: { offline?: boolean; lastUpdateCheck?: number } = {}): {
+function registerRouter(
+  opts: { offline?: boolean; lastUpdateCheck?: number; startupNotice?: StartupNotice | null } = {}
+): {
   invoke: (channel: string) => Promise<unknown>
   send: Mock
   store: InMemoryStorage
@@ -49,7 +51,11 @@ function registerRouter(opts: { offline?: boolean; lastUpdateCheck?: number } = 
       return () => {}
     }
   }
-  register({ store, offlineService } as unknown as AppDeps)
+  register({
+    store,
+    offlineService,
+    startupNotice: opts.startupNotice ?? null
+  } as unknown as AppDeps)
   const handlers = new Map<string, (...args: unknown[]) => unknown>(
     (ipcMain.handle as Mock).mock.calls.map(([channel, handler]) => [channel, handler])
   )
@@ -234,5 +240,18 @@ describe('update IPC — offline', () => {
     const { setMode } = registerRouter({ offline: true })
     setMode('online')
     expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+  })
+})
+
+describe('app:get-startup-notice (#648)', () => {
+  it('returns the notice the store service reported', async () => {
+    const notice: StartupNotice = { kind: 'config-reset', corruptPath: '/u/config.corrupt-x.json' }
+    const { invoke } = registerRouter({ startupNotice: notice })
+    expect(await invoke(CHANNELS.APP_GET_STARTUP_NOTICE)).toEqual(notice)
+  })
+
+  it('returns null on a launch that read its config.json', async () => {
+    const { invoke } = registerRouter()
+    expect(await invoke(CHANNELS.APP_GET_STARTUP_NOTICE)).toBeNull()
   })
 })

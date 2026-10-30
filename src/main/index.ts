@@ -1,8 +1,9 @@
-import { app, shell, BrowserWindow, Notification, protocol, session } from 'electron'
+import { app, dialog, shell, BrowserWindow, Notification, protocol, session } from 'electron'
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { createStorageService } from './store'
+import { createStorageService, type MainStorageService } from './store'
+import { unreadableConfigMessage } from './store/config-recovery'
 import { type PersistedStoreKey } from './store/keys'
 import { DownloadManager, sanitizeFilename } from './download-manager'
 import {
@@ -205,17 +206,36 @@ const STORE_DEFAULTS = {
 
 applyApiBaseOverrides(process.env, app.isPackaged)
 
-const store = createStorageService(STORE_DEFAULTS, {
-  // Keys whose last write must survive a crash inside the persist-coalescing
-  // window: queued offline Shikimori edits and auth material. Everything else
-  // (caches, watch positions) tolerates losing the final ≤500ms before a crash.
-  writeThroughKeys: [
-    'shikimoriUpdateQueue',
-    'shikimoriParkedQueues',
-    'token',
-    'shikimoriCredentials'
-  ]
-})
+const store = openStorageOrExit()
+
+function openStorageOrExit(): MainStorageService<typeof STORE_DEFAULTS> {
+  const cwd = app.getPath('userData')
+  try {
+    return createStorageService(STORE_DEFAULTS, {
+      cwd,
+      // Keys whose last write must survive a crash inside the persist-coalescing
+      // window: queued offline Shikimori edits and auth material. Everything else
+      // (caches, watch positions) tolerates losing the final ≤500ms before a crash.
+      writeThroughKeys: [
+        'shikimoriUpdateQueue',
+        'shikimoriParkedQueues',
+        'token',
+        'shikimoriCredentials'
+      ]
+    })
+  } catch (err) {
+    return exitOnUnreadableConfig(err, cwd)
+  }
+}
+
+// A settings file that can't be read, or can't be moved aside, without writing
+// over it (#648). Before `ready`, Linux prints the box to stderr instead.
+// `process.exit` stops the main module's evaluation here, so nothing below
+// runs without a store.
+function exitOnUnreadableConfig(err: unknown, cwd: string): never {
+  dialog.showErrorBox('Anime DL', unreadableConfigMessage(err, cwd))
+  process.exit(1)
+}
 
 // Compile-time guard: `STORE_DEFAULTS` keys must equal `PERSISTED_STORE_KEYS`.
 // Renaming a default key without updating the tuple breaks this assertion,
@@ -850,6 +870,7 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
 function registerIpcHandlers(): void {
   registerIpcRouters({
     store,
+    startupNotice: store.startupNotice,
     smotretApi,
     animeCacheService,
     coldStorageService,

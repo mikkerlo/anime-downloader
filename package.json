@@ -34,6 +34,7 @@
     "check:upstream-citations": "node scripts/check-upstream-citations.mjs",
     "check:prose-shape": "node scripts/check-prose-shape.mjs",
     "check:version-not-lower": "node scripts/check-version-not-lower.mjs",
+    "check:lockfile-complete": "node scripts/check-lockfile-complete.mjs",
     "screenshot": "node scripts/screenshot.js"
   },
   "build": {

@@ -646,6 +646,7 @@ const api = {
 
   // Updates
   appVersion: () => ipcRenderer.invoke(CHANNELS.APP_VERSION),
+  getStartupNotice: () => ipcRenderer.invoke(CHANNELS.APP_GET_STARTUP_NOTICE),
   updateCheck: () => ipcRenderer.invoke(CHANNELS.UPDATE_CHECK),
   updateDownload: () => ipcRenderer.invoke(CHANNELS.UPDATE_DOWNLOAD),
   updateInstall: () => ipcRenderer.invoke(CHANNELS.UPDATE_INSTALL),

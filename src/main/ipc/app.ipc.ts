@@ -6,7 +6,7 @@ import type { AppDeps } from './index'
 
 export const OFFLINE_UPDATE_ERROR = 'Offline'
 
-export function register({ store, offlineService }: AppDeps): void {
+export function register({ store, offlineService, startupNotice }: AppDeps): void {
   const isOffline = (): boolean => offlineService?.isOffline() ?? false
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
@@ -56,6 +56,7 @@ export function register({ store, offlineService }: AppDeps): void {
   })
 
   ipcMain.handle(CHANNELS.APP_VERSION, () => app.getVersion())
+  ipcMain.handle(CHANNELS.APP_GET_STARTUP_NOTICE, () => startupNotice ?? null)
 
   ipcMain.handle(CHANNELS.UPDATE_CHECK, async () => {
     // electron-updater does not go through `fetchWithTimeout`, so it is gated

@@ -47,7 +47,7 @@ import { cachableIdsFrom, createMetadataStep } from './services/prepare-offline/
 import { createLocalIntegrityStep } from './services/prepare-offline/steps/local-integrity'
 import { createAttachedIntegrityStep } from './services/prepare-offline/steps/attached-integrity'
 import {
-  conflictsPerLibrary,
+  needReviewFrom,
   createLibrarySyncStep
 } from './services/prepare-offline/steps/library-sync'
 import { probeDuration } from './lib/probe-duration'
@@ -692,7 +692,7 @@ prepareOffline.registerStep(
   createLibrarySyncStep({
     list: () => attachedLibraryService.list(),
     runAll: (trigger) => syncRunner!.runAll(trigger),
-    needReview: async () => conflictsPerLibrary(await syncRunner!.listConflicts())
+    needReview: () => needReviewFrom(syncRunner!)()
   })
 )
 

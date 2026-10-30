@@ -30,6 +30,10 @@ import {
 } from '../helpers/sync-runner'
 import { projectRate } from '../../src/main/lib/sync-state/project'
 import { writeState as realWriteState } from '../../src/main/lib/shared-library/write'
+import {
+  createLibrarySyncStep,
+  needReviewFrom
+} from '../../src/main/services/prepare-offline/steps/library-sync'
 
 const ID = String(ANIME)
 const titleDoc = (title: SyncTitleState) => doc({ [ID]: title })
@@ -600,6 +604,43 @@ describe('a party library that cannot be written at resolve time (review of #637
     const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
     expect(res.notes.map((n) => n.text)).toEqual([expect.stringContaining("couldn't be written")])
     await expectWrittenSilentlyNextRun(pc, root, libraryId)
+  })
+})
+
+describe("Prepare for offline's sync line when conflicts.json can't be read (review of #637)", () => {
+  it("keeps the run's own count: never 'Drive synced' / ok for a run that held a conflict", async () => {
+    const { root, libraryId } = await makeLibrary({
+      doc: titleDoc({ rate: r({ score: 6 }, T0 + 500) })
+    })
+    const pc = makePc({ store: { shikimoriUserRates: [cacheEntry(MAL, ANIME, { score: 8 }, T0)] } })
+    pc.offline.value = true
+    await pc.attach(root)
+    await seedBase(pc, libraryId, root, titleDoc({ rate: r({ score: 7 }) }))
+    const file = path.join(pc.userData, 'sync-state', 'conflicts.json')
+    const step = createLibrarySyncStep({
+      list: () => pc.attached.list(),
+      runAll: async (trigger) => {
+        const result = await pc.runner.runAll(trigger)
+        // Unreadable after the run held its conflict.
+        fs.writeFileSync(file, '{ not json')
+        return result
+      },
+      needReview: needReviewFrom(pc.runner)
+    })
+    const out = await step.run({
+      signal: new AbortController().signal,
+      progress: () => {},
+      isOffline: () => true
+    })
+    const name = pc.attached.get(libraryId)!.name
+    expect(out.status).toBe('warning')
+    expect(out.details[0]).toEqual({
+      text: `${name}: Drive synced, 1 need review; Shikimori push waits until online`,
+      status: 'warning'
+    })
+    // The review sheet's list itself still reads as empty, as before.
+    expect(await pc.runner.listConflicts()).toEqual([])
+    await expect(pc.runner.listConflicts({ strict: true })).rejects.toThrow()
   })
 })
 

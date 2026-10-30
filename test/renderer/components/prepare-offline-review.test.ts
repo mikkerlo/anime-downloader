@@ -125,3 +125,54 @@ describe('Prepare for offline finds conflicts', () => {
     expect(w.find('[data-testid="prepare-offline-review"]').exists()).toBe(false)
   })
 })
+
+describe('Escape closes only the top layer (review of #637)', () => {
+  const escape = (): void => {
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  }
+
+  it('with the sheet over the panel: the first Escape closes the sheet, the next the panel', async () => {
+    const prepare = usePrepareOfflinePanelOpen()
+    const sync = useSyncStore()
+    const w = mount(Host, { attachTo: document.body })
+    await sync.loadConflicts()
+    await flushPromises()
+    await w.find('[data-testid="prepare-offline-review"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="conflict-review-backdrop"]').exists()).toBe(true)
+
+    escape()
+    await flushPromises()
+    expect(sync.reviewOpen).toBe(false)
+    expect(prepare.panelOpen).toBe(true)
+    expect(w.find('[data-testid="conflict-review-backdrop"]').exists()).toBe(false)
+
+    escape()
+    await flushPromises()
+    expect(prepare.panelOpen).toBe(false)
+    w.unmount()
+  })
+
+  it("the panel's own Escape leaves it open while the sheet is open", async () => {
+    const prepare = usePrepareOfflinePanelOpen()
+    const sync = useSyncStore()
+    // The panel alone: the sheet is open elsewhere, so only the panel's guard is under test.
+    const w = mount(PrepareOfflinePanel, { attachTo: document.body })
+    sync.reviewOpen = true
+    escape()
+    await flushPromises()
+    expect(prepare.panelOpen).toBe(true)
+    sync.reviewOpen = false
+    escape()
+    await flushPromises()
+    expect(prepare.panelOpen).toBe(false)
+    w.unmount()
+  })
+})
+
+function usePrepareOfflinePanelOpen() {
+  const prepare = usePrepareOfflineStore()
+  prepare.run = run()
+  prepare.panelOpen = true
+  return prepare
+}

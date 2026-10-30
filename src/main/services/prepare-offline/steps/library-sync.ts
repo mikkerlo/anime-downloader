@@ -29,6 +29,17 @@ export function conflictsPerLibrary(items: SyncConflictItem[]): Map<string, numb
   return out
 }
 
+/**
+ * The step's `needReview` over the runner's held conflicts. The list is
+ * strict: an unreadable `conflicts.json` rejects, so the step keeps the run's
+ * own count rather than reading "Drive synced" for a run that held conflicts.
+ */
+export function needReviewFrom(runner: {
+  listConflicts(opts: { strict: true }): Promise<SyncConflictItem[]>
+}): () => Promise<Map<string, number>> {
+  return async () => conflictsPerLibrary(await runner.listConflicts({ strict: true }))
+}
+
 /** Not this PC's to sync: no line, only a count. */
 const NOT_YOURS = new Set(['videos-only', 'foreign'])
 

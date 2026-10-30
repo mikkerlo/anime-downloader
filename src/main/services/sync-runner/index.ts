@@ -146,8 +146,11 @@ export interface SyncRunner {
    */
   start(opts?: { triggers?: boolean }): void
   stop(): void
-  /** The held conflicts, with what the review sheet shows (#585). */
-  listConflicts(): Promise<SyncConflictItem[]>
+  /**
+   * The held conflicts, with what the review sheet shows (#585). An unreadable
+   * `conflicts.json` lists as none, or, with `strict`, rejects.
+   */
+  listConflicts(opts?: { strict?: boolean }): Promise<SyncConflictItem[]>
   /**
    * Review-sheet choices as forward edits (#585): this PC, every connected
    * writable library holding the title, and Shikimori through the queue with
@@ -1152,8 +1155,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       )
   }
 
-  async function listConflicts(): Promise<SyncConflictItem[]> {
-    const records = await conflictStore.read().catch(() => [] as SyncConflictRecord[])
+  async function listConflicts(opts: { strict?: boolean } = {}): Promise<SyncConflictItem[]> {
+    const read = conflictStore.read()
+    const records = opts.strict ? await read : await read.catch(() => [] as SyncConflictRecord[])
     return records.map((rec) => ({
       ...rec,
       title: titleInfo(rec.animeId),

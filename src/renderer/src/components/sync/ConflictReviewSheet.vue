@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import ConflictRow from './ConflictRow.vue';
 import { suggestedChoice } from './format';
@@ -10,6 +10,16 @@ import { LAYER } from '../overlay-layers';
 // "Apply all suggested" takes each row's newest-`at` suggestion and leaves the
 // rows without one; "Apply" applies the rows the user picked.
 const sync = useSyncStore();
+
+// Escape closes this sheet only: in the capture phase, and stopped, so a layer
+// underneath (Prepare for offline's panel) never sees it.
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Escape') return;
+  e.stopImmediatePropagation();
+  sync.closeReview();
+}
+onMounted(() => window.addEventListener('keydown', onKeydown, true));
+onUnmounted(() => window.removeEventListener('keydown', onKeydown, true));
 const { conflicts } = storeToRefs(sync);
 
 const picked = ref<Record<string, SyncConflictChoice>>({});

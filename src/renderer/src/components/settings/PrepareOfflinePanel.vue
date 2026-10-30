@@ -39,7 +39,8 @@ function openTitle(animeId: number): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') store.closePanel();
+  // The review sheet over this panel takes its own Escape (#585).
+  if (e.key === 'Escape' && !sync.reviewOpen) store.closePanel();
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown));

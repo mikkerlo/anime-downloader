@@ -33,7 +33,7 @@ src/renderer/src/
     shared-library/            Opening and playing a Shared Library (#578)
       OpenLibraryDialog.vue     "Open Shared Library…": pick, choose among several, identity check, attach
       IdentityWarning.vue       Someone else's library, or the no-account videos-only / claim choice
-      FfmpegMissingBanner.vue   props { mkvCount }
+      FfmpegMissingBanner.vue   props { mkvCount }; its "Prepare for offline" words open the panel (#592)
       SharedLibrariesTab.vue    Library → Shared Libraries: a section and title grid per attached library;
                                 each header is its management row (#581); Sync now (#584), "Needs your
                                 input" and Sync history in the tab header, Sync history per library (#585)
@@ -95,6 +95,9 @@ src/renderer/src/
       StorageTab.vue
       ConnectorsTab.vue
       ShikimoriPendingDialog.vue  Keep/Discard prompt for unsynced Shikimori changes (#588)
+      PrepareOfflinePanel.vue   Prepare for offline (#592): a row per step, Cancel, the summary; details
+                                with a title link to its page. Mounted in App.vue, opened from GeneralTab
+                                (next to Work offline) and FfmpegMissingBanner
       MergingTab.vue
       PlayerTab.vue
       ShortcutsTab.vue
@@ -121,6 +124,7 @@ The stores in `src/renderer/src/stores/` own cross-view state and, where applica
 | `useSettingsStore` | `settings.ts` | `shortcuts`, `ffmpegDownloading`/`Progress`, `fpcalcDownloading`/`Progress`, `updateStatus` | `onFfmpegDownloadProgress`, `onFpcalcDownloadProgress`, `onUpdateStatus` (lifetime-scoped) |
 | `useShikimoriStore` | `shikimori.ts` | `user`, `profile`, `friends`, `recommendations`, `loggedIn` (computed), `rates`, `animeDetails`, `syncStatus`, `offlineQueueLength` | `onShikimoriRateUpdated`, `onShikimoriRatesRefreshed`, `onShikimoriProfileRefreshed`, `onShikimoriFriendsRefreshed`, `onShikimoriRecommendationsRefreshed`, `onShikimoriAnimeDetailsUpdated`, `onShikimoriOfflineQueueChanged`, `onShikimoriSyncStatus` (lifetime-scoped) |
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
+| `usePrepareOfflineStore` | `prepare-offline.ts` | `run` (`PrepareOfflineRun`), `lastRun`, `running`, `panelOpen`, `lastPreparedText`, `start()`, `cancel()`, `openPanel()` / `closePanel()` — Prepare for offline (#592); seeded from `prepare-offline:get-state`, so the panel can be closed and reopened mid-run | `onPrepareOfflineProgress` (lifetime-scoped) |
 | `useOfflineStore` | `offline.ts` | `state` (`OfflineState`), `isOffline`/`isManual` (computed), `retrying`, `setManual(on)`, `retry()` — backs the Sidebar Offline pill and the Settings › General Work offline switch (#567), `OfflineNotice`, and each view's offline state (#568, see below) | `onOfflineStateChanged` (lifetime-scoped) |
 | `useSharedLibrariesStore` | `shared-libraries.ts` | `libraries` (`AttachedLibraryInfo[]`), `attachedCount`, `librariesByAnimeId` (computed), `ffmpegAvailable` (read through `ffmpeg:check` once the first `refresh()` lists a library, on window focus while one is attached, and before each `.mkv` Play; a PC with none never spawns it), `focusTab` (Settings' "Show in Library"), `refresh()`, `checkFfmpeg()`, `playTarget(title)` — backs Library → Shared Libraries, the "Also on <library>" badge and the detail page's attached form (#578); `found` (the found-on-a-drive toast queue, one entry per drive, pruned of libraries attached meanwhile), `openingFound`, `openFound` / `dropFound` / `dontAskFound` (#581). Created by `App.vue`, so a toast shows on any view | `onSharedLibrariesChanged`, `onSharedLibraryFound` (lifetime-scoped) |
 | `useSyncStore` | `sync.ts` | `conflicts` (`SyncConflictItem[]` from `sync:list-conflicts`), `conflictCount` (the badges on Library's Shared Libraries tab, Settings' Storage tab and its Sync row), `toast` / `toastLine` (runs that finish while it shows coalesce; nothing for an automatic run with no change and no conflict), `lastRuns`, `reviewOpen`, `history` (pages of `sync:list-history`, optionally one library's); `resolve(choices)` (`sync:resolve`, sent as plain data), `openReview`, `openHistory(libraryId?)`, `loadMoreHistory` (#585). Re-reads the conflicts when `useSharedLibrariesStore().libraries` changes (a Forget drops a party). Created by `App.vue` | `onSyncRunFinished` (scope-disposed) |

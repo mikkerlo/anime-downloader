@@ -32,10 +32,11 @@ export interface AnimeCacheService {
   deleteEntry(animeId: number): void
   ensureEntry(animeId: number): AnimeCacheEntry
   updateAnimeDetail(animeId: number, detail: AnimeDetail): void
+  refreshAnimeDetail(animeId: number, detail: AnimeDetail): Promise<{ posterOk: boolean }>
   updateEpisode(animeId: number, episodeId: number, detail: EpisodeDetail): void
   updateEpisodes(animeId: number, details: EpisodeDetail[]): void
   updateQualityProbe(animeId: number, translationId: number, height: number): void
-  cachePosterImage(animeId: number, posterUrl: string): Promise<void>
+  cachePosterImage(animeId: number, posterUrl: string): Promise<boolean>
   getPosterCacheDir(): string
   getPosterCachePath(animeId: number): string
   /** Ids with a poster on disk, for the renderer's `anime-poster://` sources. */
@@ -75,18 +76,54 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     }
   }
 
-  async function cachePosterImage(animeId: number, posterUrl: string): Promise<void> {
-    if (!posterUrl) return
+  /** True only when the poster file exists afterwards (#592); never rejects. */
+  async function cachePosterImage(animeId: number, posterUrl: string): Promise<boolean> {
     const destPath = getPosterCachePath(animeId)
-    if (fs.existsSync(destPath)) return
+    if (fs.existsSync(destPath)) return true
+    if (!posterUrl) return false
     try {
       fs.mkdirSync(getPosterCacheDir(), { recursive: true })
       const buffer = await fetchPoster(posterUrl)
-      if (!buffer) return
+      if (!buffer) return false
       fs.writeFileSync(destPath, buffer)
     } catch {
       // Non-critical, ignore
     }
+    return fs.existsSync(destPath)
+  }
+
+  function posterUrlOf(detail: AnimeDetail): string {
+    return detail.posterUrl || detail.posterUrlSmall
+  }
+
+  function writeDetail(animeId: number, detail: AnimeDetail): AnimeCacheEntry {
+    const entry = ensureEntry(animeId)
+    entry.animeDetail = detail
+    entry.cachedAt = Date.now()
+    setEntry(animeId, entry)
+    return entry
+  }
+
+  function setPosterCached(animeId: number, posterCached: boolean): void {
+    const entry = getEntry(animeId)
+    if (!entry || entry.posterCached === posterCached) return
+    setEntry(animeId, { ...entry, posterCached })
+  }
+
+  /**
+   * Prepare for offline (#592): writes the detail, then awaits the poster, so
+   * the caller's progress tick comes after the file is on disk. A
+   * `posterCached: true` with no file is fetched again.
+   */
+  async function refreshAnimeDetail(
+    animeId: number,
+    detail: AnimeDetail
+  ): Promise<{ posterOk: boolean }> {
+    if (!isCachable(animeId)) return { posterOk: false }
+    writeDetail(animeId, detail)
+    const posterOk = await cachePosterImage(animeId, posterUrlOf(detail))
+    setPosterCached(animeId, posterOk)
+    return { posterOk }
   }
 
   function ensureEntry(animeId: number): AnimeCacheEntry {
@@ -97,18 +134,10 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
 
   function updateAnimeDetail(animeId: number, detail: AnimeDetail): void {
     if (!isCachable(animeId)) return
-    const entry = ensureEntry(animeId)
-    entry.animeDetail = detail
-    entry.cachedAt = Date.now()
-    setEntry(animeId, entry)
-    // Cache poster in background
+    const entry = writeDetail(animeId, detail)
+    // Cache poster in background; the flag follows whether the file arrived.
     if (!entry.posterCached) {
-      cachePosterImage(animeId, detail.posterUrl || detail.posterUrlSmall)
-        .then(() => {
-          entry.posterCached = true
-          setEntry(animeId, entry)
-        })
-        .catch(() => {})
+      void cachePosterImage(animeId, posterUrlOf(detail)).then((ok) => setPosterCached(animeId, ok))
     }
   }
 
@@ -179,6 +208,7 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     deleteEntry,
     ensureEntry,
     updateAnimeDetail,
+    refreshAnimeDetail,
     updateEpisode,
     updateEpisodes,
     updateQualityProbe,

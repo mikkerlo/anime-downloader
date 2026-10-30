@@ -198,6 +198,9 @@ export function useMsePlayer(deps: {
       console.warn('[player] resume land cancelled — main refused the requested open position')
     }
     const resumeTarget = refusedSeek ? 0 : opts.resumeTarget
+    // A seek continuation parked on the previous session skips its `finally`
+    // once stale (#634), so a new session must not inherit its in-flight flag.
+    unbufferedSeekInFlight = false
     streamSessionId.value = sessionId
     currentStreamGen = generation
     mseInitialSeek.value = resumeTarget
@@ -429,7 +432,8 @@ export function useMsePlayer(deps: {
     v: HTMLVideoElement,
     sb: SourceBuffer,
     seconds: number,
-    timeoutMs: number
+    timeoutMs: number,
+    isCurrent: () => boolean
   ): Promise<void> {
     const wasPaused = v.paused
     deps.setSyncplayLocalReady(false)
@@ -444,6 +448,9 @@ export function useMsePlayer(deps: {
     const deadline = performance.now() + timeoutMs
     try {
       while (performance.now() < deadline) {
+        // A torn-down session has detached `sb`; the element now belongs to
+        // the error overlay or the next session, so leave it paused (#634).
+        if (!isCurrent()) return
         const t = v.currentTime
         for (let i = 0; i < sb.buffered.length; i++) {
           if (t >= sb.buffered.start(i) - 0.25 && sb.buffered.end(i) - t >= seconds) {
@@ -463,6 +470,7 @@ export function useMsePlayer(deps: {
         }
         await new Promise<void>((res) => setTimeout(res, 200))
       }
+      if (!isCurrent()) return
       if (!wasPaused && v.paused) {
         const op = deps.beginProgrammaticPlayback?.('play') ?? null
         try {
@@ -497,18 +505,21 @@ export function useMsePlayer(deps: {
     // presents the target frame in sync — same as an in-buffer seek.
     const seekAt = target
     console.log(`[player] unbuffered seek → target ${target.toFixed(2)}`)
+    // Capture the session before awaiting — if resetMseState fires during an
+    // await (a stream error, unmount or episode switch), streamSessionId
+    // changes underneath us and we'd otherwise stamp the OLD session's
+    // generation onto the NEW session, polluting its state. The teardown also
+    // detaches `sb`, so nothing after an await may touch `sb` or session state
+    // without this check (#634).
+    const sessionId = streamSessionId.value
+    const isCurrent = (): boolean => sourceBuffer === sb && streamSessionId.value === sessionId
     try {
       // Drop any queued chunks from the old ffmpeg — main will stop sending
       // new ones as soon as the seek IPC below bumps the session generation.
       appendQueue.length = 0
       pendingAckBytes = 0
-      // Capture sessionId before awaiting — if resetMseState fires during
-      // the IPC round-trip (e.g. unmount or episode switch), streamSessionId
-      // changes underneath us and we'd otherwise stamp the OLD session's
-      // generation onto the NEW session, polluting its state.
-      const sessionId = streamSessionId.value
       const result = await window.api.playerStreamSeek(sessionId, seekAt)
-      if (streamSessionId.value !== sessionId) return
+      if (!isCurrent()) return
       if ('error' in result) {
         console.error('[player] stream-seek failed:', result.error)
         return
@@ -554,6 +565,7 @@ export function useMsePlayer(deps: {
       } catch (e) {
         console.warn('[player] buffer clear failed:', e)
       }
+      if (!isCurrent()) return
       if (v.error) {
         console.error('[player] video element errored during seek:', v.error.code, v.error.message)
         return
@@ -597,13 +609,19 @@ export function useMsePlayer(deps: {
       mkvBuffering.value = true
       const aheadSeconds = transcodingHevc.value ? 3.0 : 1.5
       const aheadTimeoutMs = transcodingHevc.value ? 15000 : 5000
-      await waitForBufferAhead(v, sb, aheadSeconds, aheadTimeoutMs)
+      await waitForBufferAhead(v, sb, aheadSeconds, aheadTimeoutMs, isCurrent)
+      // A stale continuation must not clear a newer session's toast.
+      if (!isCurrent()) return
       mkvBuffering.value = false
     } finally {
-      unbufferedSeekInFlight = false
-      // If the user kept seeking while the respawn was in flight, the
-      // playhead may now be outside the fresh buffered range too — re-check.
-      maybeRespawnForUnbufferedPosition()
+      // A stale continuation leaves the flag to the teardown that already
+      // cleared it, and never schedules a respawn check against a newer session.
+      if (isCurrent()) {
+        unbufferedSeekInFlight = false
+        // If the user kept seeking while the respawn was in flight, the
+        // playhead may now be outside the fresh buffered range too — re-check.
+        maybeRespawnForUnbufferedPosition()
+      }
     }
   }
 
@@ -666,6 +684,7 @@ export function useMsePlayer(deps: {
     currentStreamGen = 0
     transcodingHevc.value = false
     transcodeSpeed.value = null
+    mkvBuffering.value = false
     if (sourceBuffer) {
       try {
         sourceBuffer.removeEventListener('updateend', onSourceBufferUpdateEnd)

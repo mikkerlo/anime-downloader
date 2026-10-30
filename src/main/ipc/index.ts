@@ -41,6 +41,7 @@ import * as sharedLibraryRouter from './shared-library.ipc'
 import type { SharedLibraryExportService } from '../services/shared-library-export'
 import type { SharedLibraryImportService } from '../services/shared-library-import'
 import type { SyncRunner } from '../services/sync-runner'
+import type { PrepareOfflineService } from '../services/prepare-offline'
 import type { FileCheckResult } from '../lib/episode-file-scan'
 
 export interface FfmpegInfo {
@@ -134,6 +135,8 @@ export interface AppDeps {
   sharedLibraryImport: SharedLibraryImportService
   /** The Shared Library merge (#584): Sync now, the login trigger, status. */
   syncRunner?: SyncRunner
+  /** Prepare for offline (#592): start, cancel, state. */
+  prepareOffline?: PrepareOfflineService
 }
 
 /**

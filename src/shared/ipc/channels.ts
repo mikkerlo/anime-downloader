@@ -103,6 +103,9 @@ export const CHANNELS = {
   OFFLINE_GET_STATE: 'offline:get-state',
   OFFLINE_RETRY: 'offline:retry',
   OFFLINE_SET_MANUAL: 'offline:set-manual',
+  PREPARE_OFFLINE_CANCEL: 'prepare-offline:cancel',
+  PREPARE_OFFLINE_GET_STATE: 'prepare-offline:get-state',
+  PREPARE_OFFLINE_START: 'prepare-offline:start',
 
   // Player
   PLAYER_CLEANUP_REMUX: 'player:cleanup-remux',
@@ -282,6 +285,7 @@ export const EVENT_CHANNELS = {
 
   // Offline
   OFFLINE_STATE_CHANGED: 'offline:state-changed',
+  PREPARE_OFFLINE_PROGRESS: 'prepare-offline:progress',
 
   // Player
   PLAYER_STREAM_CHUNK: 'player:stream-chunk',

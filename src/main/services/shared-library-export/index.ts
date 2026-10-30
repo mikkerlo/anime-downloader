@@ -109,7 +109,7 @@ export interface SharedLibraryExportDeps {
   downloads?: ExportDownloads
   /** S9's library leg (`SyncRunner.runExport`): a With metadata job's state step (S6e #586). */
   writeLibraryState?: ExportStateWriter
-  /** `isMergeExpected` after `ffmpegReady` (#577), read at every evaluation. */
+  /** `isMergeExpected` after `ffmpegStatus.get()` (#577, #592), read at every evaluation. */
   mergeExpected?: () => Promise<boolean>
   /** The offline service (#567): offline, nothing is pre-fetched. */
   isOffline?: () => boolean

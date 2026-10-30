@@ -508,6 +508,14 @@ const api = {
     ipcRenderer.invoke(CHANNELS.OFFLINE_SET_MANUAL, on) as Promise<OfflineState>,
   offlineRetry: () => ipcRenderer.invoke(CHANNELS.OFFLINE_RETRY) as Promise<OfflineState>,
   onOfflineStateChanged: subscribe<OfflineState>(EVENT_CHANNELS.OFFLINE_STATE_CHANGED),
+  // Prepare for offline (#592)
+  prepareOfflineStart: () =>
+    ipcRenderer.invoke(CHANNELS.PREPARE_OFFLINE_START) as Promise<{ runId: string }>,
+  prepareOfflineCancel: () =>
+    ipcRenderer.invoke(CHANNELS.PREPARE_OFFLINE_CANCEL) as Promise<boolean>,
+  prepareOfflineGetState: () =>
+    ipcRenderer.invoke(CHANNELS.PREPARE_OFFLINE_GET_STATE) as Promise<PrepareOfflineState>,
+  onPrepareOfflineProgress: subscribe<PrepareOfflineRun>(EVENT_CHANNELS.PREPARE_OFFLINE_PROGRESS),
 
   // Shared Library export (#574)
   exportPlan: (req: ExportPlanRequest) =>

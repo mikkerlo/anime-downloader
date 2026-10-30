@@ -112,11 +112,12 @@ export interface EpisodeCompletionDeps {
     ) => Promise<void>
   }
   /**
-   * Resolved by the background ffmpeg-ensure task in `bootstrap()`. Awaited
-   * rather than polled, so a download that finishes before ffmpeg is ready
-   * still merges instead of silently skipping the merge.
+   * `ffmpegStatus.get()` (#592): pending until the boot install's check, so a
+   * download that finishes before ffmpeg is ready still merges, and read at
+   * each call, so an ffmpeg installed later (Prepare for offline) merges
+   * without a restart.
    */
-  ffmpegReady: Promise<EpisodeCompletionFfmpegInfo>
+  getFfmpegInfo: () => Promise<EpisodeCompletionFfmpegInfo>
   getFfmpegPath: () => string
   getFfprobePath: () => string
   /**
@@ -164,7 +165,7 @@ export function createEpisodeCompletionHandlers(
     coldStorageService,
     skipAnalysisService,
     mp4StatsService,
-    ffmpegReady,
+    getFfmpegInfo,
     getFfmpegPath,
     getFfprobePath,
     notify
@@ -174,7 +175,7 @@ export function createEpisodeCompletionHandlers(
     const readyTrIds = downloadManager.finalizeDeferred()
     if (readyTrIds.length === 0) return
     const groups = downloadManager.getEpisodeGroups()
-    const ffmpegInfo = await ffmpegReady
+    const ffmpegInfo = await getFfmpegInfo()
     const autoMerge = store.get('autoMerge')
     const ffmpegPath = getFfmpegPath()
     if (isMergeExpected({ autoMerge, ffmpegInfo, ffmpegPath })) {
@@ -207,7 +208,7 @@ export function createEpisodeCompletionHandlers(
 
   async function resumeHeldMerges(): Promise<void> {
     if (!downloadManager.takeHeldRequest()) return
-    const ffmpegInfo = await ffmpegReady
+    const ffmpegInfo = await getFfmpegInfo()
     const ffmpegPath = getFfmpegPath()
     // No `autoMerge` check, unlike the two tails around it: the held request
     // can come from a manual Merge / Scan & merge that stopped at the gate, and
@@ -277,7 +278,7 @@ export function createEpisodeCompletionHandlers(
       return
     }
 
-    const ffmpegInfo = await ffmpegReady
+    const ffmpegInfo = await getFfmpegInfo()
     const autoMerge = store.get('autoMerge')
     const ffmpegPath = getFfmpegPath()
     if (isMergeExpected({ autoMerge, ffmpegInfo, ffmpegPath })) {

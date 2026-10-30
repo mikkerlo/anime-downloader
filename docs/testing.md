@@ -1108,6 +1108,13 @@ Locally the file skips when `ffmpeg` with libx264 is not on `PATH`. With `CI`
 set it fails instead, and the `quality` job installs the app's own pinned
 static ffmpeg (CI system setup, below) before `npm run test:coverage`.
 
+`test/streaming/h264-encoder-idr.test.ts` (#639) follows the same pattern. For
+each H.264 transcode candidate whose own dry run succeeds on the machine, it
+encodes 3 s of `testsrc` through the live fMP4 mux and asserts no stretch of
+the stream runs more than 1 s + 1 frame past a key packet. CI's pinned build
+has no hardware encoder, so only libx264 runs there; on an NVIDIA machine the
+`h264_nvenc` case is the one that catches a missing `-forced-idr`.
+
 `e2e/mkv-seek-sub-sync.spec.ts` (#557) checks the same bug class on screen:
 that Chromium's MSE and the SubtitlesOctopus clock (`video.currentTime +
 timeOffset`) honour the offset, so the picture and the rendered subtitles agree

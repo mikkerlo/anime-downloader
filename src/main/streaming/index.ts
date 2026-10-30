@@ -214,6 +214,8 @@ export interface StreamingService {
   pickH264Encoder(): Promise<H264EncoderChoice>
   /** The full candidate list `pickH264Encoder` walks; exposed for tests + transcode arg assembly. */
   h264EncoderCandidates(): H264EncoderChoice[]
+  /** The 1-frame `testsrc` encode `pickH264Encoder` gates each candidate on; exposed for tests. */
+  dryRunEncoder(choice: H264EncoderChoice): Promise<boolean>
   /**
    * Spawn ffmpeg for one stream session and wire stdout/stderr to the renderer
    * via the four configured event channels. Behavior is verbatim from the
@@ -322,7 +324,9 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         'high',
         '-level',
         '4.0',
-        ...keyframeEverySecond
+        ...keyframeEverySecond,
+        '-forced-idr',
+        '1'
       ]
     })
     if (process.platform === 'win32' || process.platform === 'linux') {
@@ -339,7 +343,9 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
           'high',
           '-level',
           '4.0',
-          ...keyframeEverySecond
+          ...keyframeEverySecond,
+          '-forced_idr',
+          '1'
         ]
       })
     }
@@ -928,7 +934,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
 
     // A run settles once, on `close` (#631). Node doesn't order a child's
     // `exit` against its stdout `end`, which is also why `readFirstProbeLine`
-    // waits for `close` (src/main/streaming/index.ts:448), and only at `close`
+    // waits for `close` (src/main/streaming/index.ts:454), and only at `close`
     // are the exit code and all of this run's stdout and stderr in. A drive
     // gone under the open fd (#582) doesn't fail the run: ffmpeg logs "Error
     // during demuxing: Input/output error", treats it as the end of its input
@@ -1054,6 +1060,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     probeSeekAnchor,
     pickH264Encoder,
     h264EncoderCandidates,
+    dryRunEncoder,
     spawnFfmpegForSession,
     registerSession,
     getSession,

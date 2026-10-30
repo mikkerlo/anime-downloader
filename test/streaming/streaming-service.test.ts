@@ -181,6 +181,22 @@ describe('StreamingService h264EncoderCandidates', () => {
     expect(lx.videoArgs[idx + 1]).toBe('expr:gte(t,n_forced*1)')
   })
 
+  // #639: h264_nvenc / h264_qsv honour a forced keyframe as a non-IDR intra
+  // frame by default, which leaves MSE one random-access point per run.
+  it('every hardware candidate forces its keyframes as IDRs', () => {
+    const candidates = svc.h264EncoderCandidates()
+    const nvenc = candidates.find((c) => c.name === 'h264_nvenc')!
+    const nvIdx = nvenc.videoArgs.indexOf('-forced-idr')
+    expect(nvIdx).toBeGreaterThanOrEqual(0)
+    expect(nvenc.videoArgs[nvIdx + 1]).toBe('1')
+    if (process.platform === 'win32' || process.platform === 'linux') {
+      const qsv = candidates.find((c) => c.name === 'h264_qsv')!
+      const qsvIdx = qsv.videoArgs.indexOf('-forced_idr')
+      expect(qsvIdx).toBeGreaterThanOrEqual(0)
+      expect(qsv.videoArgs[qsvIdx + 1]).toBe('1')
+    }
+  })
+
   it('candidate list is platform-aware (linux: nvenc + qsv reachable; mac: nvenc-only after vaapi)', () => {
     const names = svc.h264EncoderCandidates().map((c) => c.name)
     expect(names).toContain('h264_nvenc')

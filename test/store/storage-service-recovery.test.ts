@@ -226,6 +226,37 @@ describe('createStorageService — an unparseable config.json (#648)', () => {
     expect(svc.startupNotice).toEqual({ kind: 'config-reset', corruptPath })
   })
 
+  it('no config.json and a backup that cannot be read: stop with the backup named, then restore once readable', () => {
+    const good = JSON.stringify({ alpha: 5, blob: { fromBackup: true } })
+    fs.writeFileSync(backup(), good)
+    const before = fs.readdirSync(tmp.dir).sort()
+    const read = fs.readFileSync.bind(fs) as (...a: unknown[]) => unknown
+    const busy = vi.spyOn(fs, 'readFileSync').mockImplementation(((...args: unknown[]) => {
+      if (args[0] === backup()) {
+        throw Object.assign(new Error('EBUSY: resource busy or locked, open'), { code: 'EBUSY' })
+      }
+      return read(...args)
+    }) as typeof fs.readFileSync)
+
+    let thrown: unknown
+    try {
+      create()
+    } catch (err) {
+      thrown = err
+    }
+    busy.mockRestore()
+    expect(thrown).toBeInstanceOf(ConfigUnrecoverableError)
+    expect((thrown as ConfigUnrecoverableError).configPath).toBe(backup())
+    expect(fs.readFileSync(backup(), 'utf8')).toBe(good)
+    expect(fs.readdirSync(tmp.dir).sort()).toEqual(before)
+
+    // Launch 2, the backup readable again: restored, never overwritten by defaults.
+    const svc = create()
+    expect(svc.get('alpha')).toBe(5)
+    expect(svc.startupNotice?.kind).toBe('config-restored')
+    expect(JSON.parse(fs.readFileSync(backup(), 'utf8'))).toEqual(JSON.parse(good))
+  })
+
   it('a first launch (no config.json, no backup) shows no notice', () => {
     const svc = create()
     expect(svc.get('alpha')).toBe(1)

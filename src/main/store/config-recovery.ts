@@ -150,6 +150,9 @@ function restoreFromBackup(dir: string, corruptPath: string | undefined): Recove
     } else {
       console.error('[store] reading the config backup failed:', err)
     }
+    // With no config.json, starting on defaults would let the next launch's
+    // last-known-good copy write over this backup without a notice: stop instead.
+    if (!corruptPath) throw new ConfigUnrecoverableError(backupPath, err)
     return { notice: reset(corruptPath), keepBackup: true }
   }
 

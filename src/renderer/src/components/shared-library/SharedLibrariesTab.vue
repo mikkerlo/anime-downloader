@@ -20,6 +20,7 @@ import {
   useSharedLibrariesStore
 } from '../../stores/shared-libraries';
 import { usePlayFromDrive } from '../../composables/use-play-from-drive';
+import { useSyncStore } from '../../stores/sync';
 import { formatAgo } from '../../utils';
 
 // Library → Shared Libraries (#578, owner decision 3): one section per
@@ -27,8 +28,8 @@ import { formatAgo } from '../../utils';
 // title) and Import all (per library) open the import dialog (#579), while
 // the drive is connected. Each section header is the library's
 // management row (#581): availability, Last seen, a badge, Last sync, and the
-// ⋯ menu. Sync now and the status line are the merge's (#584); the empty
-// `slot-*` spans are where S10 (#585) renders.
+// ⋯ menu. Sync now and the status line are the merge's (#584); the review
+// sheet and the read-only history links are #585's.
 // Strings from the drive are rendered as text only.
 defineProps<{ starredIds: ReadonlySet<number> }>();
 const emit = defineEmits<{ toggleStar: [anime: AnimeSearchResult] }>();
@@ -36,6 +37,8 @@ const emit = defineEmits<{ toggleStar: [anime: AnimeSearchResult] }>();
 const libraryStore = useLibraryStore();
 const shared = useSharedLibrariesStore();
 const { libraries, ffmpegAvailable, syncStatus, syncing } = storeToRefs(shared);
+const sync = useSyncStore();
+const { conflictCount } = storeToRefs(sync);
 const { play } = usePlayFromDrive();
 const error = ref('');
 // The import dialog: one title (Copy to this PC) or every title (Import all).
@@ -75,7 +78,17 @@ function playBlockedTitle(
       >
         {{ syncing.includes('all') ? 'Syncing…' : 'Sync now' }}
       </button>
-      <span class="slot" data-testid="slot-sync-history"></span>
+      <button
+        v-if="conflictCount > 0"
+        class="sl-btn"
+        data-testid="review-conflicts"
+        @click="sync.openReview()"
+      >
+        Needs your input<span class="tab-badge">{{ conflictCount }}</span>
+      </button>
+      <button class="sl-btn" data-testid="sync-history-all" @click="sync.openHistory()">
+        Sync history
+      </button>
     </header>
     <p v-if="error" class="sl-error">{{ error }}</p>
     <section
@@ -115,7 +128,13 @@ function playBlockedTitle(
           data-testid="sync-status"
           >{{ syncStatusText(syncStatus.libraries[lib.libraryId]) }}</span
         >
-        <span class="slot" data-testid="slot-conflicts"></span>
+        <button
+          class="link-btn"
+          data-testid="library-sync-history"
+          @click="sync.openHistory(lib.libraryId)"
+        >
+          Sync history
+        </button>
         <div class="grow"></div>
         <button
           class="sl-btn"
@@ -220,8 +239,18 @@ function playBlockedTitle(
   gap: 10px;
 }
 
-.slot:empty {
-  display: none;
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
 }
 
 .dot {

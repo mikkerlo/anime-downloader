@@ -554,6 +554,22 @@ body {
   background: var(--surface-3);
   color: var(--text);
 }
+/* a count that needs the user, e.g. held merge conflicts (#585) */
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--st-orange);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
 
 /* select with caret */
 .select-wrap {

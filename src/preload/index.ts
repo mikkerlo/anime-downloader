@@ -602,6 +602,13 @@ const api = {
     ipcRenderer.invoke(CHANNELS.SHARED_LIBRARY_SYNC_NOW, req) as Promise<SyncRunResult | null>,
   syncGetStatus: () => ipcRenderer.invoke(CHANNELS.SYNC_GET_STATUS) as Promise<SyncStatus>,
   onSyncRunFinished: subscribe<SyncRunResult>(EVENT_CHANNELS.SYNC_RUN_FINISHED),
+  // The review sheet and the history (#585)
+  syncListConflicts: () =>
+    ipcRenderer.invoke(CHANNELS.SYNC_LIST_CONFLICTS) as Promise<SyncConflictItem[]>,
+  syncResolve: (conflictIds: string[], choices: Record<string, SyncConflictChoice>) =>
+    ipcRenderer.invoke(CHANNELS.SYNC_RESOLVE, conflictIds, choices) as Promise<SyncResolveResult>,
+  syncListHistory: (req: SyncHistoryRequest = {}) =>
+    ipcRenderer.invoke(CHANNELS.SYNC_LIST_HISTORY, req) as Promise<SyncHistoryPage>,
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>

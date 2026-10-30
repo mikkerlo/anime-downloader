@@ -50,7 +50,10 @@ beforeEach(() => {
       return () => {}
     }
   }
-  ;(window as unknown as { api: unknown }).api = api
+  // The panel also reads the sync store (#585's Review): its other calls are no-op subscriptions.
+  ;(window as unknown as { api: unknown }).api = new Proxy(api, {
+    get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : () => () => {})
+  })
   setActivePinia(createPinia())
   vi.resetModules()
 })

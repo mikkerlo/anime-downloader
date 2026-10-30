@@ -136,6 +136,44 @@ export function stripProvenance(
   return out
 }
 
+/**
+ * `entries` without `field` of `malId` in merge entries (S10 #585's Keep theirs
+ * (Shikimori): nothing may push the pending value back). Stripped like
+ * `stripProvenance`; user entries (no `origin`) are never touched.
+ */
+export function stripField(
+  entries: QueuedShikimoriUpdate[],
+  malId: number,
+  field: SyncRateField
+): QueuedShikimoriUpdate[] {
+  const out: QueuedShikimoriUpdate[] = []
+  for (const entry of entries) {
+    const scoped = !!entry.fields?.includes(field) || !!entry.resolvedFields?.includes(field)
+    if (entry.malId !== malId || !entry.origin || !scoped) {
+      out.push(entry)
+      continue
+    }
+    const keep = (fs?: SyncRateField[]): SyncRateField[] | undefined =>
+      fs?.filter((f) => f !== field)
+    const fields = keep(entry.fields)
+    const resolvedFields = keep(entry.resolvedFields)
+    if ((fields?.length ?? 0) + (resolvedFields?.length ?? 0) === 0) continue
+    const next: QueuedShikimoriUpdate = {
+      ...entry,
+      after: { ...entry.after, [field]: entry.before[field] }
+    }
+    if (fields) next.fields = fields
+    if (resolvedFields) next.resolvedFields = resolvedFields
+    const prov = Object.fromEntries(
+      Object.entries(entry.origin.provenance).filter(([f]) => f !== field)
+    )
+    if (Object.keys(prov).length > 0) next.origin = { kind: 'sync-merge', provenance: prov }
+    else delete next.origin
+    out.push(next)
+  }
+  return out
+}
+
 export interface ParkedQueue {
   nickname: string
   entries: QueuedShikimoriUpdate[]

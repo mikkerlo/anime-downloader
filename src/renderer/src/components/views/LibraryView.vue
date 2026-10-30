@@ -10,8 +10,11 @@ import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useSharedLibrariesStore } from '../../stores/shared-libraries';
 import { useImportStore } from '../../stores/import';
+import { useSyncStore } from '../../stores/sync';
 
 const libraryStore = useLibraryStore();
+// Held merge conflicts (#585): the count badge on the Shared Libraries tab.
+const { conflictCount } = storeToRefs(useSyncStore());
 const shikimoriStore = useShikimoriStore();
 const { rates } = storeToRefs(shikimoriStore);
 const sharedStore = useSharedLibrariesStore();
@@ -258,6 +261,13 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
             @click="statusFilter = tab.id"
           >
             {{ tab.label }}
+            <span
+              v-if="tab.id === 'shared' && conflictCount > 0"
+              class="tab-badge"
+              data-testid="conflict-badge"
+              :title="`${conflictCount} need your input`"
+              >{{ conflictCount }}</span
+            >
           </button>
         </div>
       </div>

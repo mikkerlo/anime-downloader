@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 //
 // Library → Shared Libraries management (#581): each section header's
-// availability dot, badge, Last seen and "Last sync: never", the empty S9/S10
-// slots, the ⋯ menu's Forget with its N/M confirmation, the Settings → Storage
+// availability dot, badge, Last seen and "Last sync: never", S10's history
+// links and review button, the ⋯ menu's Forget with its N/M confirmation, the Settings → Storage
 // table, and the found-on-a-drive toast's Open starting the identity flow.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -100,17 +100,27 @@ describe('the management row', () => {
     )
   })
 
-  it("S10's history and conflict slots render nothing until filled", async () => {
-    list = [lib('a')]
-    stubApi()
+  it('Sync history in the header (every library) and on each row (that library); "Needs your input" only while conflicts are held (#585)', async () => {
+    list = [lib('a'), lib('b')]
+    const page = { entries: [], nextBefore: null }
+    const listHistory = vi.fn(async () => page)
+    let held: unknown[] = []
+    stubApi({ syncListHistory: listHistory, syncListConflicts: vi.fn(async () => held) })
     const w = mount(SharedLibrariesTab, { props: { starredIds: new Set<number>() } })
     await flushPromises()
-    for (const slot of ['slot-sync-history', 'slot-conflicts']) {
-      const el = w.find(`[data-testid="${slot}"]`)
-      expect(el.exists()).toBe(true)
-      expect(el.element.childNodes).toHaveLength(0)
-    }
-    expect(w.text()).not.toMatch(/Sync history/)
+    expect(w.find('[data-testid="review-conflicts"]').exists()).toBe(false)
+    await w.find('[data-testid="sync-history-all"]').trigger('click')
+    expect(listHistory).toHaveBeenLastCalledWith({})
+    const rows = w.findAll('[data-testid="library-sync-history"]')
+    expect(rows).toHaveLength(2)
+    await rows[1].trigger('click')
+    expect(listHistory).toHaveBeenLastCalledWith({ libraryId: 'b' })
+
+    held = [{ id: 'c1' }, { id: 'c2' }]
+    const { useSyncStore } = await import('../../src/renderer/src/stores/sync')
+    await useSyncStore().loadConflicts()
+    await flushPromises()
+    expect(w.find('[data-testid="review-conflicts"]').text()).toBe('Needs your input2')
   })
 
   it('Sync now runs every library, shows Syncing… and stays disabled while the run is in flight (#584)', async () => {

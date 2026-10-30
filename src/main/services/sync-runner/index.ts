@@ -39,15 +39,35 @@ import { normalizeDoc, ratesOnly, shikimoriNoBase } from '../../lib/sync-merge/n
 import { isRollback, rollbackAdjust } from '../../lib/sync-merge/rollback'
 import { computeRaise, type WatchFlip } from '../../lib/sync-merge/raise'
 import { reconcileLeg, type LegConflict } from '../../lib/sync-merge/conflicts'
+import {
+  choiceName,
+  choiceValue,
+  conflictOptions,
+  episodeOf,
+  fieldOf,
+  rewatchQuestionBase
+} from '../../lib/sync-merge/resolve'
 import { NO_RATE_BEFORE, rateValues, type RateValues } from '../../lib/shikimori-rate'
-import { mergeQueues, type QueuedShikimoriUpdate } from '../../lib/shikimori-queue'
+import {
+  mergeQueues,
+  stripField,
+  type ParkedQueues,
+  type QueuedShikimoriUpdate
+} from '../../lib/shikimori-queue'
 import type { CachedRateEntry } from '../../lib/shikimori-rate-cache'
 import type { StorageService } from '../../store/types'
 import type { AttachedLibraryService } from '../attached-library'
 import type { ShikimoriSyncService, ShikiItemSettled } from '../shikimori-sync'
 import { buildActor } from './actor'
 import { createConflictStore } from './conflicts'
-import { createSyncLog, REWATCH_SUPERSEDED_REASON, type SyncLog } from './log'
+import {
+  createSyncLog,
+  LOG_MAX_DETAILS,
+  REWATCH_SUPERSEDED_REASON,
+  type SyncLog,
+  type SyncLogDetail
+} from './log'
+import { listHistory, valueAt, type HistoryNames } from './history'
 import {
   cacheEntry,
   createPendingStore,
@@ -126,6 +146,22 @@ export interface SyncRunner {
    */
   start(opts?: { triggers?: boolean }): void
   stop(): void
+  /**
+   * The held conflicts, with what the review sheet shows (#585). An unreadable
+   * `conflicts.json` lists as none, or, with `strict`, rejects.
+   */
+  listConflicts(opts?: { strict?: boolean }): Promise<SyncConflictItem[]>
+  /**
+   * Review-sheet choices as forward edits (#585): this PC, every connected
+   * writable library holding the title, and Shikimori through the queue with
+   * `resolvedFields`. Each party's base advances only once the value is there.
+   */
+  resolve(
+    conflictIds: string[],
+    choices: Record<string, SyncConflictChoice>
+  ): Promise<SyncResolveResult>
+  /** One page of the read-only history, newest first. */
+  listHistory(req: SyncHistoryRequest): Promise<SyncHistoryPage>
   readonly syncLog: SyncLog
 }
 
@@ -141,9 +177,17 @@ export const DEFAULT_SKIP_ALGORITHM: ShowSkipDetections['algorithm'] = {
 
 type Outcome = Pick<SyncLibraryResult, 'drive' | 'driveReason' | 'counts'> & {
   changes: string[]
+  details?: SyncLogDetail[]
   conflicts: { animeId: string; fieldPath: string; reason: string }[]
   clamps: { path: string; at: number; clampedTo: number }[]
-  raises: { libraryId: string; animeId: string; malId: number; kind: string; episodes: number }[]
+  raises: {
+    libraryId: string
+    animeId: string
+    malId: number
+    kind: string
+    episodes: number
+    from?: number
+  }[]
   resolvedElsewhere: { animeId: string; fieldPath: string }[]
 }
 
@@ -153,6 +197,7 @@ interface ShikiOutcome {
   waitingMalIds: number[]
   rewatchesSuperseded: number
   counts: { applied: number; conflicts: number }
+  details?: SyncLogDetail[]
   conflicts: { animeId: string; fieldPath: string; reason: string }[]
   resolvedElsewhere: { animeId: string; fieldPath: string }[]
 }
@@ -505,7 +550,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           animeId: id,
           malId,
           kind: raise.kind,
-          episodes: raise.rate.episodes
+          episodes: raise.rate.episodes,
+          from: prev.episodes
         })
       }
     }
@@ -647,6 +693,28 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         clamped: m.clamped.length
       },
       changes: [...m.changesA.map((p) => `local:${p}`), ...m.changesB.map((p) => `library:${p}`)],
+      details: [
+        ...m.changesA.map(
+          (p): SyncLogDetail => ({
+            path: p,
+            to: 'local',
+            from: 'library',
+            libraryId,
+            before: valueAt(local, p),
+            after: valueAt(m.result, p)
+          })
+        ),
+        ...m.changesB.map(
+          (p): SyncLogDetail => ({
+            path: p,
+            to: 'library',
+            from: 'local',
+            libraryId,
+            before: valueAt(libDoc, p),
+            after: valueAt(m.remote, p)
+          })
+        )
+      ],
       conflicts: m.conflicts.map((c) => ({
         animeId: c.animeId,
         fieldPath: c.fieldPath,
@@ -854,6 +922,15 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       if (Object.keys(fromShiki).length > 0 && row) {
         patchCache(ownerId, malId, fromShiki, row.updated_at)
         out.counts.applied += Object.keys(fromShiki).length
+        for (const [f, v] of Object.entries(fromShiki) as [SyncRateField, number | string][]) {
+          ;(out.details ??= []).push({
+            path: `titles.${id}.rate.${f}`,
+            to: 'local',
+            from: 'shikimori',
+            before: local.titles[id]?.rate?.[f].value,
+            after: v
+          })
+        }
       }
       if (push.length > 0 && merged) {
         const after = rateValuesOf(merged) as RateValues
@@ -861,6 +938,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         for (const f of push) {
           const p = rates[String(malId)]?.[f]
           if (p) provenance[f] = p.provenance
+          ;(out.details ??= []).push({
+            path: `titles.${id}.rate.${f}`,
+            to: 'shikimori',
+            from: 'local',
+            ...(p && 'libraryId' in p.provenance ? { libraryId: p.provenance.libraryId } : {}),
+            before: row ? rateValues(row)[f] : undefined,
+            after: after[f]
+          })
         }
         additions.push({
           malId,
@@ -1013,6 +1098,427 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     if (changed) await pending.save(e.ownerId, rates)
   }
 
+  // --- the review sheet and the history (#585) -------------------------------------------------
+
+  function titleInfo(animeId: string): SyncConflictItem['title'] {
+    if (animeId.startsWith('mal:')) return { ...titleOfMalInfo(Number(animeId.slice(4))) }
+    const library = store.get<Record<string, AnimeSearchResult> | undefined>('library') ?? {}
+    const downloaded =
+      store.get<Record<string, AnimeSearchResult> | undefined>('downloadedAnime') ?? {}
+    let a: AnimeSearchResult | undefined = library[animeId] ?? downloaded[animeId]
+    for (const lib of a ? [] : attached.list()) {
+      a = lib.titles.find((t) => String(t.animeId) === animeId)?.anime
+      if (a) break
+    }
+    if (!a) {
+      const cached = (store.get<CachedRateEntry[] | undefined>('shikimoriUserRates') ?? []).find(
+        (e) => String((e.smotretAnime as { id?: number } | null)?.id) === animeId
+      )
+      a = (cached?.smotretAnime as AnimeSearchResult | null) ?? undefined
+    }
+    return a
+      ? { name: a.title, poster: a.posterUrlSmall ?? null, episodes: a.numberOfEpisodes ?? null }
+      : { name: `#${animeId}`, poster: null, episodes: null }
+  }
+
+  function titleOfMalInfo(malId: number): SyncConflictItem['title'] {
+    const cached = (store.get<CachedRateEntry[] | undefined>('shikimoriUserRates') ?? []).find(
+      (e) => e.rate.target_id === malId
+    )
+    const id =
+      (cached?.smotretAnime as { id?: number } | null)?.id ??
+      store.get<Record<string, { id?: number }> | undefined>('malIdMap')?.[String(malId)]?.id
+    if (id !== undefined) return titleInfo(String(id))
+    const name = (cached?.shikiAnime as { name?: string } | null)?.name
+    return { name: name ?? `MAL ${malId}`, poster: null, episodes: null }
+  }
+
+  const historyNames: HistoryNames = {
+    title: (animeId) => titleInfo(animeId).name,
+    titleOfMal: (malId) => titleOfMalInfo(malId).name,
+    library: (libraryId) => attached.get(libraryId)?.name ?? 'a forgotten library'
+  }
+
+  const titlesOf = (lib: AttachedLibraryInfo): AttachedLibraryTitle[] =>
+    attached.get(lib.libraryId)?.titles ?? lib.titles
+
+  /** Owned or claimed metadata libraries that are a party to `rec` or hold its title. */
+  function conflictLibraries(rec: SyncConflictRecord): AttachedLibraryInfo[] {
+    return attached
+      .list()
+      .filter(
+        (l) =>
+          l.mode === 'metadata' &&
+          (l.role === 'owner' || l.role === 'claim') &&
+          (`library:${l.libraryId}` in rec.parties ||
+            titlesOf(l).some((t) => String(t.animeId) === rec.animeId))
+      )
+  }
+
+  async function listConflicts(opts: { strict?: boolean } = {}): Promise<SyncConflictItem[]> {
+    const read = conflictStore.read()
+    const records = opts.strict ? await read : await read.catch(() => [] as SyncConflictRecord[])
+    return records.map((rec) => ({
+      ...rec,
+      title: titleInfo(rec.animeId),
+      libraries: conflictLibraries(rec).map((l) => ({
+        libraryId: l.libraryId,
+        name: l.name,
+        involved: `library:${l.libraryId}` in rec.parties,
+        available: l.available
+      })),
+      options: conflictOptions(rec),
+      rewatchQuestion: rewatchQuestionBase(rec) !== null
+    }))
+  }
+
+  /** The Shikimori base's `field` of `malId`, set to a value Shikimori has now. */
+  async function advanceShikiBase(
+    ownerId: number,
+    malId: number,
+    field: SyncRateField,
+    value: number | string,
+    at: number
+  ): Promise<void> {
+    const base = await bases.read(`shikimori-${ownerId}`)
+    if (!base) return
+    const doc = normalizeDoc(base.doc)
+    const entry = Object.entries(doc.titles).find(([, ti]) => ti.rate?.malId === malId)
+    if (!entry?.[1].rate) return
+    const rate = { ...entry[1].rate, [field]: { value, at, origin: SHIKIMORI_ORIGIN } }
+    doc.titles[entry[0]] = { ...entry[1], rate: rate as SyncRateState }
+    await bases.write(`shikimori-${ownerId}`, { stateGeneration: null, doc })
+  }
+
+  /** Strips `field` of `malId` from the merge entries of the live queue and every parked bucket. */
+  async function stripQueued(malId: number, field: SyncRateField): Promise<void> {
+    await deps.sync.withQueueLock(() => {
+      const live = store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []
+      const nextLive = stripField(live, malId, field)
+      if (!sameValue(nextLive, live)) {
+        store.set('shikimoriUpdateQueue', nextLive)
+        deps.broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: nextLive.length })
+      }
+      const parked = store.get<ParkedQueues | undefined>('shikimoriParkedQueues') ?? {}
+      const nextParked: ParkedQueues = {}
+      for (const [owner, bucket] of Object.entries(parked)) {
+        const entries = stripField(bucket.entries, malId, field)
+        if (entries.length > 0) nextParked[owner] = { ...bucket, entries }
+      }
+      if (!sameValue(nextParked, parked)) store.set('shikimoriParkedQueues', nextParked)
+    })
+  }
+
+  /** `value` into one title's field of `doc`, with `clock`; false when there is nothing to put it on. */
+  function putField(
+    doc: SyncDoc,
+    animeId: string,
+    rec: SyncConflictRecord,
+    value: unknown,
+    clock: SyncClock,
+    fallback: SyncTitleState | undefined
+  ): boolean {
+    const title = (doc.titles[animeId] ??= {})
+    const field = fieldOf(rec.fieldPath)
+    if (field === 'watched') {
+      const ep = episodeOf(rec.fieldPath)!
+      const watch = (title.watch ??= {})
+      const entry = watch[ep] ?? structuredClone(fallback?.watch?.[ep])
+      if (!entry) return false
+      entry.watched = { value: value === true, ...clock }
+      entry.watchedAt = value === true ? (entry.watchedAt ?? clock.at) : null
+      watch[ep] = entry
+      return true
+    }
+    const rate = title.rate ?? structuredClone(fallback?.rate)
+    if (!rate) return false
+    ;(rate as unknown as Record<string, unknown>)[field] = { value, ...clock }
+    title.rate = rate
+    return true
+  }
+
+  async function resolveOne(
+    rec: SyncConflictRecord,
+    choice: SyncConflictChoice,
+    value: unknown
+  ): Promise<{ failed?: string; notes: string[]; queued: boolean }> {
+    const t = now()
+    const clock: SyncClock = { at: t, origin: store.get<string | undefined>('installId') ?? '' }
+    const notes: string[] = []
+    const field = fieldOf(rec.fieldPath)
+    const ownerId = rec.ownerScope
+    const isOwnerPc = userId() === ownerId
+    const fromMal = rec.animeId.startsWith('mal:') ? Number(rec.animeId.slice(4)) : null
+    const animeId = fromMal === null ? rec.animeId : null
+    const libs = animeId === null ? [] : conflictLibraries(rec)
+    const isRate = field !== 'watched'
+    if (isRate && !isOwnerPc && !libs.some((l) => l.role === 'claim')) {
+      return { failed: "Sign in as the library's owner to resolve this.", notes, queued: false }
+    }
+    if (!isRate && animeId === null) return { failed: 'Unknown title.', notes, queued: false }
+    const malId = fromMal ?? (isRate && animeId !== null ? defaultMalIdOf(store)(animeId) : null)
+    if (isRate && isOwnerPc && malId === null) {
+      return { failed: 'This title has no Shikimori id on this PC.', notes, queued: false }
+    }
+    const rates: PendingRates = isOwnerPc ? await pending.load(ownerId) : {}
+    const pendingRates = (o: number, mal: number) =>
+      o === ownerId ? overlay(store, o, mal, rates, { skipUnconfirmed: true }, []) : undefined
+    const projectLocal = (): SyncDoc =>
+      projectSyncDoc(store, animeId === null ? [] : [animeId], {
+        resolveEpisodeFile: (id, ep, fp) => deps.resolveEpisodeFile?.(id, ep, fp) ?? null,
+        pendingRates
+      })
+    const partyLibraryIds = Object.keys(rec.parties)
+      .filter((p) => p.startsWith('library:'))
+      .map((p) => p.slice(8))
+    const wrote: { local: boolean; libraries: string[]; shikimori: 'queued' | 'already' | 'none' } =
+      { local: false, libraries: [], shikimori: 'none' }
+    let queued = false
+
+    // This PC: a watch row through `applySyncDoc`; a rate field through the pending store.
+    if (!isRate) {
+      const doc = projectLocal()
+      const fallback: SyncTitleState = {
+        watch: {
+          [episodeOf(rec.fieldPath)!]: {
+            position: { value: { position: 0, duration: 0 }, ...clock },
+            watched: { value: false, ...clock },
+            watchedAt: null
+          }
+        }
+      }
+      putField(doc, animeId!, rec, value, clock, fallback)
+      applySyncDoc(store, doc, [animeId!], {
+        now,
+        localEpisodeFile: (id, ep) => deps.localEpisodeFile?.(id, ep) ?? null,
+        skipAlgorithm: deps.skipAlgorithm ?? DEFAULT_SKIP_ALGORITHM,
+        pendingRates,
+        applyRate: () => true
+      })
+      wrote.local = true
+    } else if (isOwnerPc && malId !== null) {
+      const f = field as SyncRateField
+      const v = value as number | string
+      const existing = rates[String(malId)]?.[f]
+      const c = cacheEntry(store, ownerId, malId)
+      const cached = c && c.idx !== -1 ? c.entries[c.idx].rate : null
+      // What this PC last saw on the server (S9's `serverValueOf` for a pending field).
+      const serverOf = (g: SyncRateField): number | string | null => {
+        const p = rates[String(malId)]?.[g]
+        if (p) return serverValueOf(ownerId, malId, g, p)
+        return (cached?.[g] as number | string | undefined) ?? null
+      }
+      const serverValue =
+        'shikimori' in rec.parties ? (rec.parties.shikimori as number | string) : serverOf(f)
+      if (serverValue !== null && sameValue(serverValue, v)) {
+        // Shikimori has it already (Keep theirs (Shikimori)): S9's clear path B.
+        deletePending(rates, malId, f)
+        await pending.save(ownerId, rates)
+        patchCache(ownerId, malId, { [f]: v })
+        await stripQueued(malId, f)
+        await advanceShikiBase(ownerId, malId, f, v, rec.at.shikimori?.at ?? t)
+        wrote.shikimori = 'already'
+      } else {
+        const libraryIds = new Set(partyLibraryIds)
+        if (existing) {
+          const p = existing.provenance
+          for (const id of 'libraryId' in p ? [p.libraryId] : p.libraryIds) libraryIds.add(id)
+        }
+        const provenance: SyncProvenance = { resolution: rec.id, libraryIds: [...libraryIds] }
+        putPending(rates, ownerId, malId, f, { value: v, ...clock }, provenance, false)
+        // The Shikimori leg read the conflict's server value no earlier than the
+        // patch it covers, so a Forget reverts to it (unless a refresh is newer).
+        const shikiAt = rec.at.shikimori?.at
+        const p = rates[String(malId)]![f]!
+        if (
+          'shikimori' in rec.parties &&
+          shikiAt !== undefined &&
+          shikiAt >= parseAt(p.prePatch.serverUpdatedAt)
+        ) {
+          p.prePatch = {
+            value: rec.parties.shikimori as number | string,
+            serverUpdatedAt: new Date(shikiAt).toISOString()
+          }
+        }
+        await pending.save(ownerId, rates)
+        patchCache(ownerId, malId, { [f]: v })
+        const queue = store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []
+        const before = { ...NO_RATE_BEFORE }
+        for (const g of RATE_FIELDS) {
+          const s = serverOf(g)
+          if (s !== null) (before as Record<string, unknown>)[g] = s
+        }
+        const lastAfter = queue.filter((q) => q.malId === malId).at(-1)?.after
+        const entry: QueuedShikimoriUpdate = {
+          malId,
+          rateId: cached?.id ?? null,
+          before: rateValues(before as RateValues),
+          after: { ...rateValues((lastAfter ?? before) as RateValues), [f]: v },
+          queuedAt: Math.max(t, ...queue.map((q) => q.queuedAt + 1)),
+          fields: [f],
+          resolvedFields: [f],
+          origin: { kind: 'sync-merge', provenance: { [f]: provenance } }
+        }
+        const next = mergeQueues(queue, [entry])
+        store.set('shikimoriUpdateQueue', next)
+        deps.broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: next.length })
+        wrote.shikimori = 'queued'
+        queued = true
+      }
+      wrote.local = true
+    }
+
+    // The drives: every connected, writable library holding the title.
+    const local = animeId === null ? null : projectLocal()
+    /**
+     * A party library that can't be written now: its base for this field moves
+     * to the value the conflict showed for it (never to the choice), so the next
+     * run sees only this PC's change and writes the choice silently. If the
+     * library changed again meanwhile (another PC's choice), that run holds a
+     * new conflict. A library that wasn't a party already agrees with its base.
+     */
+    async function holdForNextRun(lib: AttachedLibraryInfo): Promise<void> {
+      const party = `library:${lib.libraryId}`
+      if (!(party in rec.parties)) return
+      const base = await bases.read(`library-${lib.libraryId}`)
+      if (!base) return
+      const doc = normalizeDoc(base.doc)
+      if (putField(doc, animeId!, rec, rec.parties[party], rec.at[party] ?? clock, undefined)) {
+        await bases.write(`library-${lib.libraryId}`, {
+          stateGeneration: base.stateGeneration,
+          doc
+        })
+      }
+    }
+    for (const lib of libs) {
+      const party = `library:${lib.libraryId}` in rec.parties
+      if (!titlesOf(lib).some((ti) => String(ti.animeId) === animeId)) {
+        if (party)
+          notes.push(
+            `${lib.name} no longer has this title, so the choice was applied on this PC and for Shikimori only.`
+          )
+        continue
+      }
+      const skip = librarySkip(lib)
+      if (skip) {
+        await holdForNextRun(lib)
+        notes.push(
+          skip.driveReason === 'read-only'
+            ? `${lib.name} is read-only on this PC. It gets this choice once this PC can write to it.`
+            : `${lib.name} isn't connected. It gets this choice on its next sync.`
+        )
+        continue
+      }
+      const read = (await inspectLibrary(lib.root)).result
+      if (
+        read.status === 'none' ||
+        read.status === 'read-only' ||
+        read.manifest.libraryId !== lib.libraryId ||
+        read.manifest.mode !== 'metadata' ||
+        read.manifest.owner?.shikimoriId !== ownerId
+      ) {
+        await holdForNextRun(lib)
+        notes.push(`${lib.name} couldn't be read. It gets this choice on its next sync.`)
+        continue
+      }
+      const doc = normalizeDoc(structuredClone(read.state?.doc ?? null))
+      const base = await bases.read(`library-${lib.libraryId}`)
+      const fallback = local?.titles[animeId!] ?? base?.doc.titles[animeId!]
+      if (!putField(doc, animeId!, rec, value, clock, fallback)) {
+        await holdForNextRun(lib)
+        notes.push(
+          `${lib.name} has no entry for this field yet, so the choice wasn't written there.`
+        )
+        continue
+      }
+      let stateGeneration: number
+      try {
+        const actor = buildActor(store, lib.libraryId, deps.appVersion)
+        const w = await writeState(
+          lib.root,
+          doc as SharedSyncDoc,
+          actor,
+          read.manifest.stateGeneration
+        )
+        stateGeneration = w.stateGeneration
+        void attached.refresh(lib.libraryId, lib.root).catch(() => {})
+      } catch (err) {
+        if (READ_ONLY_CODES.has(errCode(err) ?? '')) attached.reportWriteFailure(lib.libraryId, err)
+        log.warn(`[sync] ${lib.name}: the resolution's drive write failed`, err)
+        await holdForNextRun(lib)
+        notes.push(`${lib.name} couldn't be written. It gets this choice on its next sync.`)
+        continue
+      }
+      wrote.libraries.push(lib.libraryId)
+      if (base) {
+        const nextBase = normalizeDoc(base.doc)
+        putField(nextBase, animeId!, rec, value, clock, doc.titles[animeId!])
+        await bases.write(`library-${lib.libraryId}`, { stateGeneration, doc: nextBase })
+      }
+    }
+
+    await syncLog.append({
+      kind: 'resolution',
+      at: t,
+      conflictId: rec.id,
+      animeId: rec.animeId,
+      fieldPath: rec.fieldPath,
+      choice: choiceName(choice),
+      value,
+      libraryIds: partyLibraryIds,
+      wrote,
+      notes
+    })
+    return { notes, queued }
+  }
+
+  async function resolve(
+    conflictIds: string[],
+    choices: Record<string, SyncConflictChoice>
+  ): Promise<SyncResolveResult> {
+    const out: SyncResolveResult = { resolved: [], failed: [], notes: [] }
+    let kick = false
+    await locked(async () => {
+      const records = await conflictStore.read()
+      const done = new Set<string>()
+      for (const id of new Set(Array.isArray(conflictIds) ? conflictIds : [])) {
+        const rec = records.find((r) => r.id === id)
+        if (!rec) {
+          out.failed.push({ id, reason: 'This conflict is no longer held.' })
+          continue
+        }
+        const choice = choices?.[id]
+        const value = choice ? choiceValue(rec, choice) : undefined
+        if (value === undefined) {
+          out.failed.push({ id, reason: 'Pick a value for this row.' })
+          continue
+        }
+        try {
+          const r = await resolveOne(rec, choice!, value)
+          if (r.failed) {
+            out.failed.push({ id, reason: r.failed })
+            continue
+          }
+          done.add(id)
+          out.resolved.push(id)
+          for (const text of r.notes) out.notes.push({ id, text })
+          kick ||= r.queued
+        } catch (err) {
+          log.error('[sync] a resolution failed:', err)
+          out.failed.push({ id, reason: "This choice couldn't be applied." })
+        }
+      }
+      if (done.size > 0) {
+        await conflictStore.write((await conflictStore.read()).filter((r) => !done.has(r.id)))
+      }
+    })
+    if (kick) {
+      deps.sync.startSyncTimer()
+      void deps.sync.syncShikimoriQueue()
+    }
+    return out
+  }
+
   // --- runs ------------------------------------------------------------------------------------
 
   async function run(
@@ -1044,6 +1550,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       libraries: fresh.map((l) => l.libraryId),
       counts: emptyCounts(),
       changes: [],
+      details: [],
       conflicts: [],
       clamps: [],
       skippedMalIds: [],
@@ -1130,12 +1637,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         record.counts.conflicts += r.counts.conflicts
         record.counts.clamped += r.counts.clamped
         record.changes.push(...o.changes)
+        record.details!.push(...(o.details ?? []))
         record.conflicts.push(...o.conflicts)
         record.clamps.push(...o.clamps)
         record.raises.push(...o.raises)
         record.resolvedElsewhere.push(...o.resolvedElsewhere)
       }
       for (const s of shiki.values()) {
+        record.details!.push(...(s.details ?? []))
         record.skippedMalIds.push(...s.waitingMalIds)
         record.conflicts.push(...s.conflicts)
         record.resolvedElsewhere.push(...s.resolvedElsewhere)
@@ -1163,6 +1672,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     for (const lib of libs) libraries.push(await joined.get(lib.libraryId)!)
     const result: SyncRunResult = { runId, trigger, libraries }
     record.result = result
+    if (record.details!.length > LOG_MAX_DETAILS) record.details!.length = LOG_MAX_DETAILS
     if (fresh.length > 0) {
       // Under the mutex, as every other append: the size bound rewrites the file.
       await locked(() => syncLog.append(record)).catch((err) =>
@@ -1234,6 +1744,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           libraries: [libraryId],
           counts: o.counts,
           changes: o.changes,
+          details: (o.details ?? []).slice(0, LOG_MAX_DETAILS),
           conflicts: o.conflicts,
           clamps: o.clamps,
           skippedMalIds: [],
@@ -1339,6 +1850,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     stop() {
       for (const u of unsubscribe.splice(0)) u()
     },
+    listConflicts,
+    resolve,
+    listHistory: (req) => listHistory(syncLog, req ?? {}, historyNames),
     syncLog
   }
   return runner

@@ -34,8 +34,9 @@ const nickname = computed(() => props.candidate.ownerNickname || 'its owner');
         <div class="sl-title">This library belongs to {{ nickname }}</div>
         <p class="sl-text">
           This PC has no Shikimori account. You can use the library as videos only, or use it as
-          {{ nickname }}: this PC then keeps {{ nickname }}'s watch state on the drive, once syncing
-          arrives in a later update. It never sends anything to Shikimori.
+          {{ nickname }}: this PC then syncs {{ nickname }}'s watch state with the drive, and what
+          you watch here goes back to {{ nickname }}'s PC with it. It never sends anything to
+          Shikimori.
         </p>
         <div class="sl-actions">
           <button class="sl-btn" @click="emit('cancel')">Cancel</button>

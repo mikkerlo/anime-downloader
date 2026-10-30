@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "5.0.54",
+  "version": "6.0.0",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "engines": {
@@ -27,6 +27,7 @@
     "test:e2e": "playwright test",
     "test:conformance": "vitest run --config vitest.conformance.config.ts",
     "test:e2e:syncplay": "xvfb-run -a playwright test --config playwright.syncplay.config.ts",
+    "test:e2e:shared-library": "xvfb-run -a playwright test --config playwright.shared-library.config.ts",
     "gen:syncplay-fixtures": "node scripts/gen-syncplay-fixtures.mjs",
     "check:subscription-contract": "bash scripts/check-subscription-contract.sh",
     "check:line-citations": "node scripts/check-line-citations.mjs",

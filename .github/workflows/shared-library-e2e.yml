@@ -13,8 +13,8 @@ name: Shared Library e2e
 # code behind the round trip: the Shared Library, the merge, the watched rule
 # and its clock stamp, the decision 5 raise and the Shikimori drain, the
 # offline edge, the API-base seam, the wiring, the settings store the seeded
-# profiles boot through, the UI the spec clicks, the profile helper or the rig. `test/shared-library-e2e-workflow.test.ts` pins
-# the list.
+# profiles boot through, the UI the spec clicks, the profile helper or the
+# rig. `test/shared-library-e2e-workflow.test.ts` pins the list.
 
 on:
   schedule:

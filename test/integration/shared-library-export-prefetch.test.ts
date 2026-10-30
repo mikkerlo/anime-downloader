@@ -473,8 +473,8 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
       // expected, and none has started, for as long as the test needs.
       let open!: () => void
       rig.mergeGate.current = new Promise<void>((r) => (open = r))
+      let go: () => void = () => {}
       try {
-        let go: () => void = () => {}
         let atCopy: Promise<void> = Promise.resolve()
         if (order === 'job-first') {
           // The job evaluates the pre-fetched item while it downloads.
@@ -517,6 +517,7 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
         )
         expect(rig.reads.filter((p) => p.endsWith('.mp4') || p.endsWith('.ass'))).toEqual([])
       } finally {
+        go()
         open()
       }
     })

@@ -96,8 +96,10 @@ src/renderer/src/
       ConnectorsTab.vue
       ShikimoriPendingDialog.vue  Keep/Discard prompt for unsynced Shikimori changes (#588)
       PrepareOfflinePanel.vue   Prepare for offline (#592): a row per step, Cancel, the summary; details
-                                with a title link to its page. Mounted in App.vue, opened from GeneralTab
-                                (next to Work offline) and FfmpegMissingBanner
+                                with a title link to its page; the library-sync row's Review (N) opens
+                                #585's review sheet, which stacks above it (`components/overlay-layers.ts`).
+                                Mounted in App.vue, opened from GeneralTab (next to Work offline) and
+                                FfmpegMissingBanner
       MergingTab.vue
       PlayerTab.vue
       ShortcutsTab.vue

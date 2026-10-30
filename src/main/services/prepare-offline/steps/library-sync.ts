@@ -8,16 +8,33 @@ import { NO_LIBRARY_REASON } from './attached-integrity'
 export interface LibrarySyncStepDeps {
   list(): AttachedLibraryInfo[]
   runAll(trigger: SyncTrigger): Promise<SyncRunResult>
+  /**
+   * The held conflicts after the run, per library: the review sheet's own
+   * rows (#585), so a field both legs hold counts once, as in the toast.
+   * Without it, the run's per-leg `counts.conflicts`.
+   */
+  needReview?(): Promise<Map<string, number>>
 }
 
 type Part = { text: string; status: PrepareOfflineStatus }
 
+/** The review sheet's rows per library: each held conflict once for every library it touches. */
+export function conflictsPerLibrary(items: SyncConflictItem[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const c of items) {
+    for (const id of new Set(c.libraries.map((l) => l.libraryId))) {
+      out.set(id, (out.get(id) ?? 0) + 1)
+    }
+  }
+  return out
+}
+
 /** Not this PC's to sync: no line, only a count. */
 const NOT_YOURS = new Set(['videos-only', 'foreign'])
 
-export function drivePart(r: SyncLibraryResult): Part {
+export function drivePart(r: SyncLibraryResult, needReview?: number): Part {
   if (r.drive === 'ok') {
-    const n = r.counts.conflicts
+    const n = needReview ?? r.counts.conflicts
     return n > 0
       ? { text: `Drive synced, ${n} need review`, status: 'warning' }
       : { text: 'Drive synced', status: 'ok' }
@@ -74,18 +91,26 @@ export function shikimoriPart(r: SyncLibraryResult): Part {
 }
 
 /** One summary line per owned or claimed library; null for one that isn't. */
-export function syncLine(r: SyncLibraryResult, name: string): Part | null {
+export function syncLine(r: SyncLibraryResult, name: string, needReview?: number): Part | null {
   if (NOT_YOURS.has(r.driveReason ?? '')) return null
-  const d = drivePart(r)
+  const d = drivePart(r, needReview)
   const s = shikimoriPart(r)
   return { text: `${name}: ${d.text}; ${s.text}`, status: worstStatus([d.status, s.status]) }
 }
 
-export function syncDetails(result: SyncRunResult, names: Map<string, string>): Part[] {
+export function syncDetails(
+  result: SyncRunResult,
+  names: Map<string, string>,
+  needReview?: Map<string, number>
+): Part[] {
   const out: Part[] = []
   let notYours = 0
   for (const r of result.libraries) {
-    const line = syncLine(r, names.get(r.libraryId) ?? r.libraryId)
+    const line = syncLine(
+      r,
+      names.get(r.libraryId) ?? r.libraryId,
+      needReview ? (needReview.get(r.libraryId) ?? 0) : undefined
+    )
     if (!line) {
       notYours++
       continue
@@ -121,7 +146,8 @@ export function createLibrarySyncStep(deps: LibrarySyncStepDeps): PrepareStep {
       ctx.progress({ done: 0, total: 1, message: 'Syncing' })
       const names = new Map(deps.list().map((l) => [l.libraryId, l.name]))
       const result = await deps.runAll('prepare')
-      const details = syncDetails(result, names)
+      const needReview = await deps.needReview?.().catch(() => undefined)
+      const details = syncDetails(result, names, needReview)
       ctx.progress({ done: 1, total: 1 })
       return { status: worstStatus(details.map((d) => d.status)), details }
     }

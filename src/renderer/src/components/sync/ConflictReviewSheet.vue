@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia';
 import ConflictRow from './ConflictRow.vue';
 import { suggestedChoice } from './format';
 import { useSyncStore } from '../../stores/sync';
+import { LAYER } from '../overlay-layers';
 
 // The review sheet (#585): the held conflicts grouped by title, then field.
 // "Apply all suggested" takes each row's newest-`at` suggestion and leaves the
@@ -69,7 +70,12 @@ async function applyPicked(): Promise<void> {
 </script>
 
 <template>
-  <div class="sl-backdrop" @click.self="sync.closeReview()">
+  <div
+    class="sl-backdrop"
+    data-testid="conflict-review-backdrop"
+    :style="{ zIndex: LAYER.reviewSheet }"
+    @click.self="sync.closeReview()"
+  >
     <div class="sl-modal sheet" data-testid="conflict-review-sheet">
       <div class="sl-title" data-testid="review-title">
         Needs your input ({{ conflicts.length }})

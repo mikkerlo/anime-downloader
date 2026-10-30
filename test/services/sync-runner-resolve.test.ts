@@ -128,6 +128,17 @@ async function shikimoriSideConflict() {
 
 const keep = (party: string): SyncConflictChoice => ({ kind: 'party', party })
 
+/**
+ * Unplugs a library. A run that wrote the drive leaves a background
+ * `attached.refresh` behind, which would mark it available again if it lands
+ * after this; `refresh` joins the one in flight, so awaiting it first settles it.
+ */
+async function unplug(pc: Pc, libraryId: string, root: string): Promise<void> {
+  await pc.attached.refresh(libraryId, root)
+  pc.attached.markUnavailable(libraryId, root)
+  expect(pc.attached.get(libraryId)!.available).toBe(false)
+}
+
 beforeEach(() => server.reset())
 afterEach(() => {
   cleanup()
@@ -227,7 +238,7 @@ describe('two PCs resolving the same conflict differently is a conflict', () => 
 
   it('independent: A resolves to 8 unplugged (its base moves to the 6 it saw, not to 8), B to 9 on the drive; back on A, a new conflict 8 vs 9, nothing applied', async () => {
     const { a, b, ra, rb, root, libraryId } = await twoPcs()
-    a.attached.markUnavailable(libraryId, root)
+    await unplug(a, libraryId, root)
     const res = await a.runner.resolve([ra.id], { [ra.id]: keep('local') })
     expect(res.notes.map((n) => n.text)).toEqual([
       expect.stringContaining("isn't connected. It gets this choice on its next sync.")
@@ -563,7 +574,7 @@ describe('a party library that cannot be written at resolve time (review of #637
 
   it('unplugged: the note holds, and after the plug the drive gets the choice with no second conflict', async () => {
     const { pc, root, libraryId, rec } = await partySetup()
-    pc.attached.markUnavailable(libraryId, root)
+    await unplug(pc, libraryId, root)
     const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
     expect(res.notes.map((n) => n.text)).toEqual([
       expect.stringContaining("isn't connected. It gets this choice on its next sync.")
@@ -596,7 +607,7 @@ describe('the library is unavailable at resolve time', () => {
   it('the local value changes, the drive is not written and its base not advanced; the next run after the plug writes it', async () => {
     const { pc, root, libraryId, rec } = await shikimoriSideConflict()
     pc.offline.value = true
-    pc.attached.markUnavailable(libraryId, root)
+    await unplug(pc, libraryId, root)
     const gen = await driveGeneration(root)
     const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('shikimori') })
     expect(res.notes).toHaveLength(1)

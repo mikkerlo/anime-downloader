@@ -27,6 +27,7 @@ import {
   type PrepareStepContext
 } from '../../src/main/services/prepare-offline'
 import {
+  conflictsPerLibrary,
   createLibrarySyncStep,
   syncDetails,
   syncLine
@@ -417,6 +418,33 @@ describe('step 6: SyncRunResult → summary lines', () => {
     const step = createLibrarySyncStep({ list: () => [], runAll: async () => result })
     const out = await step.run(ctxFor())
     expect(out.status).toBe('failed')
+  })
+
+  it("'N need review' is the review sheet's count (#585 review of #637): a field both legs hold counts once", async () => {
+    const conflict = (libraries: string[]) =>
+      ({
+        libraries: libraries.map((libraryId) => ({ libraryId }))
+      }) as unknown as SyncConflictItem
+    // A three-party field (both legs counted it), a Shikimori-side one on A's title, one on B's.
+    const per = conflictsPerLibrary([conflict(['A']), conflict(['A']), conflict(['B'])])
+    expect([...per]).toEqual([
+      ['A', 2],
+      ['B', 1]
+    ])
+    const step = createLibrarySyncStep({
+      list: () => [{ libraryId: 'A', name: 'Alpha' } as never],
+      runAll: async () => ({
+        runId: 'r',
+        trigger: 'prepare',
+        // The legs' counts: 3 for the two held fields.
+        libraries: [lib({ libraryId: 'A', counts: { applied: 0, conflicts: 3, clamped: 0 } })]
+      }),
+      needReview: async () => per
+    })
+    const out = await step.run(ctxFor())
+    expect(out.details).toEqual([
+      { text: 'Alpha: Drive synced, 2 need review; Shikimori updated', status: 'warning' }
+    ])
   })
 
   it('a claim PC that is offline gets an ok step', async () => {

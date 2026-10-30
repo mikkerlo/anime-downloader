@@ -3,8 +3,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { STATUS_TEXT, usePrepareOfflineStore } from '../../stores/prepare-offline';
 import { useLibraryStore } from '../../stores/library';
+import { useSyncStore } from '../../stores/sync';
+import { LAYER } from '../overlay-layers';
 
 const store = usePrepareOfflineStore();
+// The sync's held conflicts (#585): the library step offers Review, since the
+// toast after this run would sit under the panel's backdrop.
+const sync = useSyncStore();
+const { conflictCount } = storeToRefs(sync);
 const { run, running, lastPreparedText } = storeToRefs(store);
 const libraryStore = useLibraryStore();
 const expanded = ref<Set<string>>(new Set());
@@ -41,7 +47,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>
-  <div class="po-backdrop" @click.self="store.closePanel()">
+  <div
+    class="po-backdrop"
+    :style="{ zIndex: LAYER.prepareOfflinePanel }"
+    @click.self="store.closePanel()"
+  >
     <div class="po-modal" role="dialog" aria-modal="true" data-testid="prepare-offline-panel">
       <div class="po-title">Prepare for offline</div>
       <p class="po-text">
@@ -60,6 +70,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
             <span class="po-icon" :class="step.state === 'done' ? step.status : step.state" />
             <span class="po-label">{{ step.label }}</span>
             <span class="po-status">{{ statusOf(step) }}</span>
+            <button
+              v-if="step.id === 'library-sync' && step.state === 'done' && conflictCount > 0"
+              class="btn btn-outline btn-sm"
+              data-testid="prepare-offline-review"
+              @click="sync.openReview()"
+            >
+              Review ({{ conflictCount }})
+            </button>
             <button
               v-if="step.details.length > 0 || step.reason"
               class="btn btn-ghost btn-sm"
@@ -115,7 +133,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 9000;
 }
 
 .po-modal {

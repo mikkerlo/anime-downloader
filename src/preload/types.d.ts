@@ -433,6 +433,15 @@ interface Api {
   sharedLibrarySyncNow: (req?: SyncNowRequest) => Promise<SyncRunResult | null>
   syncGetStatus: () => Promise<SyncStatus>
   onSyncRunFinished: (callback: (result: SyncRunResult) => void) => Unsubscribe
+  /** The held conflicts, with what the review sheet shows (#585). */
+  syncListConflicts: () => Promise<SyncConflictItem[]>
+  /** Turns review-sheet choices into forward edits; resolved records leave `conflicts.json`. */
+  syncResolve: (
+    conflictIds: string[],
+    choices: Record<string, SyncConflictChoice>
+  ) => Promise<SyncResolveResult>
+  /** One page of the read-only sync history, newest first. */
+  syncListHistory: (req?: SyncHistoryRequest) => Promise<SyncHistoryPage>
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>

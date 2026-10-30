@@ -242,6 +242,18 @@ describe('With metadata: what leaves this PC', () => {
     expect(p1.state!.doc.titles!['101'].watch!['1'].watched.value).toBe(true)
     expect(p1.state!.doc.titles!['101'].rate?.status.value).toBe('watching')
     const g1 = await expectPairedWithBase(r, root)
+    // The export's run record carries the per-title values the history shows (#585).
+    const logDir = path.join(r.env.userData, 'sync-log')
+    const runs = fs
+      .readdirSync(logDir)
+      .flatMap((f) => fs.readFileSync(path.join(logDir, f), 'utf8').split('\n').filter(Boolean))
+      .map((l) => JSON.parse(l))
+      .filter((x) => x.kind === 'run' && x.trigger === 'export')
+    expect(runs).toHaveLength(1)
+    expect(runs[0].details.length).toBeGreaterThan(0)
+    expect(runs[0].details).toContainEqual(
+      expect.objectContaining({ path: 'titles.101.watch.1.watched', to: 'library', after: true })
+    )
 
     await startMeta(r, [r.b1])
     const p2 = await pairOf(root)

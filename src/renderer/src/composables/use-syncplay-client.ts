@@ -1685,9 +1685,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // **`!holding`** is not implied by that term, and it is reachable rather than defensive. An
     // MSE buffer refill pauses the element and holds `setSyncplayLocalReady(false)` for its
-    // duration (`use-mse-player.ts:439`/`use-mse-player.ts:484`), re-playing it on the way out
-    // whenever `wasPaused` was false (`use-mse-player.ts:457-467`,
-    // `use-mse-player.ts:474-482`). A user pause landing inside that window arms
+    // duration (`use-mse-player.ts:447`/`use-mse-player.ts:492`), re-playing it on the way out
+    // whenever `wasPaused` was false (`use-mse-player.ts:465-475`,
+    // `use-mse-player.ts:482-490`). A user pause landing inside that window arms
     // `pendingUserPause` with `intendedPaused = true`; the re-play returns `v.paused` to false
     // through a `play` consumed as an `echo`, which establishes nothing, so the hold survives
     // to meet a playing-room heartbeat with `effectivePaused === v.paused === false`. An

@@ -329,7 +329,11 @@ export function useMsePlayer(deps: {
         }
         initialLandPending = false
       }
-      if (bufStart < t - 60 && !sb.updating) {
+      // Not while a respawn is pending (#640): its decision reads `buffered`,
+      // and after a far seek this remove would empty it, which the debounce
+      // takes for a fresh respawn still on its way. The respawn clears the
+      // buffer itself anyway.
+      if (bufStart < t - 60 && !sb.updating && !respawnPending()) {
         try {
           sb.remove(bufStart, Math.max(bufStart + 1, t - 30))
         } catch {
@@ -387,7 +391,7 @@ export function useMsePlayer(deps: {
         // the video element is currently sitting inside, or playback stalls.
         const vv = deps.getVideoEl()
         const t = vv?.currentTime ?? 0
-        if (sb.buffered.length > 0 && !sb.updating) {
+        if (sb.buffered.length > 0 && !sb.updating && !respawnPending()) {
           const bufStart = sb.buffered.start(0)
           const removeUntil = t - 5
           if (removeUntil > bufStart + 1) {
@@ -402,6 +406,10 @@ export function useMsePlayer(deps: {
         console.error('[player] appendBuffer failed:', err)
       }
     }
+  }
+
+  function respawnPending(): boolean {
+    return respawnDebounceTimer !== null || unbufferedSeekInFlight
   }
 
   function maybeRespawnForUnbufferedPosition(): void {

@@ -2115,3 +2115,209 @@ describe('useMsePlayer — a stream error during the seek continuation (#634)', 
     m.resetMseState()
   })
 })
+
+// #640: after a seek far past the buffer start, the back-eviction (every
+// `updateend`) and the quota eviction read the new `currentTime` and could
+// empty the buffer before the respawn debounce fired. The debounce then saw an
+// empty buffer, took it for a fresh respawn, and never respawned. Both
+// evictions now stand down while a respawn is pending.
+describe('useMsePlayer — far seek vs. the back-eviction (#640)', () => {
+  type SeekReply = { generation: number; timestampOffset: number } | { error: string }
+  // Not 0, so a chunk only reaches `appendBuffer` when it carries the session's
+  // real generation.
+  const GEN = 7
+
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  // Unlike the fakes above, `remove()` really cuts `[start, end)` out of
+  // `buffered`, so an eviction can empty the buffer the debounce then reads.
+  class CuttingSourceBuffer extends EventTarget {
+    updating = false
+    timestampOffset = 0
+    buffered = new FakeBuffered()
+    quota = false
+    appendCalls = 0
+    removeCalls: [number, number][] = []
+    appendBuffer(): void {
+      this.appendCalls++
+      if (this.quota) throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+      this.updating = true
+      queueMicrotask(() => this.finish())
+    }
+    remove(start: number, end: number): void {
+      this.removeCalls.push([start, end])
+      this.updating = true
+      const kept: [number, number][] = []
+      for (const [s, e] of this.buffered.ranges) {
+        if (s < start) kept.push([s, Math.min(e, start)])
+        if (e > end) kept.push([Math.max(s, end), e])
+      }
+      this.buffered.ranges = kept
+      queueMicrotask(() => this.finish())
+    }
+    abort(): void {}
+    private finish(): void {
+      this.updating = false
+      this.dispatchEvent(new Event('updateend'))
+    }
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    constructor(public sb: CuttingSourceBuffer) {
+      super()
+    }
+    addSourceBuffer(): CuttingSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+    endOfStream(): void {
+      this.readyState = 'ended'
+    }
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+  let teardown: (() => void)[] = []
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    for (const fn of teardown) fn()
+    teardown = []
+    vi.useRealTimers()
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+    vi.restoreAllMocks()
+  })
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  }
+
+  function rig(ranges: [number, number][], currentTime: number) {
+    const video = {
+      currentTime,
+      paused: false,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    // The seek reply is held open: the respawn stays in flight until teardown.
+    const replies: ((r: SeekReply) => void)[] = []
+    const seekSpy = vi.fn(
+      (_sessionId: string, _seekAt: number) => new Promise<SeekReply>((res) => replies.push(res))
+    )
+    setApi({
+      playerStreamSeek: seekSpy,
+      playerStreamStart: vi.fn(async () => {}),
+      playerStreamAck: vi.fn(async () => {})
+    })
+    const m = useMsePlayer(makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement }))
+    const sb = new CuttingSourceBuffer()
+    const ms = new FakeMediaSource(sb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => ms)
+    m.startMseSession({
+      sessionId: 's1',
+      generation: GEN,
+      duration: 1400,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      timestampOffset: 0,
+      refusedSeek: false
+    })
+    ms.dispatchEvent(new Event('sourceopen'))
+    sb.buffered.ranges = ranges
+    teardown.push(() => {
+      m.resetMseState()
+      for (const reply of replies) reply({ error: 'torn down' })
+    })
+    return { m, video, sb, seekSpy }
+  }
+
+  it('an updateend inside the debounce does not empty the buffer the respawn reads (T-A)', async () => {
+    const { m, video, sb, seekSpy } = rig([[0, 25]], 10)
+    video.currentTime = 90
+    m.maybeRespawnForUnbufferedPosition()
+    // The old run's append completing inside the 250 ms window.
+    sb.dispatchEvent(new Event('updateend'))
+    await flush()
+    vi.advanceTimersByTime(250)
+
+    expect(seekSpy.mock.calls).toEqual([['s1', 90]])
+    expect(sb.removeCalls).toEqual([])
+  })
+
+  it('a QuotaExceededError inside the debounce does not empty the buffer either (T-B)', async () => {
+    const { m, video, sb, seekSpy } = rig([[0, 25]], 10)
+    video.currentTime = 90
+    m.maybeRespawnForUnbufferedPosition()
+    sb.quota = true
+    m._internal.handleStreamChunk('s1', GEN, new Uint8Array([1]))
+    // The chunk got as far as the append, so the quota path really ran.
+    expect(sb.appendCalls).toBe(1)
+    await flush()
+    vi.advanceTimersByTime(250)
+
+    expect(seekSpy.mock.calls).toEqual([['s1', 90]])
+    expect(sb.removeCalls).toEqual([])
+  })
+
+  it('the back-eviction still runs in normal playback (T-C)', async () => {
+    const { sb, seekSpy } = rig([[0, 110]], 100)
+    sb.dispatchEvent(new Event('updateend'))
+    await flush()
+
+    expect(sb.removeCalls).toEqual([[0, 70]])
+    expect(sb.buffered.ranges).toEqual([[70, 110]])
+    expect(seekSpy).not.toHaveBeenCalled()
+  })
+
+  it('the same far seek with no eviction in the window respawns (control)', () => {
+    const { m, video, seekSpy } = rig([[0, 25]], 10)
+    video.currentTime = 90
+    m.maybeRespawnForUnbufferedPosition()
+    vi.advanceTimersByTime(250)
+
+    expect(seekSpy.mock.calls).toEqual([['s1', 90]])
+  })
+
+  // While the seek IPC is pending, a back-eviction would leave a remove running
+  // into the respawn's `abort()` and `timestampOffset` write, so both would
+  // throw and the new run would land on the wrong offset (the #198 failure).
+  it('an updateend while the respawn is in flight does not evict (T-D)', async () => {
+    const { m, video, sb, seekSpy } = rig([[0, 25]], 10)
+    video.currentTime = 90
+    m.maybeRespawnForUnbufferedPosition()
+    vi.advanceTimersByTime(250)
+    expect(seekSpy.mock.calls).toEqual([['s1', 90]])
+
+    sb.dispatchEvent(new Event('updateend'))
+    await flush()
+
+    expect(sb.removeCalls).toEqual([])
+    expect(sb.buffered.ranges).toEqual([[0, 25]])
+  })
+})

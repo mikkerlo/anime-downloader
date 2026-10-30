@@ -11,8 +11,11 @@ import OpenLibraryDialog from '../shared-library/OpenLibraryDialog.vue';
 import SharedLibrariesTable from '../shared-library/SharedLibrariesTable.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useSharedLibrariesStore } from '../../stores/shared-libraries';
+import { useSyncStore } from '../../stores/sync';
 
 const openShared = ref(false);
+// The merge's review sheet and history (#585), next to the Shared Libraries table.
+const syncStore = useSyncStore();
 const libraryNav = useLibraryStore();
 const sharedLibraries = useSharedLibrariesStore();
 
@@ -764,6 +767,23 @@ watch(autoCleanupDays, (val) => {
       >
         <button class="btn btn-sm" data-testid="storage-export" @click="exportOpen = true">
           Export to a Shared Library…
+        </button>
+      </SettingsRow>
+      <SettingsRow label="Sync" desc="What each sync changed, and the choices only you can make.">
+        <button
+          v-if="syncStore.conflictCount > 0"
+          class="btn btn-sm"
+          data-testid="storage-review-conflicts"
+          @click="syncStore.openReview()"
+        >
+          Needs your input<span class="tab-badge">{{ syncStore.conflictCount }}</span>
+        </button>
+        <button
+          class="btn btn-sm"
+          data-testid="storage-sync-history"
+          @click="syncStore.openHistory()"
+        >
+          Sync history
         </button>
       </SettingsRow>
       <SharedLibrariesTable />

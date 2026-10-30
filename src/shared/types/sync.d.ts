@@ -216,6 +216,72 @@ interface SyncConflictRecord {
   lastSeenRunId: string
 }
 
+// --- The review sheet and the history (S10 #585) ---------------------------------
+
+/**
+ * A review-sheet choice: a party's value (`local` is Keep mine; a
+ * `library:<id>` or `shikimori` party is Keep theirs), Combine (`rate.episodes`
+ * and `watched` only), or the decision-6 answer to "one rewatch or two?".
+ */
+type SyncConflictChoice =
+  | { kind: 'party'; party: string }
+  | { kind: 'combine' }
+  | { kind: 'rewatches'; count: 1 | 2 }
+
+interface SyncConflictOption {
+  choice: SyncConflictChoice
+  value: unknown
+}
+
+/** One library a held conflict touches: a party to it, or holding its title in scope. */
+interface SyncConflictLibrary {
+  libraryId: string
+  name: string
+  // A party to the conflict (`library:<id>` in `parties`); otherwise it agrees with this PC.
+  involved: boolean
+  available: boolean
+}
+
+/** `sync:list-conflicts`: a held conflict and what the review sheet shows for it. */
+interface SyncConflictItem extends SyncConflictRecord {
+  title: { name: string; poster: string | null; episodes: number | null }
+  libraries: SyncConflictLibrary[]
+  options: SyncConflictOption[]
+  // Owner decision 6: "Was this one rewatch or two?" (One / Two, no suggestion).
+  rewatchQuestion: boolean
+}
+
+interface SyncResolveResult {
+  resolved: string[]
+  failed: { id: string; reason: string }[]
+  // What a resolution couldn't write now, in plain words (an unplugged drive, a title out of scope).
+  notes: { id: string; text: string }[]
+}
+
+/** `sync:list-history`: entries older than `before` (a log `at`), newest first. */
+interface SyncHistoryRequest {
+  before?: number
+  limit?: number
+  libraryId?: string
+}
+
+interface SyncHistoryEntry {
+  key: string
+  kind: 'run' | 'resolution' | 'rewatch-superseded' | 'shikimori-rejected'
+  at: number
+  trigger?: SyncTrigger
+  libraries: { libraryId: string; name: string }[]
+  summary: string
+  // The expandable lines: silent changes, raises, waiting MAL ids, clamps, conflicts resolved elsewhere.
+  details: string[]
+}
+
+interface SyncHistoryPage {
+  entries: SyncHistoryEntry[]
+  // The `before` of the next page, or null at the end of the log.
+  nextBefore: number | null
+}
+
 interface SyncApplyReport {
   // Field paths written to the local store.
   applied: string[]

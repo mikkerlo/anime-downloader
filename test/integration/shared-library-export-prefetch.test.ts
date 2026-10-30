@@ -30,6 +30,7 @@ import {
   jobOf,
   makePrefetchRig,
   TICK_MS,
+  untilEvaluated,
   untilPrefetch,
   type PrefetchRig
 } from '../helpers/prefetch-rig'
@@ -464,20 +465,62 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
     expect(rig.reads.filter((p) => p.endsWith(' - 02 [Studio].mp4'))).toEqual([])
   })
 
-  it('no copy in the 100 ms window before the merge starts: only the .mkv is copied', async () => {
-    rig = makePrefetchRig({ autoMerge: true })
-    const { a1 } = seedAlpha(rig)
-    const jobId = await start(rig, [a1], [pf('2', 12)])
-    // The video event wakes the job before `episodeComplete` (100 ms) starts the merge.
-    await until(() => rig.ff.commands.length === 1, 'the merge')
-    expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
-    rig.ff.commands[0].finish('mkv-bytes')
-    await rig.svc.settled(jobId)
-    expect(driveFiles(rig)).toEqual(
-      [`${TITLE}/${TITLE} - 01 [Studio].mkv`, `${TITLE}/${TITLE} - 02 [Studio].mkv`].sort()
-    )
-    expect(rig.reads.filter((p) => p.endsWith('.mp4') || p.endsWith('.ass'))).toEqual([])
-  })
+  for (const order of ['job-first', 'merge-first'] as const) {
+    it(`no copy in the window before the merge starts (${order}): only the .mkv is copied`, async () => {
+      rig = makePrefetchRig({ autoMerge: true })
+      const { a1 } = seedAlpha(rig)
+      // The merge is requested and held: both rows are complete, a merge is
+      // expected, and none has started, for as long as the test needs.
+      let open!: () => void
+      rig.mergeGate.current = new Promise<void>((r) => (open = r))
+      try {
+        let go: () => void = () => {}
+        let atCopy: Promise<void> = Promise.resolve()
+        if (order === 'job-first') {
+          // The job evaluates the pre-fetched item while it downloads.
+          rig.net.hold(12)
+        } else {
+          // The downloaded item's copy is held until the merge is requested, so
+          // the job hasn't evaluated the pre-fetched item yet.
+          let reached!: () => void
+          atCopy = new Promise<void>((r) => (reached = r))
+          rig.copyGate.current = {
+            match: / - 01 \[Studio\]\.mkv/,
+            reached,
+            go: new Promise<void>((r) => (go = r))
+          }
+        }
+        const jobId = await start(rig, [a1], [pf('2', 12)])
+        const atStart = rig.predicateReads.n
+        if (order === 'job-first') {
+          await until(() => rig.predicateReads.n > atStart, 'the job evaluating')
+          expect(rig.mergeCalls.n).toBe(0)
+          rig.net.release(12)
+        }
+        await atCopy
+        await until(() => rig.mergeCalls.n === 1, 'the merge request')
+        const atRequest = rig.predicateReads.n
+        if (order === 'merge-first') {
+          expect(atRequest).toBe(atStart)
+          go()
+        }
+        await untilEvaluated(rig, jobId, atRequest)
+        expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
+        expect(rig.reads.filter((p) => p.endsWith('.mp4') || p.endsWith('.ass'))).toEqual([])
+        expect(rig.ff.commands).toHaveLength(0)
+        open()
+        await until(() => rig.ff.commands.length === 1, 'the merge')
+        rig.ff.commands[0].finish('mkv-bytes')
+        await rig.svc.settled(jobId)
+        expect(driveFiles(rig)).toEqual(
+          [`${TITLE}/${TITLE} - 01 [Studio].mkv`, `${TITLE}/${TITLE} - 02 [Studio].mkv`].sort()
+        )
+        expect(rig.reads.filter((p) => p.endsWith('.mp4') || p.endsWith('.ass'))).toEqual([])
+      } finally {
+        open()
+      }
+    })
+  }
 
   it('the post-copy guard: a merge that starts while the pair is copied leaves no pair and no entry, then the .mkv goes', async () => {
     rig = makePrefetchRig()

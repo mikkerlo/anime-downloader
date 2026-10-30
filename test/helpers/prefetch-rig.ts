@@ -88,6 +88,8 @@ export interface PrefetchRig {
   predicateReads: { n: number }
   /** Holds the first write of a drive file matching `match` until `go` resolves. */
   copyGate: { current: { match: RegExp; reached: () => void; go: Promise<void> } | null }
+  /** Holds every `mergeCompleted` call, after it is counted in `mergeCalls`, until `current` resolves. */
+  mergeGate: { current: Promise<void> | null }
   /** The drive's free bytes as `statfs` reports them; null for the real value. */
   driveFree: { bytes: number | null }
   /** The hot root's free bytes, likewise. */
@@ -185,6 +187,7 @@ export function makePrefetchRig(
   const order: string[] = []
   const videoEvents: number[] = []
   const mergeCalls = { n: 0 }
+  const mergeGate: PrefetchRig['mergeGate'] = { current: null }
   const ff = fakeFfmpeg()
 
   let offRelease: () => void = () => {}
@@ -315,8 +318,9 @@ export function makePrefetchRig(
       notify: () => {}
     })
     const real = dm.mergeCompleted.bind(dm)
-    dm.mergeCompleted = (...args) => {
+    dm.mergeCompleted = async (...args) => {
       mergeCalls.n++
+      await mergeGate.current
       return real(...args)
     }
     dm.onEpisodeComplete(ec.handleEpisodeComplete)
@@ -348,7 +352,8 @@ export function makePrefetchRig(
     enqueued,
     order,
     videoEvents,
-    mergeCalls
+    mergeCalls,
+    mergeGate
   })
   rig.dm = makeManager()
   rig.svc = env.svc
@@ -422,6 +427,7 @@ export function makePrefetchRig(
     await beforeRestart?.()
     videoEvents.length = 0
     mergeCalls.n = 0
+    mergeGate.current = null
     rig.dm = makeManager()
     rig.svc = env.restart(exportDeps())
     await rig.svc.init()
@@ -457,6 +463,28 @@ export async function untilPrefetch(
   await until(
     () => jobOf(rig, jobId).prefetch?.find((p) => p.key === key)?.state === state,
     `${key} → ${state}`,
+    ms
+  )
+}
+
+/**
+ * Waits until the job has started `k` evaluations since `from` (a `predicateReads`
+ * count), or its pre-fetched item has stopped waiting. The job evaluates one item
+ * at a time, so evaluation `from + k` starts only after `from + k - 1` has recorded
+ * its decision: with `k = 2`, the view shows a decision made after `from` was read.
+ */
+export async function untilEvaluated(
+  rig: PrefetchRig,
+  jobId: string,
+  from: number,
+  k = 2,
+  ms = 3000
+): Promise<void> {
+  await until(
+    () =>
+      rig.predicateReads.n >= from + k ||
+      !jobOf(rig, jobId).prefetch?.[0].state.startsWith('waiting-'),
+    `${k} evaluations after ${from}`,
     ms
   )
 }

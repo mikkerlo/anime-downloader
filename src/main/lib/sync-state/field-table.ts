@@ -3,14 +3,20 @@
 // S5 (#573) serializes the fields they cover. A change to a rule follows the
 // `SyncDoc` version rule (`stateMinor` / `stateVersion`). Pure.
 //
+// Rule 2's silent column was amended by #645 (a re-watch is carried) without a
+// version bump: the doc format is unchanged, and a pre-fix PC reading a carried
+// clock sees an equal value, keeps it, and still raises rule 2 on an unwatch.
+// A bump would make every pre-fix PC read-only for no gain to the data.
+//
 // "Changed" is a value difference from the base, never a clock difference.
 // Clocks only break the ties the table says "later `at` wins" (rules 1, 8, 9,
-// 10), and detect a re-watch (rule 2). With no base (`base === undefined`)
-// every rule degrades to S9's first-merge table: equal values are unchanged, a
-// value present on one side only is taken, `position` / membership / order go
-// to the later `at` (a tie to side A), `watched: true` wins, `episodes` takes
-// the max, differing `status` / `score` / `rewatches` conflict, and `dismissed`
-// is a union.
+// 10), and detect a re-watch (rule 2). A re-watch is the one clock-only change
+// the table carries: still `true`, its newer clock goes to the other side.
+// With no base (`base === undefined`) every rule degrades to S9's first-merge
+// table: equal values are unchanged, a value present on one side only is
+// taken, `position` / membership / order go to the later `at` (a tie to side
+// A), `watched: true` wins, `episodes` takes the max, differing `status` /
+// `score` / `rewatches` conflict, and `dismissed` is a union.
 
 import { laterClock } from './clock'
 
@@ -117,6 +123,14 @@ export function decideWatched(
     !!base && base.value && !!s && !s.value
   if ((unwatched(a) && rewatched(b)) || (unwatched(b) && rewatched(a))) {
     return { kind: 'conflict', reason: 'unwatched on one side, re-watched on the other' }
+  }
+  // A re-watch alone is still `true`; the other side takes its clock (#645).
+  if (base?.value && a?.value && b?.value) {
+    const ra = rewatched(a)
+    const rb = rewatched(b)
+    if (ra && rb) return { kind: 'merge', value: laterClock(a, b) }
+    if (ra) return { kind: 'take', from: 'a', value: a }
+    if (rb) return { kind: 'take', from: 'b', value: b }
   }
   // Both changed to different values is only reachable with no base.
   return decideClocked(base, a, b, (x, y) => ({ kind: 'merge', value: x.value ? x : y }))
@@ -363,7 +377,8 @@ export const FIELD_TABLE: readonly FieldRule[] = [
     source: 'watchProgress.watched',
     clockDecides: true,
     canConflict: true,
-    silent: 'A change on one side is applied, including an unwatch.',
+    silent:
+      "A change on one side is applied, including an unwatch. A re-watch (still `true`, `watched.at` newer than the base's) is applied too: the other side takes its clock.",
     conflict:
       'One side unwatched (true → false) while the other re-watched: still true, with a watched.at newer than the base.',
     decide: decideWatched

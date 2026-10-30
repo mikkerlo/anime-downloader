@@ -30,6 +30,8 @@ src/renderer/src/
                                 button that turns Work offline off (manual) or probes now (auto, "Retry")
       Sidebar.vue
       SidebarUpdateBanner.vue   Update prompt pinned above the profile chip (reads settings store updateStatus)
+      StartupNoticeBanner.vue   App.vue's top-of-content banner when config.json was restored or reset (#648);
+                                pulls getStartupNotice() on mount; Show file / Dismiss (renderer-local)
     shared-library/            Opening and playing a Shared Library (#578)
       OpenLibraryDialog.vue     "Open Shared Library…": pick, choose among several, identity check, attach
       IdentityWarning.vue       Someone else's library, or the no-account videos-only / claim choice

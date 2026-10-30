@@ -466,6 +466,8 @@ interface Api {
 
   // Updates
   appVersion: () => Promise<string>
+  /** Why this launch didn't start from the `config.json` it found, or null (#648). */
+  getStartupNotice: () => Promise<StartupNotice | null>
   updateCheck: () => Promise<void>
   updateDownload: () => Promise<void>
   updateInstall: () => void

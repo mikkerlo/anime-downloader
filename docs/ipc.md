@@ -139,6 +139,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `download:inject-chapters` | invoke | Manual per-anime: rewrite each merged MKV in place with OP/ED chapters (Intro/OP/Episode/ED/Outro) using the cached `skipDetections`. Triggers a fresh analysis if none exists. Returns `{ written, skipped, failed, total }` |
 | `chapter-inject:progress` | send | Per-episode progress for `download:inject-chapters` (`analyzing` / `writing` / `done`, current/total) |
 | `app:version` | invoke | Get app version from package.json |
+| `app:get-startup-notice` | invoke | `StartupNotice \| null`: whether this launch restored `config.json` from `config.backup.json` (`config-restored`, with `backupSavedAt`) or reset it to defaults (`config-reset`), and where the unreadable file was kept (`corruptPath`; absent on a `config-restored` that found no `config.json`) (#648). A pull, since the notice exists before any window |
 | `update:check` | invoke | Check GitHub for newer version via electron-updater |
 | `update:download` | invoke | Download available update |
 | `update:install` | invoke | Quit and install downloaded update |

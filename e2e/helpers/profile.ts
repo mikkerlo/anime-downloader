@@ -17,7 +17,9 @@
 // so it throws on Windows; an unseeded profile like cold-start's runs anywhere.
 
 import { _electron as electron, type ElectronApplication } from '@playwright/test'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -151,6 +153,45 @@ export async function launchApp(
   app.process().stdout?.on('data', watch)
   app.process().stderr?.on('data', watch)
   return { app, profile, downloads }
+}
+
+export interface ExitedApp {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+  readonly stderr: string
+}
+
+/**
+ * Runs the built app on `profile` for a launch that must exit before it opens
+ * a window (#648's fatal settings-file box), and returns how it exited.
+ * Playwright's launch can't report that, so this spawns the Electron binary
+ * directly, with the same muted, profile-bound arguments as `launchApp()`.
+ * Past `timeoutMs` the child is killed by its own PID and this rejects.
+ */
+export function runAppToExit(profile: Profile, timeoutMs = 30_000): Promise<ExitedApp> {
+  const args = ['--mute-audio', `--user-data-dir=${profile.userData}`]
+  if (process.env.CI) args.unshift('--no-sandbox')
+  const electronBinary = createRequire(__filename)('electron') as string
+  const child = spawn(electronBinary, [...args, APP_MAIN], {
+    env: { ...process.env, ...profile.env },
+    stdio: ['ignore', 'ignore', 'pipe']
+  })
+  let stderr = ''
+  child.stderr?.on('data', (buf: Buffer) => (stderr += String(buf)))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`the app was still running after ${timeoutMs} ms; stderr:\n${stderr}`))
+    }, timeoutMs)
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    child.on('exit', (code, signal) => {
+      clearTimeout(timer)
+      resolve({ code, signal, stderr })
+    })
+  })
 }
 
 /** Fails unless the app's `userData` is exactly the dir the profile seeded. */

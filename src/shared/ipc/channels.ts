@@ -18,6 +18,7 @@
 export const CHANNELS = {
   // App
   APP_VERSION: 'app:version',
+  APP_GET_STARTUP_NOTICE: 'app:get-startup-notice',
 
   // Updates
   UPDATE_CHECK: 'update:check',

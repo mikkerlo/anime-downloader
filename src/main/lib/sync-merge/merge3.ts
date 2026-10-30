@@ -26,7 +26,7 @@ import { mergeTitle, ruleFn, type FieldConflict, type MergeAcc, type MergeLogEnt
 
 export type { FieldConflict, MergeLogEntry } from './rules'
 
-const WATCHED_CLOCK = /^titles\.([^.]+)\.watch\.[^.]+\.watched$/
+const WATCHED_CLOCK = /^titles\.([^.]+)\.watch\..+\.watched$/
 
 export interface Merge3Options {
   now: number

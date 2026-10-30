@@ -153,6 +153,21 @@ describe('rule 2: a re-watch is a clock-only change the merge carries (#645)', (
     expect(m2.changesA).toEqual([])
     expect(m2.changesB).toEqual([])
   })
+  it('row 5, fractional episode: a future drive clock on "12.5" is written back once; the next merge is quiet', () => {
+    const ep = (w: SyncWatchEntry) => t({ watch: { '12.5': w } })
+    const P125 = 'titles.1.watch.12.5.watched'
+    const drive0 = ep(watch(true, NOW + 1e9, 0, 'pc-skew', 100))
+    const m1 = run(ep(watch(true, 100)), ep(watch(true, 100)), drive0)
+    expect(m1.changesA).toEqual([P125])
+    expect(m1.changesB).toEqual([P125])
+    const drive1 = m1.changesB.length > 0 ? m1.remote : drive0
+    const m2 = merge3(m1.nextBase, m1.result, drive1, FIELD_TABLE, {
+      now: NOW + 60_000,
+      scope: ['1']
+    })
+    expect(m2.changesA).toEqual([])
+    expect(m2.changesB).toEqual([])
+  })
   it('row 5: a clamped drive clock that A’s later re-watch already replaces is listed once', () => {
     const m = run(base, rewatch(NOW + 100_000, 'pc-a'), rewatch(NOW + 1e9, 'pc-skew'))
     expect(m.clamped.map((c) => [c.side, c.path])).toContainEqual(['b', P])

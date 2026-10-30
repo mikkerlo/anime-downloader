@@ -15,6 +15,7 @@ import {
   type Membership,
   type SkipContext
 } from '../sync-state/field-table'
+import { laterClock } from '../sync-state/clock'
 import { KNOWN_TITLE_FIELDS, RATE_FIELDS } from '../sync-state/project'
 
 export interface FieldConflict {
@@ -175,6 +176,11 @@ function mergeWatch(
       const p = `${path}.watched`
       if (!sameValue(w.a, a.watched) && !acc.changesA.includes(p)) acc.changesA.push(p)
       if (!sameValue(w.b, b.watched) && !acc.changesB.includes(p)) acc.changesB.push(p)
+    }
+    // With no base, the next base keeps the later clock: a newer clock on
+    // either side is then not read as a re-watch on the next merge (#645).
+    if (!base && wd.kind === 'unchanged' && a?.watched && b?.watched) {
+      w.base = laterClock(a.watched, b.watched)
     }
     const sideOf = (e: SyncWatchEntry | undefined) =>
       e ? { watched: e.watched.value, watchedAt: e.watchedAt } : undefined

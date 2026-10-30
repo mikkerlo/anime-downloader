@@ -141,6 +141,56 @@ describe('rule 2: a re-watch is a clock-only change the merge carries (#645)', (
     expect(m.remote.titles['1'].watch!['1'].watched.at).toBe(300)
     expect(m.changesB).toEqual([P])
   })
+  it('row 5: a future drive clock is clamped and written back once; the next merge is quiet', () => {
+    const drive0 = rewatch(NOW + 1e9, 'pc-skew')
+    const m1 = run(base, untouched, drive0)
+    expect(m1.changesB).toContain(P)
+    const drive1 = m1.changesB.length > 0 ? m1.remote : drive0
+    const m2 = merge3(m1.nextBase, m1.result, drive1, FIELD_TABLE, {
+      now: NOW + 60_000,
+      scope: ['1']
+    })
+    expect(m2.changesA).toEqual([])
+    expect(m2.changesB).toEqual([])
+  })
+  it('row 5: a clamped drive clock that A’s later re-watch already replaces is listed once', () => {
+    const m = run(base, rewatch(NOW + 100_000, 'pc-a'), rewatch(NOW + 1e9, 'pc-skew'))
+    expect(m.clamped.map((c) => [c.side, c.path])).toContainEqual(['b', P])
+    expect(m.remote.titles['1'].watch!['1'].watched.at).toBe(NOW + 100_000)
+    expect(m.changesB).toEqual([P])
+  })
+  it('row 5: a clamped drive clock held in a conflict is not written back', () => {
+    const m = run(base, unwatch(400), rewatch(NOW + 1e9, 'pc-skew'))
+    expect(m.conflicts.map((c) => c.fieldPath)).toEqual(['watch.1.watched'])
+    expect(m.changesB).toEqual([])
+  })
+  it('row 5, out of scope: a future drive clock on another title is never written back', () => {
+    const drive = doc({
+      '1': untouched.titles['1'],
+      '2': { watch: { '1': watch(true, NOW + 1e9, 0, 'pc-skew', 100) } }
+    })
+    const m1 = run(base, untouched, drive)
+    expect(m1.clamped.map((c) => c.path)).toContain('titles.2.watch.1.watched')
+    expect(m1.changesB).toEqual([])
+    const m2 = merge3(m1.nextBase, m1.result, drive, FIELD_TABLE, {
+      now: NOW + 60_000,
+      scope: ['1']
+    })
+    expect(m2.changesB).toEqual([])
+  })
+  it('row 6: no base, equal values, different clocks: unchanged, and the base keeps the later clock', () => {
+    const drive = rewatch(300, 'pc-other')
+    const m1 = run(null, untouched, drive)
+    expect(m1.changesA).toEqual([])
+    expect(m1.changesB).toEqual([])
+    expect(m1.nextBase.titles['1'].watch!['1'].watched.at).toBe(300)
+    const m2 = run(m1.nextBase, m1.result, drive)
+    expect(m2.changesA).toEqual([])
+    expect(m2.changesB).toEqual([])
+    const m3 = run(m1.nextBase, unwatch(400), drive)
+    expect(m3.conflicts).toEqual([])
+    expect(m3.remote.titles['1'].watch!['1'].watched.value).toBe(false)
+  })
   it.each([
     ['both unwatched with different clocks', t({ watch: { '1': watch(true, 100) } }), false],
     [

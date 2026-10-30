@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import { storeToRefs } from 'pinia';
 import { useLibraryStore, type SettingsTab } from '../../stores/library';
+import { useSyncStore } from '../../stores/sync';
 import GeneralTab from './GeneralTab.vue';
 import StorageTab from './StorageTab.vue';
 import ConnectorsTab from './ConnectorsTab.vue';
@@ -64,6 +66,8 @@ const TABS: TabDef[] = [
 // affordance, #244) wins over the default tab, and is consumed so a later
 // manual visit to Settings still opens on General.
 const libraryStore = useLibraryStore();
+// Held merge conflicts (#585): Storage holds the review sheet's entry point.
+const { conflictCount } = storeToRefs(useSyncStore());
 const activeTab = ref<TabName>(libraryStore.consumePendingSettingsTab() ?? 'general');
 const { savedVisible } = useSettingsAutosave();
 
@@ -120,6 +124,12 @@ const activeComponent = computed(() => {
             </svg>
             <span class="st-label">{{ t.label }}</span>
             <span v-if="t.badge" class="st-badge">{{ t.badge }}</span>
+            <span
+              v-if="t.id === 'storage' && conflictCount > 0"
+              class="tab-badge"
+              data-testid="settings-conflict-badge"
+              >{{ conflictCount }}</span
+            >
           </button>
         </nav>
 

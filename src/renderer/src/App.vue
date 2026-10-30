@@ -22,9 +22,13 @@ import HomeView from './components/views/HomeView.vue';
 import PlayerView from './components/views/PlayerView.vue';
 import OpenLibraryDialog from './components/shared-library/OpenLibraryDialog.vue';
 import DuplicatePrompt from './components/shared-library/DuplicatePrompt.vue';
+import SyncToast from './components/sync/SyncToast.vue';
+import ConflictReviewSheet from './components/sync/ConflictReviewSheet.vue';
+import SyncHistory from './components/sync/SyncHistory.vue';
 import PrepareOfflinePanel from './components/settings/PrepareOfflinePanel.vue';
 import { usePrepareOfflineStore } from './stores/prepare-offline';
 import { foundText, useSharedLibrariesStore } from './stores/shared-libraries';
+import { useSyncStore } from './stores/sync';
 import { formatBytes } from './utils';
 
 const libraryStore = useLibraryStore();
@@ -34,6 +38,9 @@ const shikimoriStore = useShikimoriStore();
 // Shared Libraries found on a newly mounted drive (#581): one toast per drive.
 const sharedLibraries = useSharedLibrariesStore();
 const { found: foundLibraries, openingFound } = storeToRefs(sharedLibraries);
+// The merge's toast, review sheet and history (#585), over any view.
+const syncStore = useSyncStore();
+const { reviewOpen, history: syncHistory } = storeToRefs(syncStore);
 const { panelOpen: prepareOfflinePanelOpen } = storeToRefs(usePrepareOfflineStore());
 
 function showFoundLibrary(): void {
@@ -262,6 +269,9 @@ onBeforeUnmount(() => {
     />
     <!-- A copy to this PC asks about an episode this PC already has (#579), over any view. -->
     <DuplicatePrompt />
+    <SyncToast :raised="!!cleanupToast || foundLibraries.length > 0" />
+    <ConflictReviewSheet v-if="reviewOpen" />
+    <SyncHistory v-if="syncHistory" />
     <!-- Prepare for offline (#592): opened from Settings or a missing-ffmpeg banner. -->
     <PrepareOfflinePanel v-if="prepareOfflinePanelOpen" />
     <div v-if="ffmpegDownloading || ffmpegError" class="ffmpeg-overlay">

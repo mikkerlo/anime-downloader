@@ -3,13 +3,16 @@
 // The review sheet, the toast and the history (#585): four columns with the
 // uninvolved parties greyed, the Shikimori-side row, "Apply all suggested",
 // the rewatch question, and a read-only history with no undo.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ConflictReviewSheet from '../../../src/renderer/src/components/sync/ConflictReviewSheet.vue'
 import SyncHistory from '../../../src/renderer/src/components/sync/SyncHistory.vue'
 import SyncToast from '../../../src/renderer/src/components/sync/SyncToast.vue'
 import { useSyncStore } from '../../../src/renderer/src/stores/sync'
+
+// A sheet left mounted keeps its window Escape listener, which would take a later test's Escape.
+enableAutoUnmount(afterEach)
 
 const LIB = 'lib-a'
 const party = (p: string): SyncConflictChoice => ({ kind: 'party', party: p })
@@ -211,6 +214,41 @@ describe('the review sheet', () => {
     const w = await mountSheet()
     expect(w.text()).not.toMatch(/undo/i)
     expect(w.text()).toContain('You can change any of these later from the title page')
+  })
+})
+
+describe('while Apply runs (review of #637)', () => {
+  it('Escape and a backdrop click keep the sheet open, so the result notes are shown', async () => {
+    held = [item('c1')]
+    let finish!: (r: SyncResolveResult) => void
+    stubApi({
+      syncResolve: vi.fn(() => new Promise<SyncResolveResult>((res) => (finish = res)))
+    })
+    const sync = useSyncStore()
+    sync.reviewOpen = true
+    const w = mount(ConflictReviewSheet, { attachTo: document.body })
+    await sync.loadConflicts()
+    await flushPromises()
+    await w.find('[data-testid="apply-suggested"]').trigger('click')
+    await flushPromises()
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await w.find('[data-testid="conflict-review-backdrop"]').trigger('click')
+    expect(sync.reviewOpen).toBe(true)
+
+    finish({
+      resolved: ['c1'],
+      failed: [],
+      notes: [{ id: 'c1', text: "Drive isn't connected. It gets this choice on its next sync." }]
+    })
+    await flushPromises()
+    expect(sync.reviewOpen).toBe(true)
+    expect(w.findAll('[data-testid="review-note"]').map((n) => n.text())).toEqual([
+      "Drive isn't connected. It gets this choice on its next sync."
+    ])
+    // Once it's done, Escape closes it as before.
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(sync.reviewOpen).toBe(false)
   })
 })
 

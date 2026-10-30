@@ -16,7 +16,12 @@ const sync = useSyncStore();
 function onKeydown(e: KeyboardEvent): void {
   if (e.key !== 'Escape') return;
   e.stopImmediatePropagation();
-  sync.closeReview();
+  closeUnlessBusy();
+}
+
+// While Apply runs, the sheet stays, so its result notes are seen (as the disabled Close).
+function closeUnlessBusy(): void {
+  if (!busy.value) sync.closeReview();
 }
 onMounted(() => window.addEventListener('keydown', onKeydown, true));
 onUnmounted(() => window.removeEventListener('keydown', onKeydown, true));
@@ -84,7 +89,7 @@ async function applyPicked(): Promise<void> {
     class="sl-backdrop"
     data-testid="conflict-review-backdrop"
     :style="{ zIndex: LAYER.reviewSheet }"
-    @click.self="sync.closeReview()"
+    @click.self="closeUnlessBusy()"
   >
     <div class="sl-modal sheet" data-testid="conflict-review-sheet">
       <div class="sl-title" data-testid="review-title">

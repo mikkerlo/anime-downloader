@@ -10,7 +10,10 @@ onMounted(async () => {
   notice.value = await window.api.getStartupNotice();
 });
 
-const fileName = computed(() => notice.value?.corruptPath.split(/[\\/]/).pop() ?? '');
+// A `config-restored` without `corruptPath` found no config.json at all.
+const corruptPath = computed(() => notice.value?.corruptPath);
+
+const fileName = computed(() => corruptPath.value?.split(/[\\/]/).pop() ?? '');
 
 const savedAt = computed(() =>
   notice.value?.kind === 'config-restored'
@@ -19,7 +22,7 @@ const savedAt = computed(() =>
 );
 
 function showFile(): void {
-  if (notice.value) void window.api.fileShowInFolder(notice.value.corruptPath);
+  if (corruptPath.value) void window.api.fileShowInFolder(corruptPath.value);
 }
 
 function dismiss(): void {
@@ -31,18 +34,21 @@ function dismiss(): void {
   <div v-if="notice" class="startup-notice" role="status" data-testid="startup-notice">
     <p class="startup-notice-text">
       <template v-if="notice.kind === 'config-restored'">
-        Anime DL couldn't read its settings file, so it loaded the copy saved when the app last
-        started ({{ savedAt }}). Changes since then were lost.
+        Anime DL couldn't {{ corruptPath ? 'read' : 'find' }} its settings file, so it loaded the
+        copy saved when the app last started ({{ savedAt }}). Changes since then were lost.
       </template>
       <template v-else>
         Anime DL couldn't read its settings file and started with default settings. You may need to
         sign in to Shikimori again and re-open your Shared Libraries.
       </template>
-      The unreadable file was kept as <span class="mono">{{ fileName }}</span
-      >.
+      <template v-if="corruptPath">
+        The unreadable file was kept as <span class="mono">{{ fileName }}</span
+        >.
+      </template>
     </p>
     <div class="startup-notice-actions">
       <button
+        v-if="corruptPath"
         type="button"
         class="startup-notice-btn"
         data-testid="startup-notice-show"

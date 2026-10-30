@@ -49,6 +49,19 @@ describe('StartupNoticeBanner (#648)', () => {
     expect(text).not.toContain('default settings')
   })
 
+  it('config-restored with no config.json found: says "find", names no file, offers no Show file', async () => {
+    const backupSavedAt = new Date(2026, 9, 30, 21, 15, 0).getTime()
+    const { wrapper } = await mountBanner({ kind: 'config-restored', backupSavedAt })
+    const text = wrapper.find('[data-testid="startup-notice"]').text()
+    expect(text).toContain(
+      "Anime DL couldn't find its settings file, so it loaded the copy saved when the app last started"
+    )
+    expect(text).toContain(`(${new Date(backupSavedAt).toLocaleString()})`)
+    expect(text).not.toContain('kept as')
+    expect(wrapper.find('[data-testid="startup-notice-show"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="startup-notice-dismiss"]').exists()).toBe(true)
+  })
+
   it('config-reset: says defaults were used and names the kept file', async () => {
     const { wrapper } = await mountBanner({
       kind: 'config-reset',

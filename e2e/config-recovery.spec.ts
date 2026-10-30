@@ -87,6 +87,28 @@ test('a truncated config.json opens the window, keeps the file, and says so', as
   }
 })
 
+test('a missing config.json next to a backup is restored from it, not reset', async () => {
+  const profile = makeProfile({ prefix: 'anime-dl-config-missing-' })
+  const backup = path.join(profile.userData, 'config.backup.json')
+  fs.writeFileSync(backup, SETTINGS, { mode: 0o600 })
+  fs.rmSync(path.join(profile.userData, 'config.json'))
+  let launched: LaunchedApp | undefined
+  try {
+    const opened = await open(profile)
+    launched = opened.launched
+    const { page } = opened
+
+    // `workOffline: true` came from the backup, not the defaults.
+    await expect(page.getByTestId('offline-pill')).toHaveText('Offline (manual)')
+    const banner = page.getByTestId('startup-notice')
+    await expect(banner).toContainText("Anime DL couldn't find its settings file")
+    expect(JSON.parse(fs.readFileSync(backup, 'utf-8')).workOffline).toBe(true)
+    expect(corruptFiles(profile)).toEqual([])
+  } finally {
+    await close(launched, profile)
+  }
+})
+
 test('a config.json the app cannot read at all exits 1 and names the file', async () => {
   const profile = makeProfile({ prefix: 'anime-dl-config-eisdir-' })
   const configPath = path.join(profile.userData, 'config.json')

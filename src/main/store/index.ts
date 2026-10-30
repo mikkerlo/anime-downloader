@@ -3,7 +3,16 @@ import type { StorageService } from './types'
 import { migrateWatchProgressV2 } from './migrate'
 import { ensureInstallId } from './sync-meta'
 import { timeSlowSync, SLOW_STORE_OP_MS } from '../lib/perf'
-import { isSyntaxError, parseConfig, recoverConfig, saveLastGood } from './config-recovery'
+import fs from 'node:fs'
+import path from 'node:path'
+import {
+  CONFIG_FILE,
+  isSyntaxError,
+  parseConfig,
+  recoverConfig,
+  recoverMissingConfig,
+  saveLastGood
+} from './config-recovery'
 
 export type { StorageService } from './types'
 export { PERSISTED_STORE_KEYS, type PersistedStoreKey } from './keys'
@@ -70,9 +79,14 @@ export function createStorageService<S extends Record<string, unknown>>(
     new Store<S>({ defaults, cwd: options.cwd, deserialize: parseConfig as (text: string) => S })
   // A `config.json` that doesn't parse is moved aside, never overwritten, and
   // the store opens from `config.backup.json` or the defaults (#648).
-  let store: Store<S>
+  // A missing one is restored from that backup, never started on defaults
+  // that the copy below would then write over the backup.
   let startupNotice: StartupNotice | null = null
   let keepBackup = false
+  if (!fs.existsSync(path.join(options.cwd, CONFIG_FILE))) {
+    ;({ notice: startupNotice, keepBackup } = recoverMissingConfig(options.cwd))
+  }
+  let store: Store<S>
   try {
     store = openStore()
   } catch (err) {

@@ -93,21 +93,44 @@ export function moveAside(file: string, now: Date = new Date()): string {
   return target
 }
 
+export interface Recovery {
+  notice: StartupNotice | null
+  /** A backup that couldn't be used is still in place: the caller must not overwrite it. */
+  keepBackup: boolean
+}
+
 /**
  * Called after `config.json` failed to parse. Moves it aside (or throws
  * `ConfigUnrecoverableError` having written nothing), then restores
- * `config.backup.json` when that parses. `keepBackup` is true when a backup
- * that couldn't be used is still in place, so the caller must not overwrite it.
+ * `config.backup.json` when that parses.
  */
-export function recoverConfig(dir: string): { notice: StartupNotice; keepBackup: boolean } {
+export function recoverConfig(dir: string): Recovery {
   const configPath = path.join(dir, CONFIG_FILE)
-  const backupPath = path.join(dir, BACKUP_FILE)
   let corruptPath: string
   try {
     corruptPath = moveAside(configPath)
   } catch (err) {
     throw new ConfigUnrecoverableError(configPath, err)
   }
+  return restoreFromBackup(dir, corruptPath)
+}
+
+/**
+ * Called when there is no `config.json`. A first launch has no backup either
+ * and gets no notice. Otherwise the file went missing (a crash inside
+ * `recoverConfig`, or the user moved it), and the backup is restored rather
+ * than overwritten with the defaults.
+ */
+export function recoverMissingConfig(dir: string): Recovery {
+  if (!fs.existsSync(path.join(dir, BACKUP_FILE))) return { notice: null, keepBackup: false }
+  return restoreFromBackup(dir, undefined)
+}
+
+function restoreFromBackup(dir: string, corruptPath: string | undefined): Recovery {
+  const configPath = path.join(dir, CONFIG_FILE)
+  const backupPath = path.join(dir, BACKUP_FILE)
+  const reset = (kept: string | undefined): StartupNotice | null =>
+    kept ? { kind: 'config-reset', corruptPath: kept } : null
 
   let backupSavedAt: number
   try {
@@ -115,25 +138,39 @@ export function recoverConfig(dir: string): { notice: StartupNotice; keepBackup:
     parseConfig(fs.readFileSync(backupPath, 'utf8'))
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { notice: { kind: 'config-reset', corruptPath }, keepBackup: false }
+      return { notice: reset(corruptPath), keepBackup: false }
     }
     if (isSyntaxError(err)) {
       try {
-        moveAside(backupPath)
-        return { notice: { kind: 'config-reset', corruptPath }, keepBackup: false }
+        const backupCorruptPath = moveAside(backupPath)
+        return { notice: reset(corruptPath ?? backupCorruptPath), keepBackup: false }
       } catch (moveErr) {
         console.error('[store] moving the unreadable config backup aside failed:', moveErr)
       }
     } else {
       console.error('[store] reading the config backup failed:', err)
     }
-    return { notice: { kind: 'config-reset', corruptPath }, keepBackup: true }
+    return { notice: reset(corruptPath), keepBackup: true }
   }
 
   try {
     copyAtomic(backupPath, configPath)
   } catch (err) {
+    // Put the unreadable file back, so nothing is changed and the next launch
+    // retries the restore instead of starting on defaults.
+    if (corruptPath) {
+      try {
+        fs.renameSync(corruptPath, configPath)
+      } catch (undoErr) {
+        console.error('[store] putting the unreadable config back failed:', undoErr)
+      }
+    }
     throw new ConfigUnrecoverableError(configPath, err)
   }
-  return { notice: { kind: 'config-restored', corruptPath, backupSavedAt }, keepBackup: false }
+  return {
+    notice: corruptPath
+      ? { kind: 'config-restored', corruptPath, backupSavedAt }
+      : { kind: 'config-restored', backupSavedAt },
+    keepBackup: false
+  }
 }

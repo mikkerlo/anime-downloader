@@ -151,6 +151,89 @@ describe('createStorageService — an unparseable config.json (#648)', () => {
     expect(parsesAsObject(backup())).toBe(true)
   })
 
+  it('the copy-back fails: the unreadable file is put back, the backup untouched, and the relaunch restores', () => {
+    const good = JSON.stringify({ alpha: 5, blob: { fromBackup: true } })
+    fs.writeFileSync(backup(), good)
+    fs.writeFileSync(tmp.cfg, TRUNCATED)
+    const copy = vi.spyOn(fs, 'copyFileSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('ENOSPC: no space left on device, copyfile'), {
+        code: 'ENOSPC'
+      })
+    })
+
+    let thrown: unknown
+    try {
+      create()
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(ConfigUnrecoverableError)
+    expect((thrown as ConfigUnrecoverableError).configPath).toBe(tmp.cfg)
+    expect(fs.readFileSync(tmp.cfg, 'utf8')).toBe(TRUNCATED)
+    expect(fs.readFileSync(backup(), 'utf8')).toBe(good)
+    expect(corruptFiles()).toEqual([])
+    expect(fs.readdirSync(tmp.dir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+
+    copy.mockRestore()
+    const svc = create()
+    expect(svc.get('alpha')).toBe(5)
+    expect(svc.startupNotice?.kind).toBe('config-restored')
+    expect(JSON.parse(fs.readFileSync(backup(), 'utf8'))).toEqual(JSON.parse(good))
+  })
+
+  it('no config.json next to a valid backup: restored with a notice, and the backup survives', () => {
+    fs.writeFileSync(backup(), JSON.stringify({ alpha: 5, blob: { fromBackup: true } }))
+    const savedAt = new Date('2026-01-02T03:04:05Z')
+    fs.utimesSync(backup(), savedAt, savedAt)
+    const recordedMtime = fs.statSync(backup()).mtimeMs
+    const svc = create()
+
+    expect(svc.get('alpha')).toBe(5)
+    expect(svc.get('blob')).toEqual({ fromBackup: true })
+    expect(svc.startupNotice).toEqual({ kind: 'config-restored', backupSavedAt: recordedMtime })
+    expect(JSON.parse(fs.readFileSync(backup(), 'utf8'))).toEqual({
+      alpha: 5,
+      blob: { fromBackup: true }
+    })
+    expect(corruptFiles()).toEqual([])
+  })
+
+  it('a crash between the move-aside and the copy-back: the next launch restores, the kept file untouched', () => {
+    // What `recoverConfig` leaves if the process dies after the rename.
+    const kept = path.join(tmp.dir, 'config.corrupt-20261031-120000.json')
+    fs.writeFileSync(kept, TRUNCATED)
+    fs.writeFileSync(backup(), JSON.stringify({ alpha: 5, blob: { fromBackup: true } }))
+    const svc = create()
+
+    expect(svc.get('alpha')).toBe(5)
+    expect(svc.startupNotice?.kind).toBe('config-restored')
+    expect(fs.readFileSync(kept, 'utf8')).toBe(TRUNCATED)
+    expect(corruptFiles()).toEqual([path.basename(kept)])
+    expect(JSON.parse(fs.readFileSync(backup(), 'utf8')).alpha).toBe(5)
+  })
+
+  it('no config.json and an unparseable backup: the backup is kept aside, defaults, config-reset', () => {
+    const badBackup = '{"alpha":2,"bl'
+    fs.writeFileSync(backup(), badBackup)
+    const svc = create()
+
+    expect(svc.get('alpha')).toBe(1)
+    const corrupt = corruptFiles()
+    expect(corrupt).toHaveLength(1)
+    expect(corrupt[0]).toMatch(/^config\.backup\.corrupt-\d{8}-\d{6}\.json$/)
+    const corruptPath = path.join(tmp.dir, corrupt[0])
+    expect(fs.readFileSync(corruptPath, 'utf8')).toBe(badBackup)
+    expect(svc.startupNotice).toEqual({ kind: 'config-reset', corruptPath })
+  })
+
+  it('a first launch (no config.json, no backup) shows no notice', () => {
+    const svc = create()
+    expect(svc.get('alpha')).toBe(1)
+    expect(svc.startupNotice).toBeNull()
+    expect(corruptFiles()).toEqual([])
+    expect(parsesAsObject(backup())).toBe(true)
+  })
+
   it('a corrupt backup that cannot be moved aside is left in place, not overwritten', () => {
     const badBackup = '{"alpha":2,"bl'
     fs.writeFileSync(backup(), badBackup)

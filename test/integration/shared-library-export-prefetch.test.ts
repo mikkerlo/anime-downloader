@@ -398,7 +398,7 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
     await until(() => !rig.dm.isMergeCycleActive(), 'the cycle to end')
     expect(rig.dm.getMergeStatus(12)).toBeNull()
     // Before the grace: still waiting, however many ticks pass.
-    await new Promise((r) => setTimeout(r, TICK_MS * 6))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
     rig.clock.t += MERGE_GRACE_MS
     await rig.svc.settled(jobId)
@@ -420,9 +420,9 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
     rig.env.presence.open = false
     expect(rig.dm.getMergeStatus(12)).toBeNull()
     rig.clock.t += 60_000
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     rig.clock.t += 60_000
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
     rig.env.presence.release.emit()
     await until(() => rig.ff.commands.length === 1, 'the resumed merge')
@@ -452,9 +452,9 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
     await until(() => rig.dm.isMergeCycleActive(), 'the queue cycle')
     expect(rig.dm.getMergeStatus(12)).toBeNull()
     rig.clock.t += 60_000
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     rig.clock.t += 60_000
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
     rig.ff.commands[0].finish('other')
     await blocker
@@ -560,7 +560,7 @@ describe('pre-fetch (#577) — readiness beyond the events', () => {
       // `onVideoDownloaded` fired with a path that isn't on disk yet.
       expect(rig.videoEvents).toContain(12)
       expect(fs.existsSync(hotFile(rig, '2', 'mp4'))).toBe(false)
-      await new Promise((r) => setTimeout(r, TICK_MS * 4))
+      await untilEvaluated(rig, jobId, rig.predicateReads.n)
       const job = jobOf(rig, jobId)
       expect(job.prefetch?.[0].state).toBe('waiting-merge')
       expect(job.failed).toEqual([])
@@ -701,7 +701,7 @@ describe("pre-fetch (#577) — 'pending'", () => {
     expect(rig.dm.getMergeStatus(12)).toBe('pending')
     expect(fs.existsSync(hotFile(rig, '2', 'mkv'))).toBe(false)
     await rig.svc.resume(jobId)
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
     rig.clock.t += MERGE_GRACE_MS
     await rig.svc.settled(jobId)
@@ -746,9 +746,9 @@ describe("pre-fetch (#577) — 'pending'", () => {
     rig.env.presence.open = false
     rig.ff.setProbe(async () => 60)
     rig.clock.t += 60_000
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     rig.clock.t += 60_000
-    await new Promise((r) => setTimeout(r, TICK_MS * 4))
+    await untilEvaluated(rig, jobId, rig.predicateReads.n)
     expect(jobOf(rig, jobId).prefetch?.[0].state).toBe('waiting-merge')
     rig.env.presence.release.emit()
     await until(() => rig.ff.commands.length === 1, 'the resumed merge')

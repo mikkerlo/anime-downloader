@@ -1552,3 +1552,96 @@ describe('a user edit of the same title during the leg (#628 manual run)', () =>
     expect(server.get(MAL)).toMatchObject({ episodes: 5, score: 8 })
   })
 })
+
+describe('a re-watch on a claim PC reaches the drive (#645)', () => {
+  const KEY = `${ID}:1`
+  const REWATCH = { at: T0 + 5000, origin: 'pc-b' }
+  type Row = ReturnType<typeof progressRow> & { watchedAt?: number }
+
+  const rows = (pc: Pc) => pc.store.get('watchProgress') as Record<string, Row>
+  const setRow = (pc: Pc, row: Row) => pc.store.set('watchProgress', { ...rows(pc), [KEY]: row })
+
+  /** S11's steps 1–2: A (owner, offline) syncs episode 1 watched at T0; B claims and re-watches it. */
+  async function rewatchOnB(moved: boolean) {
+    server.set(MAL, { episodes: 1, score: 6 }, T0)
+    const { root } = await makeLibrary()
+    const a = makePc({
+      installId: 'pc-a',
+      store: {
+        watchProgress: { [KEY]: progressRow(true, T0) },
+        shikimoriUserRates: [cacheEntry(MAL, ANIME, vals({ episodes: 1, score: 6 }), T0)]
+      }
+    })
+    a.offline.value = true
+    await a.attach(root)
+    await a.runner.runAll('attach')
+    a.store.set('attachedLibraries', {})
+
+    const b = makePc({ user: null, installId: 'pc-b' })
+    await b.attach(root, { claim: true })
+    await b.runner.runAll('attach')
+    // What a completing 'playback' save leaves (watch-progress.ipc.ts): still
+    // watched, `watchedAt` kept, the watched clock (and the position's, if it moved) stamped.
+    const row = rows(b)[KEY]
+    setRow(b, {
+      ...row,
+      ...(moved ? { position: 1430 } : {}),
+      updatedAt: REWATCH.at,
+      sync: { position: moved ? REWATCH : row.sync.position, watched: REWATCH }
+    })
+    const generation = await driveGeneration(root)
+    const rb = await b.runner.runAll('manual')
+    return { root, a, b, rb, generation: generation! }
+  }
+
+  it.each([
+    ['the clock only', false],
+    ['with the position moved too', true]
+  ])(
+    '%s: B writes the re-watch, and A’s later unwatch is a rule 2 conflict on A',
+    async (_n, moved) => {
+      const { root, a, generation } = await rewatchOnB(moved)
+      expect(await driveGeneration(root)).toBe(generation + 1)
+      expect((await driveDoc(root))!.titles![ID].watch!['1'].watched).toEqual({
+        value: true,
+        ...REWATCH
+      })
+
+      // A unwatches after its base (the SET_WATCHED row shape), then plugs the drive back in.
+      const row = rows(a)[KEY]
+      setRow(a, {
+        ...row,
+        watched: false,
+        watchedAt: undefined,
+        updatedAt: T0 + 6000,
+        sync: { ...row.sync, watched: { at: T0 + 6000, origin: 'pc-a' } }
+      })
+      await a.attach(root)
+      await a.runner.runAll('plug')
+      expect((await conflicts(a)).map((c) => c.fieldPath)).toEqual(['watch.1.watched'])
+      expect(rows(a)[KEY].watched).toBe(false)
+      expect((await driveDoc(root))!.titles![ID].watch!['1'].watched).toEqual({
+        value: true,
+        ...REWATCH
+      })
+    }
+  )
+
+  it('side effects: one update on each PC, A takes the clock and its updatedAt moves, no raise', async () => {
+    const { root, a, rb } = await rewatchOnB(false)
+    expect(rb.libraries[0].counts.applied).toBe(1)
+    await a.attach(root)
+    const ra = await a.runner.runAll('plug')
+    expect(ra.libraries[0].counts.applied).toBe(1)
+    const row = rows(a)[KEY]
+    expect(row.watched).toBe(true)
+    expect(row.sync.watched).toEqual(REWATCH)
+    expect(row.updatedAt).toBe(T0 + 5000)
+    expect(await conflicts(a)).toEqual([])
+    const log = await a.runner.syncLog.read(new Date(a.clock.t).toISOString().slice(0, 7))
+    const run = log.find((e) => e.kind === 'run' && e.runId === ra.runId)
+    expect(run).toMatchObject({ kind: 'run', raises: [] })
+    expect(queue(a)).toEqual([])
+    expect(await pending(a)).toEqual({})
+  })
+})

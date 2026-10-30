@@ -17,7 +17,7 @@ The active translation choice is persisted into `watchProgress[key].translationI
 
 ## Field clocks (#572)
 
-Watch state carries per-field clocks so another PC's copy can be merged with it three ways (epic #563). A clock is `{ at, origin }`: `at` is ms since the epoch, and `origin` is this install's `installId` (a `crypto.randomUUID()` written once, on the first boot that lacks it), `'shikimori'` for a value observed on the server, or `'legacy'` for one projected from a row written before clocks existed. Types live in `src/shared/types/sync.d.ts`; the store helpers in `src/main/store/sync-meta.ts`; the pure pieces in `src/main/lib/sync-state/` (`clock.ts`, `gc.ts`). Clocks never decide *whether* a field changed (a value difference from the merge base does); they break ties and detect a re-watch. A stamp is monotonic per field: after a backwards wall-clock step it lands at the replaced clock's `at + 1` (`advanceClock`), so a newer edit never carries an older clock.
+Watch state carries per-field clocks so another PC's copy can be merged with it three ways (epic #563). A clock is `{ at, origin }`: `at` is ms since the epoch, and `origin` is this install's `installId` (a `crypto.randomUUID()` written once, on the first boot that lacks it), `'shikimori'` for a value observed on the server, or `'legacy'` for one projected from a row written before clocks existed. Types live in `src/shared/types/sync.d.ts`; the store helpers in `src/main/store/sync-meta.ts`; the pure pieces in `src/main/lib/sync-state/` (`clock.ts`, `gc.ts`). Clocks never decide *whether* a field changed (a value difference from the merge base does); they break ties, and detect and carry a re-watch. A stamp is monotonic per field: after a backwards wall-clock step it lands at the replaced clock's `at + 1` (`advanceClock`), so a newer edit never carries an older clock.
 
 **`watchProgress[key].sync = { position?, watched? }`.** `watch-progress:save` takes a required seventh argument, `source: 'playback' | 'choice' | 'mark'` (the preload declares it non-optional, so TypeScript rejects a caller that omits it; main treats a missing one as non-stamping):
 - `'playback'` is `PlayerView`'s `saveProgress`, which returns early until `durationchange` has set `duration`, so it never runs before metadata. It is the only source that moves `sync.position`, and only on a real change: |Δposition| ≥ 5 s, a changed `translationId`, or the row's first `'playback'` save (no position clock yet).
@@ -65,12 +65,12 @@ Watch state carries per-field clocks so another PC's copy can be merged with it 
 - Rate changes go to `deps.applyRate` (S9's pending store, never only the cache). Without it they are reported `unapplied`.
 - Unknown fields at the doc and title level are kept in `syncMeta.unknown`, so the next projection writes them back.
 
-**The merge field table** (`field-table.ts`) is frozen by #572. S9 (#584) applies it as written, and S5 (#573) serializes the fields it covers. "Changed" means a value difference from the base. Clocks only break the ties marked "later `at`", and detect a re-watch. With no base, every rule reduces to S9's first-merge table.
+**The merge field table** (`field-table.ts`) is frozen by #572. S9 (#584) applies it as written, and S5 (#573) serializes the fields it covers. "Changed" means a value difference from the base. Clocks only break the ties marked "later `at`", detect a re-watch, and carry one: a re-watch is the one clock-only change the merge applies (#645). That amended rule 2's silent column without a `stateVersion` / `stateMinor` bump, because the doc format is unchanged and a pre-fix PC handles a carried clock correctly. With no base, every rule reduces to S9's first-merge table, and when both sides have an episode watched the next base keeps the later `watched` clock.
 
 | # | Field | Silent rule | Conflict (held for S10 #585) |
 |---|---|---|---|
 | 1 | `watch[ep].position` | A change on one side is applied. Both changed: the later `position.at` wins (a tie goes to the local side). Only `'playback'` saves move the clock. | never |
-| 2 | `watch[ep].watched` | A change on one side is applied, including an unwatch. | One side unwatched (true → false) while the other re-watched: it is still `true`, but its `watched.at` is newer than the base's. |
+| 2 | `watch[ep].watched` | A change on one side is applied, including an unwatch. A re-watch (still `true`, `watched.at` newer than the base's) is applied too: the other side takes its clock. | One side unwatched (true → false) while the other re-watched: it is still `true`, but its `watched.at` is newer than the base's. |
 | 3 | `watch[ep].watchedAt` | The earliest non-null of the sides where `watched` is true; null once the merge unwatches. | never |
 | 4 | `rate.episodes` | A change on one side is applied. Both changed to the same value: applied. Both rose: the max. | One lowered while the other rose. Both lowered, to different values. |
 | 5 | `rate.status` | A change on one side is applied. Both changed to the same value: applied. | Both changed, to different values. |
@@ -86,7 +86,7 @@ Global rules:
 - Only in-scope titles take part.
 - `watched` and `rate.episodes` merge independently, apart from owner decision 5 in S9.
 - A fractional `episodeInt` never maps to `rate.episodes`.
-- An imported `at` more than 120 s in the future is clamped to now. File mtimes are never a clock.
+- An imported `at` more than 120 s in the future is clamped to now. A clamped library `watched` clock of an in-scope title is written back clamped, so the next merge doesn't read it as a new re-watch. File mtimes are never a clock.
 - Auto-download subscriptions are not merged.
 
 **Rate clocks and discarded edits.** Rules 4–7 never decide on `at`, so a rate clock can't win a merge; it only feeds S10's suggestion and the log. A `syncMeta.rates` clock counts only while it records the value the projection sees (the cache, the owner's queue, S9's overlay). A queued edit that is later discarded (S0b's Discard on logout or from a parked bucket), or rejected by Shikimori, leaves its clock behind with a value Shikimori never received. Once the rate cache holds the server's value again, the clock no longer matches it and is ignored, and the field takes the Shikimori clock (`serverUpdatedAt`).

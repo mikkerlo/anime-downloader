@@ -274,6 +274,28 @@ describe('rule 2 — watched', () => {
     expect(decideWatched(base, f(false, 200), f(true, 150, 'pc-b')).kind).toBe('conflict')
     expect(decideWatched(base, f(true, 150), f(false, 200, 'pc-b')).kind).toBe('conflict')
   })
+  it('takes a re-watch on one side against an untouched true: the other side takes its clock (#645)', () => {
+    expect(decideWatched(base, f(true, 100), f(true, 300, 'pc-b'))).toEqual({
+      kind: 'take',
+      from: 'b',
+      value: f(true, 300, 'pc-b')
+    })
+    expect(decideWatched(base, f(true, 300), f(true, 100, 'pc-b'))).toEqual({
+      kind: 'take',
+      from: 'a',
+      value: f(true, 300)
+    })
+  })
+  it('merges a re-watch on both sides to the later clock, a tie to side A (#645)', () => {
+    expect(decideWatched(base, f(true, 250), f(true, 300, 'pc-b'))).toEqual({
+      kind: 'merge',
+      value: f(true, 300, 'pc-b')
+    })
+    expect(decideWatched(base, f(true, 300), f(true, 300, 'pc-b'))).toEqual({
+      kind: 'merge',
+      value: f(true, 300)
+    })
+  })
   it('applies a first watch from one side', () => {
     expect(decideWatched(f(false, 1), f(false, 1), f(true, 5, 'pc-b'))).toMatchObject({
       kind: 'take',

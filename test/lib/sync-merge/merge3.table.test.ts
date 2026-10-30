@@ -2,7 +2,12 @@
 // S4 (#572)'s frozen field table, through `merge3`.
 import { describe, it, expect } from 'vitest'
 import { merge3 } from '../../../src/main/lib/sync-merge/merge3'
-import { FIELD_TABLE, type FieldRule } from '../../../src/main/lib/sync-state/field-table'
+import {
+  FIELD_TABLE,
+  decideWatched,
+  type Decision,
+  type FieldRule
+} from '../../../src/main/lib/sync-state/field-table'
 import { F, doc, rate, watch } from '../../helpers/sync-merge'
 
 const NOW = 10_000_000
@@ -89,6 +94,153 @@ describe('rule 2: watch[ep].watched', () => {
     expect(m.result.titles['1'].watch!['1'].watched.value).toBe(true)
     expect(m.remote.titles['1'].watch!['1'].watched.value).toBe(false)
     expect(m.nextBase.titles['1'].watch!['1'].watched).toEqual(base.titles['1'].watch!['1'].watched)
+  })
+})
+
+describe('rule 2: a re-watch is a clock-only change the merge carries (#645)', () => {
+  const P = 'titles.1.watch.1.watched'
+  // A completed re-watch keeps `watchedAt` (watch-progress.ipc.ts), so it stays at 100.
+  const rewatch = (at: number, origin: string) =>
+    t({ watch: { '1': watch(true, at, 0, origin, 100) } })
+  const unwatch = (at: number) => t({ watch: { '1': watch(false, at, 0, 'pc-a', null) } })
+  const base = t({ watch: { '1': watch(true, 100) } })
+  const untouched = t({ watch: { '1': watch(true, 100) } })
+
+  it('row 1: re-watched on B only: A and the base take B’s clock', () => {
+    const m = run(base, untouched, rewatch(300, 'pc-b'))
+    expect(m.result.titles['1'].watch!['1'].watched).toEqual({
+      value: true,
+      at: 300,
+      origin: 'pc-b'
+    })
+    expect(m.nextBase.titles['1'].watch!['1'].watched.at).toBe(300)
+    expect(m.changesA).toEqual([P])
+    expect(m.changesB).toEqual([])
+  })
+  it('row 2: re-watched on A only: the drive takes A’s clock, a write', () => {
+    const m = run(base, rewatch(300, 'pc-a'), untouched)
+    expect(m.remote.titles['1'].watch!['1'].watched).toEqual({
+      value: true,
+      at: 300,
+      origin: 'pc-a'
+    })
+    expect(m.changesA).toEqual([])
+    expect(m.changesB).toEqual([P])
+  })
+  it('row 3: two PCs: the carried clock makes the other PC’s later unwatch a conflict', () => {
+    // PC B's merge (side A is B's re-watch, side B the untouched drive). The
+    // drive is written only when changesB is non-empty, as the runner does.
+    const mb = run(base, rewatch(300, 'pc-b'), untouched)
+    const drive = mb.changesB.length > 0 ? mb.remote : untouched
+    const ma = run(base, unwatch(400), drive)
+    expect(ma.conflicts.map((c) => c.fieldPath)).toEqual(['watch.1.watched'])
+  })
+  it('row 4: re-watched on both sides: the later clock, no conflict', () => {
+    const m = run(base, rewatch(300, 'pc-a'), rewatch(250, 'pc-b'))
+    expect(m.conflicts).toEqual([])
+    expect(m.remote.titles['1'].watch!['1'].watched.at).toBe(300)
+    expect(m.changesB).toEqual([P])
+  })
+  it('row 5: a future drive clock is clamped and written back once; the next merge is quiet', () => {
+    const drive0 = rewatch(NOW + 1e9, 'pc-skew')
+    const m1 = run(base, untouched, drive0)
+    expect(m1.changesB).toContain(P)
+    const drive1 = m1.changesB.length > 0 ? m1.remote : drive0
+    const m2 = merge3(m1.nextBase, m1.result, drive1, FIELD_TABLE, {
+      now: NOW + 60_000,
+      scope: ['1']
+    })
+    expect(m2.changesA).toEqual([])
+    expect(m2.changesB).toEqual([])
+  })
+  it('row 5, fractional episode: a future drive clock on "12.5" is written back once; the next merge is quiet', () => {
+    const ep = (w: SyncWatchEntry) => t({ watch: { '12.5': w } })
+    const P125 = 'titles.1.watch.12.5.watched'
+    const drive0 = ep(watch(true, NOW + 1e9, 0, 'pc-skew', 100))
+    const m1 = run(ep(watch(true, 100)), ep(watch(true, 100)), drive0)
+    expect(m1.changesA).toEqual([P125])
+    expect(m1.changesB).toEqual([P125])
+    const drive1 = m1.changesB.length > 0 ? m1.remote : drive0
+    const m2 = merge3(m1.nextBase, m1.result, drive1, FIELD_TABLE, {
+      now: NOW + 60_000,
+      scope: ['1']
+    })
+    expect(m2.changesA).toEqual([])
+    expect(m2.changesB).toEqual([])
+  })
+  it('row 5: a clamped drive clock that A’s later re-watch already replaces is listed once', () => {
+    const m = run(base, rewatch(NOW + 100_000, 'pc-a'), rewatch(NOW + 1e9, 'pc-skew'))
+    expect(m.clamped.map((c) => [c.side, c.path])).toContainEqual(['b', P])
+    expect(m.remote.titles['1'].watch!['1'].watched.at).toBe(NOW + 100_000)
+    expect(m.changesB).toEqual([P])
+  })
+  it('row 5: a clamped drive clock held in a conflict is not written back', () => {
+    const m = run(base, unwatch(400), rewatch(NOW + 1e9, 'pc-skew'))
+    expect(m.conflicts.map((c) => c.fieldPath)).toEqual(['watch.1.watched'])
+    expect(m.changesB).toEqual([])
+  })
+  it('row 5, out of scope: a future drive clock on another title is never written back', () => {
+    const drive = doc({
+      '1': untouched.titles['1'],
+      '2': { watch: { '1': watch(true, NOW + 1e9, 0, 'pc-skew', 100) } }
+    })
+    const m1 = run(base, untouched, drive)
+    expect(m1.clamped.map((c) => c.path)).toContain('titles.2.watch.1.watched')
+    expect(m1.changesB).toEqual([])
+    const m2 = merge3(m1.nextBase, m1.result, drive, FIELD_TABLE, {
+      now: NOW + 60_000,
+      scope: ['1']
+    })
+    expect(m2.changesB).toEqual([])
+  })
+  it('row 6: no base, equal values, different clocks: unchanged, and the base keeps the later clock', () => {
+    const drive = rewatch(300, 'pc-other')
+    const m1 = run(null, untouched, drive)
+    expect(m1.changesA).toEqual([])
+    expect(m1.changesB).toEqual([])
+    expect(m1.nextBase.titles['1'].watch!['1'].watched.at).toBe(300)
+    const m2 = run(m1.nextBase, m1.result, drive)
+    expect(m2.changesA).toEqual([])
+    expect(m2.changesB).toEqual([])
+    const m3 = run(m1.nextBase, unwatch(400), drive)
+    expect(m3.conflicts).toEqual([])
+    expect(m3.remote.titles['1'].watch!['1'].watched.value).toBe(false)
+  })
+  it.each([
+    ['both unwatched with different clocks', t({ watch: { '1': watch(true, 100) } }), false],
+    [
+      'both watched from false with different clocks',
+      t({ watch: { '1': watch(false, 100) } }),
+      true
+    ]
+  ])('%s: a value change only, so no clock-only change on either side', (_n, from, to) => {
+    const side = (at: number, origin: string) =>
+      t({ watch: { '1': watch(to, at, 0, origin, to ? 100 : null) } })
+    const m = run(from, side(200, 'pc-a'), side(300, 'pc-b'))
+    expect(m.conflicts).toEqual([])
+    expect(m.changesA).toEqual([])
+    expect(m.changesB).toEqual([])
+  })
+  it('a pre-fix PC (main’s rule 2) keeps a carried drive clock when it writes', () => {
+    // Main's (e005812) `decideWatched` differs from today's only where base, A
+    // and B are all `true`: no conflict is possible, values are equal, so
+    // `decideClocked` returns `unchanged`. Everywhere else the two agree.
+    const preFix = (
+      b0: SyncField<boolean> | undefined,
+      a: SyncField<boolean> | undefined,
+      b: SyncField<boolean> | undefined
+    ): Decision<SyncField<boolean>> =>
+      b0?.value && a?.value && b?.value ? { kind: 'unchanged' } : decideWatched(b0, a, b)
+    const table = FIELD_TABLE.map((r) =>
+      r.rule === 2 ? { ...r, decide: preFix as FieldRule['decide'] } : r
+    )
+    const m = run(base, untouched, rewatch(300, 'pc-b'), table)
+    expect(m.remote.titles['1'].watch!['1'].watched).toEqual({
+      value: true,
+      at: 300,
+      origin: 'pc-b'
+    })
+    expect(m.changesB).toEqual([])
   })
 })
 

@@ -4,14 +4,13 @@
 // isolated copy, and writes coalesce into one debounced disk write per
 // PERSIST_DEBOUNCE_MS window (issue #204 — a synchronous full-file write per
 // `set` stalled playback every watch-progress save). Runs against the REAL
-// electron-store in a temp dir (via the test-only `cwd` injection — with an
-// explicit cwd, electron-store never consults `electron.app`).
+// electron-store in a temp dir (via the `cwd` option — with an explicit cwd,
+// electron-store never consults `electron.app`).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
 import Store from 'electron-store'
 import { createStorageService, PERSIST_DEBOUNCE_MS } from '../../src/main/store'
+import { useTempStoreDir } from '../helpers/temp-store-dir'
 
 /**
  * Counts disk persists. The service writes the file by assigning the `store`
@@ -32,29 +31,25 @@ const DEFAULTS = {
 }
 
 describe('createStorageService — in-memory snapshot over electron-store', () => {
-  let dir: string
-  let cfg: string
+  const tmp = useTempStoreDir()
 
   beforeEach(() => {
     vi.useFakeTimers()
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'storage-service-test-'))
-    cfg = path.join(dir, 'config.json')
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
     vi.useRealTimers()
-    fs.rmSync(dir, { recursive: true, force: true })
   })
 
   function create(options?: {
     writeThroughKeys?: readonly (keyof typeof DEFAULTS)[]
   }): ReturnType<typeof createStorageService<typeof DEFAULTS>> {
-    return createStorageService(DEFAULTS, { cwd: dir, ...options })
+    return createStorageService(DEFAULTS, { cwd: tmp.dir, ...options })
   }
 
   function readDisk(): Record<string, unknown> {
-    return JSON.parse(fs.readFileSync(cfg, 'utf8'))
+    return JSON.parse(fs.readFileSync(tmp.cfg, 'utf8'))
   }
 
   it('serves defaults from the startup snapshot', () => {
@@ -169,7 +164,7 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
     // the snapshot is authoritative and gets never re-parse the file.
     const svc = create()
     svc.set('alpha', 5)
-    fs.writeFileSync(cfg, JSON.stringify({ alpha: 777 }))
+    fs.writeFileSync(tmp.cfg, JSON.stringify({ alpha: 777 }))
     expect(svc.get('alpha')).toBe(5)
   })
 

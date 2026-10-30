@@ -3,6 +3,7 @@ import type { StorageService } from './types'
 import { migrateWatchProgressV2 } from './migrate'
 import { ensureInstallId } from './sync-meta'
 import { timeSlowSync, SLOW_STORE_OP_MS } from '../lib/perf'
+import { isSyntaxError, parseConfig, recoverConfig, saveLastGood } from './config-recovery'
 
 export type { StorageService } from './types'
 export { PERSISTED_STORE_KEYS, type PersistedStoreKey } from './keys'
@@ -26,6 +27,8 @@ export interface MainStorageService<S extends Record<string, unknown>> extends S
   ensureInstallId(): string
   /** Persists any writes still waiting on the coalescing timer. Wire into `before-quit`. */
   flush(): void
+  /** Set when `config.json` didn't parse and was restored from the backup or reset (#648). */
+  readonly startupNotice: StartupNotice | null
 }
 
 /**
@@ -56,15 +59,29 @@ export interface MainStorageService<S extends Record<string, unknown>> extends S
  */
 export function createStorageService<S extends Record<string, unknown>>(
   defaults: S,
-  options?: {
-    /** Test-only injection: config-dir override so unit tests never touch the real store file. */
-    cwd?: string
+  options: {
+    /** The directory holding `config.json` (`app.getPath('userData')` in the app). */
+    cwd: string
     /** Top-level keys persisted synchronously on every write instead of debounced. */
     writeThroughKeys?: readonly (keyof S & string)[]
   }
 ): MainStorageService<S> {
-  const store = new Store<S>({ defaults, cwd: options?.cwd })
-  const writeThrough = new Set<string>(options?.writeThroughKeys ?? [])
+  const openStore = (): Store<S> =>
+    new Store<S>({ defaults, cwd: options.cwd, deserialize: parseConfig as (text: string) => S })
+  // A `config.json` that doesn't parse is moved aside, never overwritten, and
+  // the store opens from `config.backup.json` or the defaults (#648).
+  let store: Store<S>
+  let startupNotice: StartupNotice | null = null
+  let keepBackup = false
+  try {
+    store = openStore()
+  } catch (err) {
+    if (!isSyntaxError(err)) throw err
+    ;({ notice: startupNotice, keepBackup } = recoverConfig(options.cwd))
+    store = openStore()
+  }
+  if (!keepBackup) saveLastGood(options.cwd)
+  const writeThrough = new Set<string>(options.writeThroughKeys ?? [])
   // One full read+parse. The constructor already merged `defaults` into the
   // file, so the snapshot is complete.
   const snapshot: Record<string, unknown> = { ...(store.store as Record<string, unknown>) }
@@ -173,7 +190,8 @@ export function createStorageService<S extends Record<string, unknown>>(
       if (dirty) persistNow()
     },
     migrateWatchProgressV2: () => migrateWatchProgressV2(svc),
-    ensureInstallId: () => ensureInstallId(svc)
+    ensureInstallId: () => ensureInstallId(svc),
+    startupNotice
   }
   return svc
 }

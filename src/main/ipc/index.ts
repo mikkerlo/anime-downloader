@@ -63,6 +63,8 @@ export type { FileCheckResult }
  */
 export interface AppDeps {
   store: StorageService
+  /** Why this launch didn't start from the `config.json` it found, or null (#648). */
+  startupNotice: StartupNotice | null
   smotretApi: SmotretApi
   animeCacheService: AnimeCacheService
   coldStorageService: ColdStorageService

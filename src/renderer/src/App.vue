@@ -8,6 +8,7 @@ import { useShikimoriStore } from './stores/shikimori';
 import { useKeyboardShortcuts, type ShortcutAction } from './composables/keyboard-shortcuts';
 import Sidebar from './components/shared/Sidebar.vue';
 import CleanupModal from './components/shared/CleanupModal.vue';
+import StartupNoticeBanner from './components/shared/StartupNoticeBanner.vue';
 import SearchView from './components/views/SearchView.vue';
 import LibraryView from './components/views/LibraryView.vue';
 import SettingsView from './components/views/SettingsView.vue';
@@ -170,23 +171,29 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <Sidebar />
-    <AnimeDetailView
-      v-if="activeAnimeId"
-      :key="activeAnimeId"
-      :anime-id="activeAnimeId"
-      :initial-prefs="animePrefs[activeAnimeId]"
-      :focus-episode-int="activeFocusEpisodeInt"
-    />
-    <HomeView v-show="currentView === 'home' && !activeAnimeId" />
-    <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" />
-    <LibraryView v-if="currentView === 'library' && !activeAnimeId" />
-    <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" />
-    <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" />
-    <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" />
-    <RecommendationsView v-if="currentView === 'recommendations' && !activeAnimeId" />
-    <SettingsView v-if="currentView === 'settings'" />
-    <DownloadsView v-if="currentView === 'downloads'" />
-    <WatchTogetherView v-if="currentView === 'watch-together'" />
+    <div class="app-main">
+      <!-- Why this launch didn't start from its config.json (#648); above every view. -->
+      <StartupNoticeBanner />
+      <div class="app-views">
+        <AnimeDetailView
+          v-if="activeAnimeId"
+          :key="activeAnimeId"
+          :anime-id="activeAnimeId"
+          :initial-prefs="animePrefs[activeAnimeId]"
+          :focus-episode-int="activeFocusEpisodeInt"
+        />
+        <HomeView v-show="currentView === 'home' && !activeAnimeId" />
+        <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" />
+        <LibraryView v-if="currentView === 'library' && !activeAnimeId" />
+        <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" />
+        <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" />
+        <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" />
+        <RecommendationsView v-if="currentView === 'recommendations' && !activeAnimeId" />
+        <SettingsView v-if="currentView === 'settings'" />
+        <DownloadsView v-if="currentView === 'downloads'" />
+        <WatchTogetherView v-if="currentView === 'watch-together'" />
+      </div>
+    </div>
     <PlayerView
       v-if="playerState"
       :file-path="playerState.filePath"
@@ -298,6 +305,20 @@ onBeforeUnmount(() => {
 /* Base reset, body, scrollbar, and `.app` now live in assets/theme.css
    (the shared token foundation, #161). What stays here is App.vue-local
    chrome — the ffmpeg first-launch overlay and the cleanup toast. */
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-views {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .placeholder {
   flex: 1;
   display: flex;

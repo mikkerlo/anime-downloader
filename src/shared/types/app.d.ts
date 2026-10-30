@@ -9,3 +9,8 @@ interface UpdateStatus {
   /** Portable build: update can't self-install, "download" opens the release page. */
   manual?: boolean
 }
+
+/** Why this launch didn't start from the `config.json` it found (#648). */
+type StartupNotice =
+  | { kind: 'config-restored'; corruptPath: string; backupSavedAt: number }
+  | { kind: 'config-reset'; corruptPath: string }

@@ -475,10 +475,10 @@ module pulls that module into the program, and without the globals every
 `scripts/` is deliberately outside the project. Those are plain `.mjs` CI
 scripts: checking them would mean either `allowJs` or hand-written `.d.mts`
 siblings that nothing verifies against the `.mjs` they describe, which is a
-maintenance trap rather than a check. The seam shows in exactly one place —
-`test/check-version-not-lower.test.ts` imports its subject through a
-`@ts-expect-error` on the module specifier (where `TS7016` is reported, not on
-the `import` keyword).
+maintenance trap rather than a check. The seam shows in two places —
+`test/check-version-not-lower.test.ts` and `test/check-lockfile-complete.test.ts`
+import their subjects through a `@ts-expect-error` on the module specifier
+(where `TS7016` is reported, not on the `import` keyword).
 
 The `--composite false` asymmetry is deliberate: `typecheck:node` and
 `typecheck:web` pass the flag, `typecheck:test` does not, because
@@ -508,6 +508,20 @@ is numeric per component, not lexical, and the script splits into a pure
 the four throwaway branches the alternative would need, and the 9-to-10 boundary
 gets a real assertion rather than a case nobody constructs. Why the ordering
 matters at all is in `docs/build.md`, "Version numbers and merge order".
+
+## Lockfile-completeness gate
+
+`npm run check:lockfile-complete` (`scripts/check-lockfile-complete.mjs`, in the
+CI `quality` job right after the version gate and before `npm ci`) fails when a
+`dependencies` / `optionalDependencies` / required-peer edge in
+`package-lock.json`, or a root `devDependencies` edge, resolves to no entry
+through the `node_modules` ancestry. The missing optional edge is the case that
+matters: npm 10 accepts it and npm ≥ 11.6.2 rejects it in `npm ci`.
+`test/check-lockfile-complete.test.ts` runs the walk on the repo's own lockfile
+and on fixtures for each edge kind, the ancestry (scoped packages included, and
+a cousin that a suffix match would wrongly accept) and peer optionality. It also
+asserts the `quality` step order. Why and how to refresh the lockfile is in
+`docs/build.md`, "The lockfile across npm 10 and npm 11".
 
 ## Line-citation gate
 

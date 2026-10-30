@@ -188,6 +188,10 @@ jobs:
       - name: Check the version is not lower than the base branch
         run: npm run check:version-not-lower
 
+      # npm >= 11.6.2 rejects a lockfile with an optional edge that resolves to
+      # nothing, and the npm 10 `npm ci` below accepts it (#649).
+      - run: npm run check:lockfile-complete
+
       - run: npm ci
 
       - run: npm run typecheck

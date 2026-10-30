@@ -4,7 +4,7 @@
 // PATH, so without it the first launch fails `assertNoDownloads()`).
 
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '..')
@@ -61,6 +61,56 @@ describe('shared-library-e2e workflow', () => {
       '.github/workflows/shared-library-e2e.yml'
     ]) {
       expect(paths).toContain(`- '${p}'`)
+    }
+  })
+
+  it("lists the code behind the round trip's outcomes in its paths filter (review of #647)", () => {
+    // A PR breaking one of these would otherwise be caught only by the nightly,
+    // after it merged: the drive and the merge; the watched rule and its clock
+    // stamp; the decision 5 raise and the drain; the offline edge, the API-base
+    // seam and the wiring; the UI the spec clicks.
+    const paths = yml.slice(yml.indexOf('    paths:'), yml.indexOf('permissions:'))
+    for (const p of [
+      'src/main/lib/shared-library/**',
+      'src/main/lib/sync-merge/**',
+      'src/main/lib/sync-state/**',
+      'src/main/services/attached-library/**',
+      'src/main/services/shared-library-export/**',
+      'src/main/services/sync-runner/**',
+      'src/main/services/shikimori-sync/**',
+      'src/main/services/offline/**',
+      'src/main/ipc/shared-library.ipc.ts',
+      'src/main/ipc/watch-progress.ipc.ts',
+      'src/main/ipc/shikimori.ipc.ts',
+      'src/main/ipc/library.ipc.ts',
+      'src/main/lib/shikimori-rate.ts',
+      'src/main/lib/shikimori-queue.ts',
+      'src/main/lib/shikimori-rate-cache.ts',
+      'src/main/lib/api-bases.ts',
+      'src/main/store/sync-meta.ts',
+      'src/main/index.ts',
+      'src/preload/index.ts',
+      'src/shared/ipc/channels.ts',
+      'src/renderer/src/components/shared-library/**',
+      'src/renderer/src/components/sync/**',
+      'src/renderer/src/components/views/PlayerView.vue',
+      'src/renderer/src/components/detail/ShikimoriPanel.vue',
+      'src/renderer/src/components/detail/EpisodeRow.vue',
+      'src/renderer/src/composables/use-episode-downloads.ts',
+      'src/renderer/src/composables/use-play-from-drive.ts',
+      'src/renderer/src/stores/shared-libraries.ts',
+      'src/renderer/src/stores/sync.ts',
+      'src/renderer/src/stores/export.ts'
+    ]) {
+      expect(paths, p).toContain(`- '${p}'`)
+    }
+  })
+
+  it('lists only paths that exist', () => {
+    const paths = yml.slice(yml.indexOf('    paths:'), yml.indexOf('permissions:'))
+    for (const m of paths.matchAll(/- '([^']+)'/g)) {
+      const p = m[1].replace(/\/\*\*$/, '')
+      expect(existsSync(join(ROOT, p)), p).toBe(true)
     }
   })
 })

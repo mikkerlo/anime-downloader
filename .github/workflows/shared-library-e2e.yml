@@ -10,7 +10,11 @@ name: Shared Library e2e
 #
 # Linux only: the per-OS checks (FAT32 / exFAT / NTFS, macOS, Windows) are the
 # manual matrix in #587. Runs nightly, on dispatch, and on PRs that touch the
-# Shared Library, the merge, the profile helper or the rig.
+# code behind the round trip: the Shared Library, the merge, the watched rule
+# and its clock stamp, the decision 5 raise and the Shikimori drain, the
+# offline edge, the API-base seam, the wiring, the UI the spec clicks, the
+# profile helper or the rig. `test/shared-library-e2e-workflow.test.ts` pins
+# the list.
 
 on:
   schedule:
@@ -26,9 +30,29 @@ on:
       - 'src/main/services/shared-library-export/**'
       - 'src/main/services/sync-runner/**'
       - 'src/main/services/shikimori-sync/**'
+      - 'src/main/services/offline/**'
       - 'src/main/ipc/shared-library.ipc.ts'
+      - 'src/main/ipc/watch-progress.ipc.ts'
+      - 'src/main/ipc/shikimori.ipc.ts'
+      - 'src/main/ipc/library.ipc.ts'
+      - 'src/main/lib/shikimori-rate.ts'
+      - 'src/main/lib/shikimori-queue.ts'
+      - 'src/main/lib/shikimori-rate-cache.ts'
+      - 'src/main/lib/api-bases.ts'
+      - 'src/main/store/sync-meta.ts'
+      - 'src/main/index.ts'
+      - 'src/preload/index.ts'
+      - 'src/shared/ipc/channels.ts'
       - 'src/renderer/src/components/shared-library/**'
       - 'src/renderer/src/components/sync/**'
+      - 'src/renderer/src/components/views/PlayerView.vue'
+      - 'src/renderer/src/components/detail/ShikimoriPanel.vue'
+      - 'src/renderer/src/components/detail/EpisodeRow.vue'
+      - 'src/renderer/src/composables/use-episode-downloads.ts'
+      - 'src/renderer/src/composables/use-play-from-drive.ts'
+      - 'src/renderer/src/stores/shared-libraries.ts'
+      - 'src/renderer/src/stores/sync.ts'
+      - 'src/renderer/src/stores/export.ts'
       - 'e2e-shared-library/**'
       - 'e2e/helpers/profile.ts'
       - 'playwright.shared-library.config.ts'

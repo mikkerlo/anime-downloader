@@ -1412,3 +1412,48 @@ logs every event `tick()` hands out, which is what the file's model of
 mount), cleared by the first delivered `play` or `pause`. The pre-start cases
 (a switch before the first autostart, solo and in a live room) pin that the
 disarm leaves a solo autostart alone and still disarms inside a session.
+
+## Shared Library two-instance suite
+
+```bash
+npm run test:e2e:shared-library  # two built instances share one drive; run `npm run build` first
+```
+
+#587 runs the Shared Library story end to end on two built app instances:
+export on PC A, open on PC B offline, watch there, bring the drive back,
+merge on A, Shikimori ends up right. The scenario and its assertions are in
+[Shared Library › Tests](./shared-library.md#tests). Like Tier 2 above, it is
+a separate top-level directory (`e2e-shared-library/`) with its own config
+(`playwright.shared-library.config.ts`), so `npm run test:e2e` never collects
+it; `test/shared-library-e2e-workflow.test.ts` pins that, the npm script's
+`xvfb-run -a`, and the workflow's step order and `paths:` filter.
+
+- **Launches.** Each instance gets its own profile from
+  `e2e/helpers/profile.ts` (`makeProfile`, `launchApp`, `assertUserData`,
+  `assertNoDownloads`), muted, unthrottled and unfocused under `xvfb-run -a`,
+  and is closed by its recorded pid (`helpers/duo.ts`).
+- **No network.** Shikimori and smotret are one local stub
+  (`helpers/stub-servers.ts`) behind `ANIME_DL_SHIKIMORI_ORIGIN` and
+  `ANIME_DL_SMOTRET_API_BASE`; both profiles set `prefetchNextEpisode: 'off'`.
+  The stub keeps one rate row per MAL id, so the spec asserts Shikimori's
+  final rate rather than the sequence of requests.
+- **The drive** is a temp folder renamed in and out of A's mount parent
+  (`ANIME_DL_MOUNT_PARENTS`), and a window-focus event asks the poller for a
+  tick.
+- **Watching to the end.** The player marks an episode watched at 80% of its
+  duration after 180 s of playback, counted from `Date.now()` deltas between
+  `timeupdate`s (`PlayerView.vue`). `test-pattern.mp4` is 1 s long, so the spec
+  builds 45 s clips with ffmpeg and runs B's renderer `Date.now()` six times
+  faster while it plays (`speedUpClock`). Main's clock, which stamps every
+  field clock, is untouched.
+- **Generations.** Around each merge it triggers, the spec waits for
+  `sync:get-status` to be idle, reads `state.json`'s `generation`, triggers,
+  waits again, and asserts exactly +1. Runs it doesn't trigger finish before
+  the baseline is read.
+- **The store** reaches `config.json` on a 500 ms coalescing timer, so reads
+  of a profile's store after an action are polled.
+
+CI runs it in `.github/workflows/shared-library-e2e.yml` (Linux only; the
+per-OS checks are #587's manual matrix), after `scripts/ci-install-ffmpeg.sh`
+and `scripts/ci-electron-libs.sh`: the profile helper links ffmpeg from
+`PATH`, and the spec builds its clips with it.

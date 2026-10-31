@@ -78,6 +78,12 @@ Anime DL is more than a downloader — it has a built-in player with MKV streami
 - **Hot/cold storage** with automatic move of watched episodes.
 - **Auto-update** via `electron-updater`.
 
+### 💾 Shared Libraries
+
+- **Take your anime to another PC** on a USB stick or external drive: export titles to a Shared Library, plug it in elsewhere, and play straight from the drive, even on a PC that has never been online. The folder stays readable with VLC and no app.
+- **Bring your progress home** — export *With metadata* and the drive carries your watch state too; when it comes back, the app merges what was watched on the other PC and updates Shikimori. Real conflicts wait for your choice in a review sheet; everything else applies on its own.
+- **Copy to this PC**, **Prepare for offline** (ffmpeg, metadata and integrity checks before a trip), and automatic drive detection. ffmpeg isn't bundled: each PC downloads it once while online. See [docs/shared-library.md](docs/shared-library.md) for the per-OS limits (FAT32's 4 GB, NTFS on macOS, and more).
+
 ## Screenshots
 
 <div align="center">

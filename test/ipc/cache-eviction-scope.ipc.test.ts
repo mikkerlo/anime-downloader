@@ -233,7 +233,7 @@ describe('downloaded-anime-delete', () => {
   })
 
   // An unremovable file stands in for one the player holds open on Windows.
-  it.skipIf(process.getuid?.() === 0)(
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a folder left on disk keeps its entries, so the export tree still finds it',
     async () => {
       const h = harness('downloaded')

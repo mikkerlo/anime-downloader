@@ -341,6 +341,8 @@ const api = {
     ipcRenderer.invoke(CHANNELS.PLAYER_STREAM_START, sessionId) as Promise<void>,
   playerStreamAck: (sessionId: string, bytes: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_STREAM_ACK, sessionId, bytes) as Promise<void>,
+  playerDiagReport: (line: string) =>
+    ipcRenderer.invoke(CHANNELS.PLAYER_DIAG_REPORT, line) as Promise<void>,
   playerStreamSeek: (sessionId: string, seekSeconds: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_STREAM_SEEK, sessionId, seekSeconds) as Promise<
       { ok: true; generation: number; timestampOffset: number } | { error: string }

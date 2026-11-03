@@ -1,5 +1,46 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useMsePlayer } from '../../../src/renderer/src/composables/use-mse-player'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+import { safeEvictEnd, useMsePlayer } from '../../../src/renderer/src/composables/use-mse-player'
+import {
+  NON_SYNC,
+  SYNC,
+  concat,
+  fragment,
+  initSegment,
+  topLevelBoxes
+} from '../../helpers/fmp4-boxes'
+
+// Hand-built fMP4 for the keyframe tracker the evictions read (#653): a video
+// track at 16 kHz with 24 fps frames, flagged the way ffmpeg's mux flags them.
+const FMP4_TS = 16000
+const FMP4_FRAME = 667
+const fmp4Init = (): Uint8Array =>
+  initSegment([
+    { id: 1, handler: 'vide', timescale: FMP4_TS },
+    { id: 2, handler: 'soun', timescale: 48000 }
+  ])
+const videoFragment = (seconds: number, keyframe: boolean): Uint8Array =>
+  fragment([
+    {
+      trackId: 1,
+      tfdt: Math.round(seconds * FMP4_TS),
+      tfhdFlags: NON_SYNC,
+      ...(keyframe ? { firstSampleFlags: SYNC } : {}),
+      samples: Array.from({ length: 24 }, () => ({ duration: FMP4_FRAME, size: 8 }))
+    }
+  ])
+const keyframeFragment = (seconds: number): Uint8Array => videoFragment(seconds, true)
+const nonKeyframe = (seconds: number): Uint8Array => videoFragment(seconds, false)
+/** An init segment plus `count` keyframe fragments every `step` seconds from `start`. */
+const keyframeRun = (start: number, step: number, count: number): Uint8Array =>
+  concat([
+    fmp4Init(),
+    ...Array.from({ length: count }, (_, i) => keyframeFragment(start + i * step))
+  ])
+/** What the tracker records for a keyframe fragment at `seconds` of run time. */
+const recordedKeyframe = (seconds: number, offset = 0): number =>
+  (Math.round(seconds * FMP4_TS) - FMP4_FRAME) / FMP4_TS + offset
 
 type Api = {
   playerStreamStart: (sessionId: string) => Promise<void>
@@ -16,6 +57,7 @@ type Api = {
   onPlayerStreamProgress: (
     cb: (data: { sessionId: string; gen: number; speed: number }) => void
   ) => Unsubscribe
+  playerDiagReport: (line: string) => Promise<void>
 }
 
 function noopSub(): Unsubscribe {
@@ -34,7 +76,9 @@ beforeEach(() => {
       onPlayerStreamChunk: noopSub,
       onPlayerStreamEnd: noopSub,
       onPlayerStreamError: noopSub,
-      onPlayerStreamProgress: noopSub
+      onPlayerStreamProgress: noopSub,
+      // Every session runs the stall watchdog (#653).
+      playerDiagReport: async () => {}
     }
   }
 })
@@ -2248,6 +2292,9 @@ describe('useMsePlayer — far seek vs. the back-eviction (#640)', () => {
       timestampOffset: 0,
       refusedSeek: false
     })
+    // Keyframes every 10 s, so the eviction has a safe end to remove to (#653)
+    // and these cases still pin the respawn guard rather than an empty list.
+    m._internal.handleStreamChunk('s1', GEN, keyframeRun(0, 10, 11))
     ms.dispatchEvent(new Event('sourceopen'))
     sb.buffered.ranges = ranges
     teardown.push(() => {
@@ -2272,12 +2319,15 @@ describe('useMsePlayer — far seek vs. the back-eviction (#640)', () => {
 
   it('a QuotaExceededError inside the debounce does not empty the buffer either (T-B)', async () => {
     const { m, video, sb, seekSpy } = rig([[0, 25]], 10)
+    // The rig's own append completes first, so the next chunk reaches appendBuffer.
+    await flush()
     video.currentTime = 90
     m.maybeRespawnForUnbufferedPosition()
     sb.quota = true
-    m._internal.handleStreamChunk('s1', GEN, new Uint8Array([1]))
+    const appends = sb.appendCalls
+    m._internal.handleStreamChunk('s1', GEN, nonKeyframe(30))
     // The chunk got as far as the append, so the quota path really ran.
-    expect(sb.appendCalls).toBe(1)
+    expect(sb.appendCalls).toBe(appends + 1)
     await flush()
     vi.advanceTimersByTime(250)
 
@@ -2290,8 +2340,9 @@ describe('useMsePlayer — far seek vs. the back-eviction (#640)', () => {
     sb.dispatchEvent(new Event('updateend'))
     await flush()
 
-    expect(sb.removeCalls).toEqual([[0, 70]])
-    expect(sb.buffered.ranges).toEqual([[70, 110]])
+    // To the recorded keyframe at or below t − 30 (#653): 70 s, one frame early.
+    expect(sb.removeCalls).toEqual([[0, recordedKeyframe(70)]])
+    expect(sb.buffered.ranges).toEqual([[recordedKeyframe(70), 110]])
     expect(seekSpy).not.toHaveBeenCalled()
   })
 
@@ -2319,5 +2370,571 @@ describe('useMsePlayer — far seek vs. the back-eviction (#640)', () => {
 
     expect(sb.removeCalls).toEqual([])
     expect(sb.buffered.ranges).toEqual([[0, 25]])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #653: back-eviction on long-GOP files, and the report-only stall watchdog.
+// ---------------------------------------------------------------------------
+
+class RangeList {
+  ranges: [number, number][] = []
+  get length(): number {
+    return this.ranges.length
+  }
+  start(i: number): number {
+    return this.ranges[i][0]
+  }
+  end(i: number): number {
+    return this.ranges[i][1]
+  }
+}
+
+// Chromium's removal semantics: `remove(start, end)` also takes every frame up
+// to the next buffered random-access point at or after `end`, or the rest of
+// the range when there is none. The frames of that GOP still arriving from
+// ffmpeg are then dropped, so the buffer only grows again from the next
+// keyframe in the file (`land`).
+class GopSourceBuffer extends EventTarget {
+  updating = false
+  timestampOffset = 0
+  buffered = new RangeList()
+  quota = false
+  appended: Uint8Array[] = []
+  removeCalls: [number, number][] = []
+  private resumeAt: number | null = null
+
+  constructor(private fileKeyframes: number[]) {
+    super()
+  }
+
+  appendBuffer(chunk: Uint8Array): void {
+    this.appended.push(chunk)
+    if (this.quota) throw new DOMException('The quota has been exceeded.', 'QuotaExceededError')
+    this.updating = true
+    queueMicrotask(() => this.finish())
+  }
+
+  remove(start: number, end: number): void {
+    this.removeCalls.push([start, end])
+    this.updating = true
+    const buffered = (k: number): boolean => this.buffered.ranges.some(([s, e]) => k >= s && k < e)
+    const rap = this.fileKeyframes.find((k) => k >= end && buffered(k))
+    if (rap === undefined) this.resumeAt = this.fileKeyframes.find((k) => k >= end) ?? Infinity
+    const cutTo = rap ?? Infinity
+    const kept: [number, number][] = []
+    for (const [s, e] of this.buffered.ranges) {
+      if (s < start) kept.push([s, Math.min(e, start)])
+      if (e > cutTo) kept.push([Math.max(s, cutTo), e])
+    }
+    this.buffered.ranges = kept
+    queueMicrotask(() => this.finish())
+  }
+
+  abort(): void {}
+
+  /** More of the file arrives, up to `to`. */
+  land(to: number): void {
+    const last = this.buffered.ranges[this.buffered.ranges.length - 1]
+    if (this.resumeAt !== null) {
+      if (to <= this.resumeAt) return
+      const from = this.resumeAt
+      this.resumeAt = null
+      this.buffered.ranges.push([from, to])
+      return
+    }
+    if (last) last[1] = Math.max(last[1], to)
+  }
+
+  holds(t: number): boolean {
+    return this.buffered.ranges.some(([s, e]) => t >= s && t <= e)
+  }
+
+  private finish(): void {
+    this.updating = false
+    this.dispatchEvent(new Event('updateend'))
+  }
+}
+
+class GopMediaSource extends EventTarget {
+  readyState = 'closed'
+  duration = 0
+  constructor(public sb: GopSourceBuffer) {
+    super()
+  }
+  addSourceBuffer(): GopSourceBuffer {
+    this.readyState = 'open'
+    return this.sb
+  }
+  endOfStream(): void {
+    this.readyState = 'ended'
+  }
+}
+
+interface StallVideo {
+  currentTime: number
+  paused: boolean
+  seeking: boolean
+  readyState: number
+  error: null
+  play: ReturnType<typeof vi.fn>
+  pause: ReturnType<typeof vi.fn>
+}
+
+function stallVideo(currentTime: number, readyState = 4): StallVideo {
+  return {
+    currentTime,
+    paused: false,
+    seeking: false,
+    readyState,
+    error: null,
+    play: vi.fn(async () => {}),
+    pause: vi.fn(() => {})
+  }
+}
+
+type SeekReply653 = { generation: number; timestampOffset: number } | { error: string }
+
+function harness653() {
+  const GEN = 3
+  let teardown: (() => void)[] = []
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    for (const fn of teardown) fn()
+    teardown = []
+    vi.useRealTimers()
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+    vi.restoreAllMocks()
+  })
+
+  function rig(o: {
+    offset: number
+    t: number
+    fileKeyframes?: number[]
+    readyState?: number
+    deps?: Partial<Parameters<typeof useMsePlayer>[0]>
+    open?: boolean
+  }) {
+    const video = stallVideo(o.t, o.readyState)
+    const replies: ((r: SeekReply653) => void)[] = []
+    const seekSpy = vi.fn(
+      (_sessionId: string, _seekAt: number) => new Promise<SeekReply653>((res) => replies.push(res))
+    )
+    const diag = vi.fn(async (_line: string) => {})
+    setApi({
+      playerStreamSeek: seekSpy,
+      playerStreamStart: vi.fn(async () => {}),
+      playerStreamAck: vi.fn(async () => {}),
+      playerDiagReport: diag
+    })
+    const m = useMsePlayer(
+      makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement, ...o.deps })
+    )
+    const sb = new GopSourceBuffer(o.fileKeyframes ?? [])
+    const ms = new GopMediaSource(sb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => ms)
+    const start = (sessionId = 's1'): void =>
+      m.startMseSession({
+        sessionId,
+        generation: GEN,
+        duration: 1500,
+        mimeType: 'video/mp4',
+        resumeTarget: 0,
+        timestampOffset: o.offset,
+        refusedSeek: false
+      })
+    if (o.open !== false) {
+      start()
+      ms.dispatchEvent(new Event('sourceopen'))
+    }
+    teardown.push(() => {
+      m.resetMseState()
+      for (const reply of replies) reply({ error: 'torn down' })
+    })
+    return { m, video, sb, seekSpy, replies, diag, start }
+  }
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+
+  async function feed(
+    m: ReturnType<typeof useMsePlayer>,
+    bytes: Uint8Array,
+    gen = GEN
+  ): Promise<void> {
+    m._internal.handleStreamChunk('s1', gen, bytes)
+    await flush()
+  }
+
+  return { GEN, rig, flush, feed }
+}
+
+describe('safeEvictEnd (#653)', () => {
+  it('gives no removal for a seek inside a long GOP, where t − 30 gave 406.6 (B1)', () => {
+    expect(safeEvictEnd(330, 436.6 - 30, [330, 490])).toBeNull()
+    expect(
+      safeEvictEnd(330, 436.6 - 30, [recordedKeyframe(0, 329.917), recordedKeyframe(160, 329.917)])
+    ).toBeNull()
+  })
+
+  it('ends a playback eviction on the recorded keyframe, not at t − 30 = 350.1 (A1)', () => {
+    const keyframes = [300, 310, 320, 330, 490].map((s) => recordedKeyframe(s))
+    expect(safeEvictEnd(320, 380.1 - 30, keyframes)).toBe(recordedKeyframe(330))
+  })
+
+  it('takes the largest K with bufStart < K ≤ limit', () => {
+    expect(safeEvictEnd(10, 50, [5, 10, 20, 40, 50, 60])).toBe(50)
+    expect(safeEvictEnd(10, 49.99, [5, 10, 20, 40, 50, 60])).toBe(40)
+    expect(safeEvictEnd(40, 45, [5, 10, 20, 40, 50])).toBeNull()
+    expect(safeEvictEnd(0, 100, [])).toBeNull()
+  })
+})
+
+describe('useMsePlayer — GOP-aware eviction in a long GOP (#653)', () => {
+  const { GEN, rig, flush, feed } = harness653()
+  const SEEK_OFFSET = 329.917
+  const tenSecond = (from: number, to: number): number[] =>
+    Array.from({ length: (to - from) / 10 + 1 }, (_, i) => from + i * 10)
+
+  it('a seek inside the gap never removes the GOP the playhead is on (B1, updateend site)', async () => {
+    const { m, video, sb } = rig({ offset: SEEK_OFFSET, t: 436.6, fileKeyframes: [330, 490] })
+    video.seeking = true
+    sb.buffered.ranges = [[330, 336]]
+    // The respawn landed on the keyframe at 330: its first fragment, then 1 s ones.
+    await feed(m, concat([fmp4Init(), keyframeFragment(0), ...[1, 2, 3, 4, 5].map(nonKeyframe)]))
+
+    expect(sb.removeCalls).toEqual([])
+    sb.land(470)
+    expect(sb.buffered.ranges).toEqual([[330, 470]])
+    expect(sb.holds(436.6)).toBe(true)
+  })
+
+  it('plays from 0 into the gap without removing the GOP it is on (A1, updateend site)', async () => {
+    const { m, video, sb } = rig({
+      offset: 0,
+      t: 380.1,
+      fileKeyframes: [...tenSecond(0, 330), ...tenSecond(490, 590)]
+    })
+    // Under the 60 s lead, so the append (and its updateend) goes through.
+    sb.buffered.ranges = [[320, 440]]
+    await feed(
+      m,
+      concat([fmp4Init(), ...[300, 310, 320, 330].map(keyframeFragment), nonKeyframe(331)])
+    )
+
+    expect(sb.removeCalls).toEqual([[320, recordedKeyframe(330)]])
+    expect(sb.buffered.ranges).toEqual([[330, 440]])
+    expect(sb.holds(380.1)).toBe(true)
+
+    // Past the gap's end + 30 the long GOP is evictable, up to its closing keyframe.
+    video.currentTime = 520.1
+    sb.land(530)
+    await feed(m, concat([keyframeFragment(490), nonKeyframe(491)]))
+    expect(sb.removeCalls).toEqual([
+      [320, recordedKeyframe(330)],
+      [330, recordedKeyframe(490)]
+    ])
+    expect(sb.buffered.ranges).toEqual([[490, 530]])
+  })
+
+  it('a QuotaExceededError inside the gap waits for a safe end instead of evicting (G3, quota site)', async () => {
+    const { m, video, sb } = rig({ offset: SEEK_OFFSET, t: 479, fileKeyframes: [330, 490] })
+    sb.buffered.ranges = [[330, 538.9]]
+    await feed(m, concat([fmp4Init(), keyframeFragment(0), nonKeyframe(1), keyframeFragment(160)]))
+    expect(sb.removeCalls).toEqual([])
+
+    sb.quota = true
+    const chunk = nonKeyframe(161)
+    m._internal.handleStreamChunk('s1', GEN, chunk)
+    await flush()
+    // Put back at the head of the queue, and nothing removed: no keyframe in
+    // (330, t − 5] yet, and the GOP at 330 is the one the playhead is on.
+    expect(sb.appended.at(-1)).toBe(chunk)
+    expect(m._internal.getAppendQueueLength()).toBe(1)
+    expect(sb.removeCalls).toEqual([])
+    expect(sb.holds(479)).toBe(true)
+
+    // The `timeupdate` pump retries; still nothing until the playhead is 5 s
+    // past the next keyframe.
+    video.currentTime = 494
+    m.pumpAppendQueue()
+    expect(sb.removeCalls).toEqual([])
+
+    video.currentTime = 495.1
+    m.pumpAppendQueue()
+    expect(sb.appended.at(-1)).toBe(chunk)
+    expect(sb.removeCalls).toEqual([[330, recordedKeyframe(160, SEEK_OFFSET)]])
+    await flush()
+    expect(sb.buffered.ranges).toEqual([[490, 538.9]])
+    expect(sb.holds(495.1)).toBe(true)
+  })
+
+  it('starts the keyframe list empty after a respawn, so a re-seek never evicts against the old run (B-reseek)', async () => {
+    const { m, video, sb, seekSpy, replies } = rig({
+      offset: 0,
+      t: 10,
+      fileKeyframes: [330, 490]
+    })
+    sb.buffered.ranges = [[0, 20]]
+    // The previous run, on its own timeline: two keyframes inside (330, 406.6].
+    await feed(m, concat([fmp4Init(), keyframeFragment(350), keyframeFragment(400)]))
+    expect(m._internal.getKeyframes()).toHaveLength(2)
+
+    video.currentTime = 436.6
+    m.maybeRespawnForUnbufferedPosition()
+    vi.advanceTimersByTime(250)
+    expect(seekSpy.mock.calls).toEqual([['s1', 436.6]])
+    replies[0]({ generation: GEN + 1, timestampOffset: SEEK_OFFSET })
+    await flush()
+    expect(m._internal.getKeyframes()).toEqual([])
+    // The respawn's own clear of the old buffer.
+    expect(sb.removeCalls).toEqual([[0, 20]])
+
+    sb.buffered.ranges = [[330, 336]]
+    await feed(m, concat([fmp4Init(), keyframeFragment(0), nonKeyframe(1)]), GEN + 1)
+    expect(m._internal.getKeyframes()).toEqual([recordedKeyframe(0, SEEK_OFFSET)])
+    expect(sb.removeCalls).toEqual([[0, 20]])
+    expect(sb.buffered.ranges).toEqual([[330, 336]])
+  })
+
+  it('drops keyframes parsed from old-run chunks that arrived during the seek IPC', async () => {
+    const { m, video, sb, replies } = rig({ offset: 0, t: 10, fileKeyframes: [330, 490] })
+    sb.buffered.ranges = [[0, 20]]
+    await feed(m, fmp4Init())
+    video.currentTime = 436.6
+    m.maybeRespawnForUnbufferedPosition()
+    vi.advanceTimersByTime(250)
+    // Still the old generation: accepted and parsed until the reply switches it.
+    m._internal.handleStreamChunk('s1', GEN, keyframeFragment(400))
+    expect(m._internal.getKeyframes()).toEqual([recordedKeyframe(400)])
+    replies[0]({ generation: GEN + 1, timestampOffset: SEEK_OFFSET })
+    await flush()
+    expect(m._internal.getKeyframes()).toEqual([])
+  })
+})
+
+describe('useMsePlayer — keyframes from a real ffmpeg capture (#653)', () => {
+  const { rig } = harness653()
+  // test/fixtures/fmp4/make-long-gop-copy.sh: the copy run of a 40 s file with
+  // keyframes at 0, 5, 10, 30 and 35 s, seeked to 20, lands on 10. Its offset is
+  // what main probes for it (the keyframe at 10 is emitted at 0.083). Only
+  // times are asserted, never bytes, so the file can be regenerated.
+  const CAPTURE = new Uint8Array(
+    readFileSync(resolve(__dirname, '../../fixtures/fmp4/long-gop-copy.mp4'))
+  )
+  const OFFSET = 9.917
+  const KEYFRAME_PTS = [10, 30, 35]
+
+  function recorded(chunks: Uint8Array[]): number[] {
+    const { m } = rig({ offset: OFFSET, t: 0, open: false })
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 40,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      timestampOffset: OFFSET,
+      refusedSeek: false
+    })
+    for (const c of chunks) m._internal.handleStreamChunk('s1', 0, c)
+    return [...m._internal.getKeyframes()]
+  }
+
+  // Each keyframe just below where the SourceBuffer labels it, and no others.
+  function expectKeyframes(times: number[]): void {
+    expect(times).toHaveLength(KEYFRAME_PTS.length)
+    times.forEach((t, i) => {
+      expect(t).toBeLessThan(KEYFRAME_PTS[i])
+      expect(t).toBeGreaterThan(KEYFRAME_PTS[i] - 0.2)
+    })
+  }
+
+  it('records the three keyframes of the whole capture', () => {
+    expectKeyframes(recorded([CAPTURE]))
+  })
+
+  it('records them with the capture split at an arbitrary byte offset', () => {
+    const at = Math.floor(CAPTURE.byteLength * 0.37)
+    expectKeyframes(recorded([CAPTURE.subarray(0, at), CAPTURE.subarray(at)]))
+  })
+
+  it('records the keyframe of a moof split across two handleStreamChunk calls', () => {
+    const moofs = topLevelBoxes(CAPTURE).filter((b) => b.type === 'moof')
+    expect(moofs.length).toBeGreaterThan(KEYFRAME_PTS.length)
+    // The first moof is the keyframe at 10; then every other one in turn.
+    for (const { start, end } of moofs) {
+      const at = start + Math.floor((end - start) / 2)
+      expectKeyframes(recorded([CAPTURE.subarray(0, at), CAPTURE.subarray(at)]))
+    }
+  })
+})
+
+describe('useMsePlayer — report-only stall watchdog (#653)', () => {
+  const { rig, flush, feed } = harness653()
+  const MINUTE = 60_000
+
+  it('fires exactly once on the eviction-stall shape: buffered [490, …], t = 436.6, readyState 1', () => {
+    const { m, video, sb, diag } = rig({ offset: 329.917, t: 436.6, readyState: 1 })
+    video.seeking = true
+    sb.buffered.ranges = [[490, 497.929]]
+    vi.advanceTimersByTime(MINUTE)
+
+    expect(diag).toHaveBeenCalledTimes(1)
+    expect(m.playbackStalled.value).toBe(true)
+    const line = diag.mock.calls[0][0]
+    expect(line).toContain('t=436.600 readyState=1 seeking=true')
+    expect(line).toContain('sb.buffered=[[490.000, 497.929]]')
+    expect(line).toContain('lastEviction=none')
+  })
+
+  it('fires exactly once on the quota-deadlock shape: t at buffered.end, readyState 2', () => {
+    const { m, sb, diag } = rig({ offset: 329.917, t: 538.8, readyState: 2 })
+    sb.buffered.ranges = [[330, 538.935]]
+    // Inside the tolerance the respawn check uses, so "outside buffered" never holds.
+    expect(m.isPlayheadBuffered()).toBe(true)
+    vi.advanceTimersByTime(MINUTE)
+
+    expect(diag).toHaveBeenCalledTimes(1)
+    expect(m.playbackStalled.value).toBe(true)
+  })
+
+  it('names the last eviction and the recorded keyframes either side of the playhead', async () => {
+    const { m, video, sb, diag } = rig({ offset: 0, t: 380.1, fileKeyframes: [320, 330, 490] })
+    sb.buffered.ranges = [[320, 440]]
+    await feed(m, concat([fmp4Init(), ...[310, 320, 330].map(keyframeFragment)]))
+    expect(sb.removeCalls).toEqual([[320, recordedKeyframe(330)]])
+    await feed(m, keyframeFragment(490))
+    video.readyState = 2
+    vi.advanceTimersByTime(MINUTE)
+
+    expect(diag).toHaveBeenCalledTimes(1)
+    const line = diag.mock.calls[0][0]
+    const k330 = recordedKeyframe(330).toFixed(3)
+    expect(line).toContain(`lastEviction=updateend [320.000, ${k330}) before=[[320.000, 440.000]]`)
+    expect(line).toContain(
+      `keyframeBelow=${k330} keyframeAbove=${recordedKeyframe(490).toFixed(3)}`
+    )
+  })
+
+  it('re-arms when currentTime moves: playbackStalled clears, and a new stall reports again', () => {
+    const { m, video, diag } = rig({ offset: 0, t: 100, readyState: 2 })
+    vi.advanceTimersByTime(MINUTE)
+    expect(diag).toHaveBeenCalledTimes(1)
+    expect(m.playbackStalled.value).toBe(true)
+
+    video.currentTime = 100.5
+    vi.advanceTimersByTime(1000)
+    expect(m.playbackStalled.value).toBe(false)
+    expect(diag).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(MINUTE)
+    expect(diag).toHaveBeenCalledTimes(2)
+  })
+
+  it('a session switch without resetMseState still gives one line, not two', () => {
+    const { m, video, diag, start } = rig({ offset: 0, t: 100, readyState: 2 })
+    vi.advanceTimersByTime(5000)
+    start('s2')
+    video.currentTime = 50
+    // A leaked first interval would tick the shared count twice a second.
+    vi.advanceTimersByTime(14_000)
+    expect(diag).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(MINUTE)
+    expect(diag).toHaveBeenCalledTimes(1)
+
+    // And nothing outlives the session: a leaked interval would report again.
+    m.resetMseState()
+    video.currentTime = 60
+    vi.advanceTimersByTime(MINUTE)
+    expect(diag).toHaveBeenCalledTimes(1)
+  })
+
+  it('resetMseState stops it and clears the message', () => {
+    const { m, diag } = rig({ offset: 0, t: 100, readyState: 2 })
+    vi.advanceTimersByTime(MINUTE)
+    expect(m.playbackStalled.value).toBe(true)
+    m.resetMseState()
+    expect(m.playbackStalled.value).toBe(false)
+    vi.advanceTimersByTime(MINUTE * 2)
+    expect(diag).toHaveBeenCalledTimes(1)
+  })
+
+  describe('stays quiet', () => {
+    it('while the element is paused', () => {
+      const { video, diag } = rig({ offset: 0, t: 100, readyState: 1 })
+      video.paused = true
+      vi.advanceTimersByTime(MINUTE)
+      expect(diag).not.toHaveBeenCalled()
+    })
+
+    it('while mkvBuffering is set', () => {
+      const { m, diag } = rig({ offset: 0, t: 100, readyState: 1 })
+      m.mkvBuffering.value = true
+      vi.advanceTimersByTime(MINUTE)
+      expect(diag).not.toHaveBeenCalled()
+      expect(m.playbackStalled.value).toBe(false)
+    })
+
+    it('while a respawn is pending', async () => {
+      const { m, video, sb, seekSpy, diag } = rig({ offset: 0, t: 10, readyState: 1 })
+      sb.buffered.ranges = [[0, 20]]
+      video.currentTime = 436.6
+      m.maybeRespawnForUnbufferedPosition()
+      vi.advanceTimersByTime(250)
+      await flush()
+      // The seek reply is held, so the respawn stays in flight.
+      expect(seekSpy).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(MINUTE)
+      expect(diag).not.toHaveBeenCalled()
+    })
+
+    it('while currentTime keeps advancing', () => {
+      const { video, diag } = rig({ offset: 0, t: 100, readyState: 2 })
+      for (let i = 0; i < 60; i++) {
+        video.currentTime += 0.25
+        vi.advanceTimersByTime(1000)
+      }
+      expect(diag).not.toHaveBeenCalled()
+    })
+
+    it('with no MSE session, as for a growing file waiting at its end', () => {
+      const { m, diag } = rig({ offset: 0, t: 100, readyState: 1, open: false })
+      vi.advanceTimersByTime(MINUTE)
+      expect(diag).not.toHaveBeenCalled()
+      expect(m.playbackStalled.value).toBe(false)
+    })
+
+    it('while syncplay holds local readiness', () => {
+      const { diag } = rig({
+        offset: 0,
+        t: 100,
+        readyState: 1,
+        deps: { isSyncplayHolding: () => true }
+      })
+      vi.advanceTimersByTime(MINUTE)
+      expect(diag).not.toHaveBeenCalled()
+    })
+
+    it('while the element has enough data (readyState HAVE_FUTURE_DATA)', () => {
+      const { diag } = rig({ offset: 0, t: 100, readyState: 3 })
+      vi.advanceTimersByTime(MINUTE)
+      expect(diag).not.toHaveBeenCalled()
+    })
   })
 })

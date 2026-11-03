@@ -51,6 +51,28 @@ describe('PlayerView growing-.part toast slot', () => {
   // for the remainder of the timer. Same source-scan caveat as above — the
   // watcher lives in `<script setup>` and there is no mount harness, so this
   // pins the wiring, not the observable fade.
+  // #653: the stall watchdog's message is a fourth toast in the slot. The two
+  // growing-`.part` toasts never coexist with an MSE session, and `mkvBuffering`
+  // keeps the watchdog quiet, but a stall reported just before a seek respawn
+  // raises "Buffering MKV…" for up to the next 1 s tick, so the gate yields to it.
+  it('gates the stall toast on playbackStalled, yielding the slot to the buffering toast', () => {
+    expect(toastGates()).toContain('playbackStalled && !mkvBuffering')
+    expect(SOURCE).toContain(
+      '<div v-if="playbackStalled && !mkvBuffering" class="mkv-buffering-toast"> Playback stalled. Seeking may recover it; details are in player-diag.log </div>'
+    )
+  })
+
+  it('reads playbackStalled from the MSE composable, not from a local rule', () => {
+    expect(SOURCE).toMatch(/const \{[^}]*\bplaybackStalled\b[^}]*\} = msePlayer;/)
+    expect(toastGates().filter((g) => g.includes('playbackStalled'))).toHaveLength(1)
+  })
+
+  it('wires the watchdog syncplay quiet condition to the room ready gate', () => {
+    expect(SOURCE).toContain(
+      "isSyncplayHolding: () => syncplayStatus.value.state === 'ready' && !syncplay.shouldElementPlay()"
+    )
+  })
+
   it('retires the short-landing toast when the waiting toast takes the slot', () => {
     expect(SOURCE).toMatch(
       /watch\(\s*waitingToastUp\s*,\s*\(\s*(\w+)\s*\)\s*=>\s*\{\s*if \(\1\)\s*clearSkipClampToast\(\)/

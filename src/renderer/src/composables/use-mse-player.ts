@@ -15,6 +15,7 @@
 // from Vitest without a Vue component context.
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { createKeyframeTracker } from './fmp4-keyframe-tracker'
 // Type-only, so this stays a structural dep contract with no runtime edge back
 // to the syncplay composable (#306).
 import type {
@@ -27,6 +28,38 @@ import type {
 const STREAM_ACK_THRESHOLD = 1 * 1024 * 1024
 const MAX_BUFFER_AHEAD = 60
 const RESPAWN_DEBOUNCE_MS = 250
+const HAVE_FUTURE_DATA = 3
+const STALL_WATCHDOG_INTERVAL_MS = 1000
+const STALL_WATCHDOG_TICKS = 15
+
+/**
+ * Where a back-eviction may end (#653): the largest recorded keyframe time `K`
+ * with `bufStart < K ≤ limit`, or `null` for no removal. Chromium extends a
+ * `remove()` to the next random-access point, so an end that is not on a
+ * keyframe takes the rest of its GOP with it, and inside a long GOP that GOP is
+ * the one the playhead is on. The tracker records each `K` just below the
+ * keyframe's buffered PTS, so the removal stops there.
+ */
+export function safeEvictEnd(
+  bufStart: number,
+  limit: number,
+  keyframes: readonly number[]
+): number | null {
+  let end: number | null = null
+  for (const k of keyframes) {
+    if (k > bufStart && k <= limit && (end === null || k > end)) end = k
+  }
+  return end
+}
+
+function describeRanges(ranges: TimeRanges | null | undefined): string {
+  if (!ranges) return 'none'
+  const out: string[] = []
+  for (let i = 0; i < ranges.length; i++) {
+    out.push(`[${ranges.start(i).toFixed(3)}, ${ranges.end(i).toFixed(3)}]`)
+  }
+  return `[${out.join(', ')}]`
+}
 
 export interface StartMseSessionOpts {
   sessionId: string
@@ -92,10 +125,15 @@ export function useMsePlayer(deps: {
   savePosition?: () => void
   /** A stream error main classified as `drive-disconnected` (#582): raise the overlay. */
   onDriveDisconnected?: () => void
+  /** True while a syncplay room holds the element for local readiness: the
+   *  stall watchdog stays quiet then (#653). */
+  isSyncplayHolding?: () => boolean
 }): {
   // Reactive state
   mseSrcUrl: Ref<string>
   mkvBuffering: Ref<boolean>
+  /** The stall watchdog fired and `currentTime` has not moved since (#653). */
+  playbackStalled: Ref<boolean>
   transcodingHevc: Ref<boolean>
   transcodeSpeed: Ref<number | null>
   transcodeLabel: ComputedRef<string>
@@ -119,11 +157,13 @@ export function useMsePlayer(deps: {
     handleUnbufferedSeek: () => Promise<void>
     getAppendQueueLength: () => number
     getSourceBuffer: () => SourceBuffer | null
+    getKeyframes: () => readonly number[]
   }
 } {
   // Reactive state surface
   const mseSrcUrl = ref('')
   const mkvBuffering = ref(false)
+  const playbackStalled = ref(false)
   const transcodingHevc = ref(false)
   const transcodeSpeed = ref<number | null>(null)
   const streamSessionId = ref('')
@@ -156,6 +196,23 @@ export function useMsePlayer(deps: {
   let appendCount = 0
   let chunkRecvCount = 0
   let chunkRecvBytes = 0
+
+  // Keyframes of the current ffmpeg run on the SourceBuffer timeline, read
+  // from the appended fMP4 itself: the only safe ends for a back-eviction.
+  const keyframeTracker = createKeyframeTracker()
+  let lastEviction: { site: string; start: number; end: number; before: string } | null = null
+  // Once per run: the tracker-empty fallback has been reported.
+  let trackerFallbackReported = false
+
+  function resetKeyframes(timestampOffset: number): void {
+    keyframeTracker.reset(timestampOffset)
+    trackerFallbackReported = false
+  }
+
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null
+  let watchdogLastTime = NaN
+  let watchdogStillTicks = 0
+  let watchdogReported = false
 
   // On a resume-from-middle initial open the ffmpeg run starts at the keyframe
   // before the saved position, so the buffer begins hundreds of seconds in while
@@ -201,6 +258,9 @@ export function useMsePlayer(deps: {
     // A seek continuation parked on the previous session skips its `finally`
     // once stale (#634), so a new session must not inherit its in-flight flag.
     unbufferedSeekInFlight = false
+    resetKeyframes(timestampOffset)
+    lastEviction = null
+    startStallWatchdog()
     streamSessionId.value = sessionId
     currentStreamGen = generation
     mseInitialSeek.value = resumeTarget
@@ -241,6 +301,7 @@ export function useMsePlayer(deps: {
               sb.timestampOffset = timestampOffset
             } catch (e) {
               console.warn('[player] initial timestampOffset failed:', e)
+              resetKeyframes(sb.timestampOffset)
             }
           }
           sb.addEventListener('updateend', onSourceBufferUpdateEnd)
@@ -334,14 +395,48 @@ export function useMsePlayer(deps: {
       // takes for a fresh respawn still on its way. The respawn clears the
       // buffer itself anyway.
       if (bufStart < t - 60 && !sb.updating && !respawnPending()) {
-        try {
-          sb.remove(bufStart, Math.max(bufStart + 1, t - 30))
-        } catch {
-          /* ignore */
-        }
+        evictBehind(sb, 'updateend', bufStart, t - 30, Math.max(bufStart + 1, t - 30))
       }
     }
     pumpAppendQueue()
+  }
+
+  // Removes `[bufStart, K)` for the last safe keyframe end `K` at or below
+  // `limit`, or nothing when there is none (#653). Inside a long GOP that means
+  // holding the whole GOP behind the playhead until it plays past the next
+  // keyframe, instead of a removal Chromium would extend over the playhead.
+  //
+  // An empty list means the tracker has recorded nothing this run (`prune`
+  // always keeps the latest end, so only a reset empties it): the mux is one it
+  // does not read. Failing closed there would freeze every file at the quota,
+  // so the run falls back to the pre-#653 time-based end, `fallbackEnd`, and
+  // says so once in player-diag.log.
+  function evictBehind(
+    sb: SourceBuffer,
+    site: string,
+    bufStart: number,
+    limit: number,
+    fallbackEnd: number | null
+  ): void {
+    const keyframes = keyframeTracker.keyframes()
+    const end = keyframes.length > 0 ? safeEvictEnd(bufStart, limit, keyframes) : fallbackEnd
+    if (end === null) return
+    const before = describeRanges(sb.buffered)
+    if (keyframes.length === 0 && !trackerFallbackReported) {
+      trackerFallbackReported = true
+      void window.api.playerDiagReport(
+        `tracker-empty fallback: no keyframes recorded this run, evicting by time` +
+          ` session=${streamSessionId.value} gen=${currentStreamGen} site=${site}` +
+          ` remove=[${bufStart.toFixed(3)}, ${end.toFixed(3)}) sb.buffered=${before}`
+      )
+    }
+    try {
+      sb.remove(bufStart, end)
+    } catch {
+      return
+    }
+    lastEviction = { site, start: bufStart, end, before }
+    keyframeTracker.prune(bufStart)
   }
 
   function pumpAppendQueue(): void {
@@ -389,18 +484,13 @@ export function useMsePlayer(deps: {
         appendQueue.unshift(chunk)
         // Only evict data strictly behind the playhead. Never drop the range
         // the video element is currently sitting inside, or playback stalls.
+        // With no safe end yet the chunk just waits at the head of the queue:
+        // every `timeupdate` pumps again and re-runs this against the new `t`.
         const vv = deps.getVideoEl()
         const t = vv?.currentTime ?? 0
         if (sb.buffered.length > 0 && !sb.updating && !respawnPending()) {
           const bufStart = sb.buffered.start(0)
-          const removeUntil = t - 5
-          if (removeUntil > bufStart + 1) {
-            try {
-              sb.remove(bufStart, removeUntil)
-            } catch {
-              /* ignore */
-            }
-          }
+          evictBehind(sb, 'quota', bufStart, t - 5, t - 5 > bufStart + 1 ? t - 5 : null)
         }
       } else {
         console.error('[player] appendBuffer failed:', err)
@@ -537,6 +627,10 @@ export function useMsePlayer(deps: {
       // in `appendQueue` while we were awaiting the IPC round-trip.
       currentStreamGen = result.generation
       appendQueue.length = 0
+      // The old run's keyframes are on its own timeline and leave with its
+      // chunks; any of them left here would be a removal end the new buffer
+      // does not have (#653).
+      resetKeyframes(result.timestampOffset)
       pendingAckBytes = 0
       streamEnded = false
       // Reset the SourceBuffer segment parser. Without this, an interrupted
@@ -588,6 +682,8 @@ export function useMsePlayer(deps: {
         sb.timestampOffset = result.timestampOffset
       } catch (e) {
         console.warn('[player] timestampOffset set failed:', e)
+        // Label the keyframes with the offset Chromium is actually using.
+        resetKeyframes(sb.timestampOffset)
       }
       // Keep the playhead at the user's target. The buffer starts at the leading
       // keyframe (a real decode start point), so Chromium decodes from there and
@@ -641,6 +737,7 @@ export function useMsePlayer(deps: {
     // unrelated to the current timestampOffset.
     if (gen !== currentStreamGen) return
     const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
+    keyframeTracker.push(u8)
     chunkRecvCount++
     chunkRecvBytes += u8.byteLength
     if (chunkRecvCount === 1 || chunkRecvCount % 200 === 0) {
@@ -673,6 +770,85 @@ export function useMsePlayer(deps: {
     resetMseState()
   }
 
+  // Report-only stall watchdog (#653). It never respawns or seeks: with the
+  // eviction GOP-aware, a stall it sees is a bug to report, not to paper over.
+  // Session-scoped, since the composable registers no lifecycle hooks. Fires
+  // once the playhead has not moved for STALL_WATCHDOG_TICKS seconds while the
+  // element is playing without enough data and nothing else owns the wait; it
+  // re-arms when `currentTime` moves. "Outside `buffered`" is not part of the
+  // test: in the quota deadlock the playhead waits at the buffer's end, inside it.
+  function startStallWatchdog(): void {
+    stopStallWatchdog()
+    watchdogTimer = setInterval(stallWatchdogTick, STALL_WATCHDOG_INTERVAL_MS)
+  }
+
+  function stopStallWatchdog(): void {
+    if (watchdogTimer !== null) {
+      clearInterval(watchdogTimer)
+      watchdogTimer = null
+    }
+    watchdogLastTime = NaN
+    watchdogStillTicks = 0
+    watchdogReported = false
+    playbackStalled.value = false
+  }
+
+  function stallWatchdogTick(): void {
+    const v = deps.getVideoEl()
+    if (!v) return
+    const t = v.currentTime
+    if (t !== watchdogLastTime) {
+      watchdogLastTime = t
+      watchdogStillTicks = 0
+      watchdogReported = false
+      playbackStalled.value = false
+      return
+    }
+    if (
+      v.paused ||
+      v.readyState >= HAVE_FUTURE_DATA ||
+      mkvBuffering.value ||
+      respawnPending() ||
+      deps.isSyncplayHolding?.()
+    ) {
+      watchdogStillTicks = 0
+      return
+    }
+    watchdogStillTicks++
+    if (watchdogStillTicks < STALL_WATCHDOG_TICKS || watchdogReported) return
+    watchdogReported = true
+    playbackStalled.value = true
+    void window.api.playerDiagReport(stallReportLine(v, t))
+  }
+
+  function stallReportLine(v: HTMLVideoElement, t: number): string {
+    let buffered: string
+    try {
+      buffered = describeRanges(sourceBuffer?.buffered)
+    } catch {
+      buffered = 'unreadable'
+    }
+    let below: number | null = null
+    let above: number | null = null
+    for (const k of keyframeTracker.keyframes()) {
+      if (k <= t) below = k
+      else {
+        above = k
+        break
+      }
+    }
+    const fmt = (n: number | null): string => (n === null ? 'none' : n.toFixed(3))
+    const ev = lastEviction
+      ? `${lastEviction.site} [${lastEviction.start.toFixed(3)}, ${lastEviction.end.toFixed(3)}) before=${lastEviction.before}`
+      : 'none'
+    return (
+      `stall watchdog: currentTime unchanged for ${STALL_WATCHDOG_TICKS}s` +
+      ` session=${streamSessionId.value} gen=${currentStreamGen} t=${t.toFixed(3)}` +
+      ` readyState=${v.readyState} seeking=${v.seeking} sb.buffered=${buffered}` +
+      ` lastEviction=${ev} keyframeBelow=${fmt(below)} keyframeAbove=${fmt(above)}`
+    )
+  }
+
   function resetMseState(): void {
     // Drop the pending respawn debounce — without this, the timer can fire
     // after a teardown and call into `handleUnbufferedSeek` on a disposed
@@ -686,6 +862,9 @@ export function useMsePlayer(deps: {
     streamEnded = false
     pendingAckBytes = 0
     appendQueue.length = 0
+    resetKeyframes(0)
+    lastEviction = null
+    stopStallWatchdog()
     mseInitialSeek.value = 0
     initialLandPending = false
     resumeLandTarget = 0
@@ -762,6 +941,7 @@ export function useMsePlayer(deps: {
   return {
     mseSrcUrl,
     mkvBuffering,
+    playbackStalled,
     transcodingHevc,
     transcodeSpeed,
     transcodeLabel,
@@ -782,7 +962,8 @@ export function useMsePlayer(deps: {
       handleStreamError,
       handleUnbufferedSeek,
       getAppendQueueLength: () => appendQueue.length,
-      getSourceBuffer: () => sourceBuffer
+      getSourceBuffer: () => sourceBuffer,
+      getKeyframes: () => keyframeTracker.keyframes()
     }
   }
 }

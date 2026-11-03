@@ -121,6 +121,7 @@ export const CHANNELS = {
   PLAYER_REMUX_MKV: 'player:remux-mkv',
   PLAYER_REMUX_MKV_STREAM: 'player:remux-mkv-stream',
   PLAYER_REMUX_MKV_STREAM_TRANSCODE: 'player:remux-mkv-stream-transcode',
+  PLAYER_DIAG_REPORT: 'player:diag-report',
   PLAYER_STREAM_ACK: 'player:stream-ack',
   PLAYER_STREAM_SEEK: 'player:stream-seek',
   PLAYER_STREAM_START: 'player:stream-start',

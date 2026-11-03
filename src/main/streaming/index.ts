@@ -234,6 +234,12 @@ export interface StreamingService {
   /** Kill ffmpeg, mark done, and drop the session from the map. */
   cleanupSession(sessionId: string): void
   cleanupAllSessions(): void
+  /**
+   * Writes one `[player][diag]` line to the console and `playerDiagSink`.
+   * Unconditional: the callers gate on the diag toggle themselves, and
+   * `player:diag-report` deliberately does not (#653).
+   */
+  diag(line: string): void
 }
 
 export function createStreamingService(deps: StreamingServiceDeps): StreamingService {
@@ -934,7 +940,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
 
     // A run settles once, on `close` (#631). Node doesn't order a child's
     // `exit` against its stdout `end`, which is also why `readFirstProbeLine`
-    // waits for `close` (src/main/streaming/index.ts:454), and only at `close`
+    // waits for `close` (src/main/streaming/index.ts:460), and only at `close`
     // are the exit code and all of this run's stdout and stderr in. A drive
     // gone under the open fd (#582) doesn't fail the run: ffmpeg logs "Error
     // during demuxing: Input/output error", treats it as the end of its input
@@ -1066,6 +1072,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     getSession,
     allSessionIds,
     cleanupSession,
-    cleanupAllSessions
+    cleanupAllSessions,
+    diag
   }
 }

@@ -836,8 +836,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // rather than auto-jumping the leading gap. That stall outlives this gate:
   // such an element is at HAVE_METADATA, not HAVE_NOTHING, so what takes it off
   // 0 is a write — the parked remote state applied from `loadedmetadata`, or,
-  // when nothing is parked, the resume land (`use-mse-player.ts:315-331`, which
-  // `use-mse-player.ts:316-317` cancels in exactly the case where a state is). The
+  // when nothing is parked, the resume land (`use-mse-player.ts:376-392`, which
+  // `use-mse-player.ts:377-378` cancels in exactly the case where a state is). The
   // door reopens at metadata; the first honest position rides on that write, not on this test.
   //
   // Nothing upstream covers that window during an in-player translation or
@@ -1685,9 +1685,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // **`!holding`** is not implied by that term, and it is reachable rather than defensive. An
     // MSE buffer refill pauses the element and holds `setSyncplayLocalReady(false)` for its
-    // duration (`use-mse-player.ts:447`/`use-mse-player.ts:492`), re-playing it on the way out
-    // whenever `wasPaused` was false (`use-mse-player.ts:465-475`,
-    // `use-mse-player.ts:482-490`). A user pause landing inside that window arms
+    // duration (`use-mse-player.ts:537`/`use-mse-player.ts:582`), re-playing it on the way out
+    // whenever `wasPaused` was false (`use-mse-player.ts:555-565`,
+    // `use-mse-player.ts:572-580`). A user pause landing inside that window arms
     // `pendingUserPause` with `intendedPaused = true`; the re-play returns `v.paused` to false
     // through a `play` consumed as an `echo`, which establishes nothing, so the hold survives
     // to meet a playing-room heartbeat with `effectivePaused === v.paused === false`. An

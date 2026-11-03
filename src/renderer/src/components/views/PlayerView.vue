@@ -126,7 +126,9 @@ const msePlayer = useMsePlayer({
   beginProgrammaticSeek: (target) => syncplay.beginProgrammaticSeek(target),
   hasRemoteStateApplied: () => roomOwnsPlayhead(),
   savePosition: () => void saveProgress(true),
-  onDriveDisconnected: () => driveDisconnect.onMseDisconnected()
+  onDriveDisconnected: () => driveDisconnect.onMseDisconnected(),
+  // The room's ready gate is holding the element for local readiness (#653).
+  isSyncplayHolding: () => syncplayStatus.value.state === 'ready' && !syncplay.shouldElementPlay()
 });
 
 // An attached Shared Library's drive going away mid-episode (#582). Which
@@ -154,6 +156,7 @@ const {
 const {
   mseSrcUrl,
   mkvBuffering,
+  playbackStalled,
   transcodingHevc,
   transcodeLabel,
   streamSessionId,
@@ -3338,6 +3341,13 @@ const bufferedProgress = computed(() => {
         <button v-if="transcodingHevc" class="mkv-cancel-btn" @click="cancelHevcTranscode">
           Cancel
         </button>
+      </div>
+    </transition>
+
+    <!-- Streaming MKV: the stall watchdog fired (#653) -->
+    <transition name="fade">
+      <div v-if="playbackStalled && !mkvBuffering" class="mkv-buffering-toast">
+        Playback stalled. Seeking may recover it; details are in player-diag.log
       </div>
     </transition>
 

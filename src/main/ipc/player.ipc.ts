@@ -21,6 +21,9 @@ import type { AppDeps } from './index'
  */
 export const OPEN_AT_ZERO_PROBE_CAP_MS = 1000
 
+/** Longest renderer line `player:diag-report` writes, in UTF-16 code units (#653). */
+export const DIAG_REPORT_MAX = 4096
+
 function capOpenAtZeroProbe(
   probe: Promise<number>,
   requestedSeek: number,
@@ -834,6 +837,14 @@ export function register({
     if (session.pendingBytes < streamingService.lowWatermark && session.proc.stdout?.isPaused()) {
       session.proc.stdout.resume()
     }
+  })
+
+  // A renderer-side diagnostic line for player-diag.log (#653), always on: it
+  // is how the MSE stall watchdog reports, and only main can write the log.
+  // One call is one line, so CR/LF are flattened and the length is capped.
+  ipcMain.handle(CHANNELS.PLAYER_DIAG_REPORT, (_event, line: unknown) => {
+    if (typeof line !== 'string') return
+    streamingService.diag(`renderer ${line.replace(/[\r\n]+/g, ' ').slice(0, DIAG_REPORT_MAX)}`)
   })
 
   // Targeted single-session reap (#291). The renderer's blanket

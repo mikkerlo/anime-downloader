@@ -15,8 +15,16 @@ export const DEFAULT_LIBRARY_NAME = 'Anime Library'
 /** What planning reads from this PC. */
 export interface PlanSource {
   downloadedEpisodes: () => DownloadedEpisodesMap
-  /** The title's record: `downloadedAnime`, then `library`, then the cached details. */
+  /**
+   * The title's record: `downloadedAnime`, then `library`, then the cached
+   * details, then `recentAnimeMeta`.
+   */
   anime: (animeId: number) => AnimeSearchResult | null
+  /**
+   * Whether `downloadedAnime` has the title. A missing entry of a title
+   * without one is stale and left out of the tree (#655).
+   */
+  hasDownloadedRecord: (animeId: number) => boolean
   /** The cached details (`animeCache`), for the episode list and the meta snapshot. */
   detail: (animeId: number) => AnimeDetail | null
   /** The hot + cold scan the episode list uses (`scanEpisodeFilesAsync`). */
@@ -184,8 +192,12 @@ export async function buildTree(
     const sels = (byTitle.get(animeId) ?? []).sort((a, b) =>
       episodeOrder(a.episodeInt, b.episodeInt)
     )
+    const kept: ExportSelectionItem[] = []
     for (const sel of sels) {
       const entry = src.downloadedEpisodes()[itemKey(sel)]
+      const r = await resolve(sel)
+      if (r === 'missing' && !src.hasDownloadedRecord(animeId)) continue
+      kept.push(sel)
       let tr = translations.get(sel.translationId)
       if (!tr) {
         tr = {
@@ -197,7 +209,6 @@ export async function buildTree(
         }
         translations.set(sel.translationId, tr)
       }
-      const r = await resolve(sel)
       const key = itemKey(sel)
       if (typeof r === 'object') resolved.set(key, r)
       tr.episodes.push({
@@ -209,7 +220,7 @@ export async function buildTree(
         unmerged: typeof r === 'object' && r.subtitlePath !== null
       })
     }
-    const downloaded = new Set(sels.map((s) => s.episodeInt))
+    const downloaded = new Set(kept.map((s) => s.episodeInt))
     const cache = src.cache?.(animeId) ?? null
     const siblings = [...resolved.values()].filter((r) => r.animeId === animeId)
     const durations = translationDurations(cache)

@@ -3,6 +3,7 @@ import * as path from 'path'
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
+import { dropDownloadedEpisodesForAnime } from '../lib/downloaded-episodes'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
@@ -41,19 +42,7 @@ export function register({
       }
     }
 
-    const episodes = store.get('downloadedEpisodes') as Record<
-      string,
-      { translationType: string; author: string; quality: number; translationId: number }
-    >
-    const prefix = `${animeId}:`
-    let mutated = false
-    for (const key of Object.keys(episodes)) {
-      if (key.startsWith(prefix)) {
-        delete episodes[key]
-        mutated = true
-      }
-    }
-    if (mutated) store.set('downloadedEpisodes', episodes)
+    dropDownloadedEpisodesForAnime(store, animeId)
 
     invalidateFileCache(animeName)
     // Starred or recently watched titles keep their cache (#570).

@@ -75,3 +75,23 @@ export function persistDownloadedEpisode(
   store.set('downloadedEpisodes', episodes)
   return true
 }
+
+/**
+ * Drops every `${animeId}:` entry, writing the map once if any was there: a
+ * title deleted from this PC (Library → Delete, cleanup) keeps no entries.
+ */
+export function dropDownloadedEpisodesForAnime(
+  store: DownloadedEpisodesStore,
+  animeId: number
+): void {
+  const episodes = store.get('downloadedEpisodes')
+  const prefix = `${animeId}:`
+  let mutated = false
+  for (const key of Object.keys(episodes)) {
+    if (key.startsWith(prefix)) {
+      delete episodes[key]
+      mutated = true
+    }
+  }
+  if (mutated) store.set('downloadedEpisodes', episodes)
+}

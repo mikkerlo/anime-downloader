@@ -4,6 +4,7 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
 import { addDownloadedAnime } from '../lib/downloaded-anime'
+import { dropDownloadedEpisodesForAnime } from '../lib/downloaded-episodes'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
@@ -28,14 +29,18 @@ export function register({
       const coldDir = coldStorageService.getColdStorageDir()
       if (coldDir) dirsToCheck.push(coldDir)
     }
+    let leftOnDisk = false
     for (const dir of dirsToCheck) {
       const dirPath = path.join(dir, dirName)
       try {
         fs.rmSync(dirPath, { recursive: true })
-      } catch {
-        /* ignore */
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') leftOnDisk = true
       }
     }
+    // A folder a locked file kept on disk keeps its entries, so the export
+    // tree still finds those files by name (#655).
+    if (!leftOnDisk) dropDownloadedEpisodesForAnime(store, animeId)
 
     // Starred or recently watched titles keep their cache (#570).
     if (!animeCacheService.isCachable(animeId)) animeCacheService.deleteEntry(animeId)

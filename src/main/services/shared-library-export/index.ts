@@ -172,7 +172,9 @@ export function createSharedLibraryExportService(
   const animeRecord = (id: number): AnimeSearchResult | null =>
     get<Record<string, AnimeSearchResult>>('downloadedAnime')?.[id] ??
     get<Record<string, AnimeSearchResult>>('library')?.[id] ??
-    detail(id)
+    detail(id) ??
+    get<Record<string, AnimeSearchResult>>('recentAnimeMeta')?.[id] ??
+    null
   const detail = (id: number): AnimeDetail | null =>
     get<Record<string, { animeDetail?: AnimeDetail | null }>>('animeCache')?.[id]?.animeDetail ??
     null
@@ -186,6 +188,7 @@ export function createSharedLibraryExportService(
   const source: PlanSource = {
     downloadedEpisodes: () => get<DownloadedEpisodesMap>('downloadedEpisodes') ?? {},
     anime: animeRecord,
+    hasDownloadedRecord: (id) => !!get<Record<string, unknown>>('downloadedAnime')?.[id],
     detail,
     scanEpisodeFiles: deps.scanEpisodeFiles,
     sanitizeFilename: deps.sanitizeFilename,

@@ -40,12 +40,15 @@ interface Harness {
 }
 
 let root: string
+/** Advanced mode's cold root, when a test sets one. */
+let coldDir: string | null
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(T0)
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-eviction-scope-'))
+  coldDir = null
 })
 
 afterEach(() => {
@@ -98,7 +101,8 @@ function harness(...members: Membership[]): Harness {
     },
     coldStorageService: {
       getDownloadDir: () => downloadDir,
-      isAdvanced: () => false,
+      isAdvanced: () => coldDir !== null,
+      getColdStorageDir: () => coldDir,
       dirsForScan: () => [downloadDir],
       pruneDownloadedEpisode: vi.fn()
     },
@@ -214,6 +218,44 @@ describe('downloaded-anime-delete', () => {
     await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
     expect(Object.keys(h.store.get('downloadedEpisodes') as object)).toEqual(['7:1:71'])
   })
+
+  it('advanced mode, the title only in hot: the folder goes and the entries are dropped', async () => {
+    coldDir = path.join(root, 'cold')
+    fs.mkdirSync(coldDir)
+    const h = harness('downloaded')
+    const folder = path.join(h.downloadDir, NAME)
+    fs.mkdirSync(folder)
+    fs.writeFileSync(path.join(folder, `${NAME} - 01.mkv`), 'v')
+    seedEntries(h)
+    await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+    expect(fs.existsSync(folder)).toBe(false)
+    expect(Object.keys(h.store.get('downloadedEpisodes') as object)).toEqual(['7:1:71'])
+  })
+
+  // An unremovable file stands in for one the player holds open on Windows.
+  it.skipIf(process.getuid?.() === 0)(
+    'a folder left on disk keeps its entries, so the export tree still finds it',
+    async () => {
+      const h = harness('downloaded')
+      const folder = path.join(h.downloadDir, NAME)
+      fs.mkdirSync(folder)
+      fs.writeFileSync(path.join(folder, `${NAME} - 01.mkv`), 'v')
+      fs.chmodSync(folder, 0o555)
+      try {
+        seedEntries(h)
+        await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+        expect(fs.existsSync(path.join(folder, `${NAME} - 01.mkv`))).toBe(true)
+        expect(Object.keys(h.store.get('downloadedEpisodes') as object).sort()).toEqual([
+          `${ID}:1:11`,
+          `${ID}:2:11`,
+          '7:1:71'
+        ])
+        expect(h.store.get('downloadedAnime')).toEqual({})
+      } finally {
+        fs.chmodSync(folder, 0o755)
+      }
+    }
+  )
 })
 
 function seedEntries(h: Harness): void {

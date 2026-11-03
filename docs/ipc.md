@@ -89,7 +89,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `library-get-priority` | invoke | Locally prioritized smotret-anime IDs (as strings) in promote order; IDs that no longer resolve in `library ∪ downloadedAnime` are pruned from the response without writing back |
 | `library-set-priority` | invoke | `(anime, priority)` — promote/demote. Promoting also writes the `library` entry if missing (the priority ⊆ library invariant, enforced main-side so the two writes cannot interleave) — deliberately stricter than the read's `library ∪ downloadedAnime` test, since `downloadedAnime` is file-derived and volatile while `library` is the durable record of user intent; demoting leaves `library` alone. Returns the resulting ordered ID list — pruned the same way as `library-get-priority`, so the two returns can't disagree — letting a caller refresh membership *and* ordering in one round-trip |
 | `downloaded-anime-add` | invoke | Mark anime as having downloads |
-| `downloaded-anime-delete` | invoke | Remove anime, delete its folder(s), drop its `downloadedEpisodes` entries |
+| `downloaded-anime-delete` | invoke | Remove anime, delete its folder(s), drop its `downloadedEpisodes` entries (kept when a folder stays on disk, e.g. a locked file, so the export tree still finds it) |
 | `cleanup:get-size` | invoke | Sum bytes + file count for a show across hot+cold dirs (.mkv/.mp4/.ass/.srt) |
 | `cleanup:get-active-downloads` | invoke | Count download groups still in flight for the given anime name |
 | `cleanup:execute` | invoke | Delete the show's folder(s), drop its `downloadedAnime` + `downloadedEpisodes` entries, prune caches; preserves `library`/`watchProgress`/Shikimori rate |

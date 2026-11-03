@@ -1,7 +1,8 @@
 // Step 4 (#592): every `downloadedEpisodes` entry has its video in the hot or
 // cold root (the player's name rule, under each of the title's names from its
 // record chain), larger than 0 bytes, with a duration ffprobe can read; and
-// `.part` files no download owns are reported. An entry of a title with no
+// `.part` files no download owns are reported. Only a file under the first
+// name, the one the player looks in, counts as ok. An entry of a title with no
 // `downloadedAnime` record whose file isn't found is stale (#657): skipped and
 // not counted. Reports only: it never deletes, moves or rewrites anything.
 
@@ -64,17 +65,22 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
         }
         try {
           if (!episodeInt) return report('the entry has no episode number')
-          const file = titleNames(entry)
-            .flatMap((animeName) =>
-              episodeVideoCandidates({
-                dirs: roots,
-                animeName,
-                episodeInt,
-                author: meta.author ?? '',
-                sanitizeFilename: deps.sanitizeFilename
-              })
-            )
-            .find((p) => fs.existsSync(p))
+          const names = titleNames(entry)
+          let file: string | undefined
+          let foundUnder: string | undefined
+          for (const animeName of names) {
+            file = episodeVideoCandidates({
+              dirs: roots,
+              animeName,
+              episodeInt,
+              author: meta.author ?? '',
+              sanitizeFilename: deps.sanitizeFilename
+            }).find((p) => fs.existsSync(p))
+            if (file) {
+              foundUnder = animeName
+              break
+            }
+          }
           if (!file && !hasRecord) {
             skipped++
             return
@@ -83,13 +89,14 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
           const size = (await fs.promises.stat(file)).size
           if (size <= 0) return report('the video file is empty (0 bytes)')
           const probe = await deps.probeDuration(file, ctx.signal)
-          if (probe === null) {
-            noProbe = true
-            ok++
-            return
+          if (probe === null) noProbe = true
+          else if ('error' in probe) return report(`ffprobe can't read it (${probe.error})`)
+          else if (!(probe.duration > 0)) return report('ffprobe reads no duration')
+          if (foundUnder !== names[0]) {
+            return report(
+              `the file is in the "${foundUnder}" folder, but the player looks in "${names[0]}"`
+            )
           }
-          if ('error' in probe) return report(`ffprobe can't read it (${probe.error})`)
-          if (!(probe.duration > 0)) return report('ffprobe reads no duration')
           ok++
         } finally {
           done++

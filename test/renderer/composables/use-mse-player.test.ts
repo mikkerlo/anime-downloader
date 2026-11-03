@@ -2727,6 +2727,62 @@ describe('useMsePlayer — GOP-aware eviction in a long GOP (#653)', () => {
     await flush()
     expect(m._internal.getKeyframes()).toEqual([])
   })
+
+  // A mux the tracker cannot read: no `trak` has a `vide` handler, so it never
+  // records a keyframe. Strict, nothing would ever be evicted and every file
+  // would freeze at the quota; instead the run evicts by time, as before #653,
+  // and reports it once per run.
+  it('falls back to the time-based ends when the tracker records nothing, and reports it once per run', async () => {
+    const { m, video, sb, replies, diag } = rig({
+      offset: 0,
+      t: 100,
+      fileKeyframes: tenSecond(0, 590)
+    })
+    const unreadable = (): Uint8Array =>
+      initSegment([
+        { id: 1, handler: 'soun', timescale: FMP4_TS },
+        { id: 2, handler: 'soun', timescale: 48000 }
+      ])
+    const fallbackLines = (): string[] =>
+      diag.mock.calls.map((c) => c[0]).filter((l) => l.startsWith('tracker-empty fallback'))
+
+    sb.buffered.ranges = [[0, 150]]
+    await feed(m, concat([unreadable(), keyframeFragment(0), keyframeFragment(10)]))
+    expect(m._internal.getKeyframes()).toEqual([])
+    // updateend: max(bufStart + 1, t − 30).
+    expect(sb.removeCalls).toEqual([[0, 70]])
+    expect(fallbackLines()).toHaveLength(1)
+    expect(fallbackLines()[0]).toContain('site=updateend remove=[0.000, 70.000)')
+
+    video.currentTime = 140
+    sb.land(190)
+    await feed(m, nonKeyframe(20))
+    expect(sb.removeCalls).toEqual([
+      [0, 70],
+      [70, 110]
+    ])
+
+    // Quota: t − 5.
+    video.currentTime = 175
+    sb.quota = true
+    await feed(m, nonKeyframe(21))
+    expect(sb.removeCalls.at(-1)).toEqual([110, 170])
+    expect(fallbackLines()).toHaveLength(1)
+
+    // A respawn is a new run: the latch resets with the list.
+    sb.quota = false
+    video.currentTime = 436.6
+    m.maybeRespawnForUnbufferedPosition()
+    vi.advanceTimersByTime(250)
+    replies[0]({ generation: GEN + 1, timestampOffset: SEEK_OFFSET })
+    await flush()
+    const beforeRun2 = sb.removeCalls.length
+    sb.buffered.ranges = [[330, 380]]
+    await feed(m, concat([unreadable(), keyframeFragment(0), nonKeyframe(1)]), GEN + 1)
+    expect(sb.removeCalls.slice(beforeRun2)).toEqual([[330, 436.6 - 30]])
+    expect(fallbackLines()).toHaveLength(2)
+    expect(diag).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('useMsePlayer — keyframes from a real ffmpeg capture (#653)', () => {

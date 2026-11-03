@@ -248,7 +248,8 @@ interface Api {
   ) => Promise<MseOpenResult | PlayerOpenError>
   playerStreamStart: (sessionId: string) => Promise<void>
   playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
-  /** One always-on line for player-diag.log, from the MSE stall watchdog (#653). */
+  /** One always-on line for player-diag.log, from the MSE stall watchdog or the
+   *  tracker-empty eviction fallback (#653). */
   playerDiagReport: (line: string) => Promise<void>
   playerStreamSeek: (
     sessionId: string,

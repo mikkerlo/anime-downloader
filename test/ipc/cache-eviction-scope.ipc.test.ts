@@ -207,7 +207,28 @@ describe('downloaded-anime-delete', () => {
     await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
     expect(survived(h)).toEqual(EVICTED)
   })
+
+  it("drops the title's downloadedEpisodes entries and leaves other titles' alone", async () => {
+    const h = harness('downloaded')
+    seedEntries(h)
+    await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+    expect(Object.keys(h.store.get('downloadedEpisodes') as object)).toEqual(['7:1:71'])
+  })
 })
+
+function seedEntries(h: Harness): void {
+  const entry = (translationId: number): object => ({
+    translationType: 'subRu',
+    author: 'Studio',
+    quality: 720,
+    translationId
+  })
+  h.store.set('downloadedEpisodes', {
+    [`${ID}:1:11`]: entry(11),
+    [`${ID}:2:11`]: entry(11),
+    '7:1:71': entry(71)
+  })
+}
 
 describe('cleanup-execute', () => {
   it('keeps the cache of a recently watched title', async () => {
@@ -220,5 +241,12 @@ describe('cleanup-execute', () => {
     const h = harness('downloaded', 'stale-watch')
     await h.invoke(CHANNELS.CLEANUP_EXECUTE, ID, NAME)
     expect(survived(h)).toEqual(EVICTED)
+  })
+
+  it("drops the title's downloadedEpisodes entries and leaves other titles' alone", async () => {
+    const h = harness('downloaded')
+    seedEntries(h)
+    await h.invoke(CHANNELS.CLEANUP_EXECUTE, ID, NAME)
+    expect(Object.keys(h.store.get('downloadedEpisodes') as object)).toEqual(['7:1:71'])
   })
 })

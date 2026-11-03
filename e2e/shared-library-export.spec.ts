@@ -152,6 +152,71 @@ test('exports a downloaded episode to a new Shared Library', async () => {
   }
 })
 
+test('Settings → Storage → Export names a record-less title from recentAnimeMeta and hides a deleted one (#655)', async () => {
+  const ORPHAN_ID = 5102
+  const ORPHAN = 'E2E Orphan Show'
+  const DELETED_ID = 5103
+  const entry = (translationId: number): Record<string, unknown> => ({
+    translationType: 'subRu',
+    author: 'Studio',
+    quality: 720,
+    translationId
+  })
+  const { profile } = seedProfile({
+    recentAnimeMeta: {
+      [ORPHAN_ID]: {
+        id: ORPHAN_ID,
+        title: ORPHAN,
+        titles: { romaji: ORPHAN },
+        posterUrlSmall: '',
+        numberOfEpisodes: 1,
+        type: 'tv',
+        typeTitle: 'TV Series',
+        year: 2024,
+        season: 'spring'
+      }
+    },
+    downloadedEpisodes: {
+      [`${ANIME_ID}:1:91`]: entry(91),
+      [`${ORPHAN_ID}:1:92`]: entry(92),
+      [`${DELETED_ID}:1:93`]: entry(93),
+      [`${DELETED_ID}:2:93`]: entry(93)
+    }
+  })
+  const orphanDir = path.join(profile.root, 'downloads', ORPHAN)
+  fs.mkdirSync(orphanDir)
+  fs.copyFileSync(FIXTURE, path.join(orphanDir, `${ORPHAN} - 01 [Studio].mp4`))
+
+  let launched: LaunchedApp | undefined
+  try {
+    launched = await launchApp(profile, { env: NO_NETWORK })
+    await assertUserData(launched.app, profile)
+    const page = await launched.app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.locator('.sidebar').getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.locator('.settings-tab', { hasText: 'Storage' }).click()
+    await page.getByTestId('storage-export').click()
+
+    const dialog = page.getByTestId('export-dialog')
+    const orphan = dialog.getByTestId(`tree-title-${ORPHAN_ID}`)
+    await expect(orphan).toBeEnabled()
+    await expect(
+      dialog.locator('.title-node > .row', { has: page.getByTestId(`tree-title-${ORPHAN_ID}`) })
+    ).toContainText(ORPHAN)
+    await expect(dialog.getByTestId(`tree-title-${ANIME_ID}`)).toBeEnabled()
+    await expect(dialog.getByTestId(`tree-title-${DELETED_ID}`)).toHaveCount(0)
+    await expect(dialog).not.toContainText(`Anime ${DELETED_ID}`)
+  } finally {
+    try {
+      if (launched) assertNoDownloads(launched)
+    } finally {
+      await launched?.app.close()
+      profile.cleanup()
+    }
+  }
+})
+
 test('exports With metadata on a logged-in profile: state.json parses under the reader', async () => {
   const USER = { id: 4242, nickname: 'e2e-user', avatar: '' }
   const at = Date.now() - 3_600_000

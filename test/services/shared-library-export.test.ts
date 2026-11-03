@@ -14,7 +14,9 @@ import {
 } from '../../src/main/lib/shared-library/format'
 import { nameItems } from '../../src/main/lib/shared-library/naming'
 import { LIBRARY_DIR, readMeta } from '../../src/main/lib/shared-library/read'
+import { JOBS_DIR } from '../../src/main/services/shared-library-export'
 import { nodeFs } from '../../src/main/services/shared-library-export/copy'
+import type { JobRecord } from '../../src/main/services/shared-library-export/job'
 import {
   STALE_EPISODE_LIST,
   classifyTarget
@@ -24,7 +26,13 @@ import {
   mergeMeta,
   writeTitleSnapshot
 } from '../../src/main/services/shared-library-export/snapshot'
-import { makeExportEnv, seedLibrary, sel, type ExportEnv } from '../helpers/shared-library-export'
+import {
+  makeExportEnv,
+  scan,
+  seedLibrary,
+  sel,
+  type ExportEnv
+} from '../helpers/shared-library-export'
 
 const OTHER_LIB = '9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e5f'
 
@@ -123,6 +131,96 @@ describe('the plan: selection → files and missing items', () => {
     env.addEpisode({ animeId: 1, title: 'Alpha', episodeInt: '1', translationId: 11 })
     const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
     expect(plan.titles.map((t) => t.name)).toEqual(['Alpha', 'Zeta'])
+  })
+})
+
+describe('titles with no downloadedAnime record (#655)', () => {
+  const dropRecord = (id: number): void => {
+    const anime = env.store.get('downloadedAnime') as Record<string, unknown>
+    delete anime[id]
+    env.store.set('downloadedAnime', anime)
+  }
+  const record = (id: number, romaji: string): AnimeSearchResult => ({
+    id,
+    title: romaji,
+    titles: { romaji },
+    posterUrlSmall: '',
+    numberOfEpisodes: 12,
+    type: 'tv',
+    typeTitle: 'TV Series',
+    year: 2024,
+    season: 'spring'
+  })
+
+  it('a title whose record is gone but recentAnimeMeta names it: listed under its name, its files ready, and exported', async () => {
+    env = makeExportEnv()
+    env.addEpisode({ animeId: 1, title: 'Alpha', episodeInt: '1', translationId: 11 })
+    const gamma = env.addEpisode({ animeId: 9, title: 'Gamma', episodeInt: '1', translationId: 91 })
+    dropRecord(9)
+    env.store.set('recentAnimeMeta', { 9: record(9, 'Gamma') })
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles.map((t) => t.name)).toEqual(['Alpha', 'Gamma'])
+    const ep = plan.titles[1].translations[0].episodes[0]
+    expect(ep).toMatchObject({
+      key: gamma.key,
+      state: 'ready',
+      size: fs.statSync(gamma.video).size
+    })
+
+    const r = await env.svc.start({ selection: sel(gamma.key), target: env.drive, name: 'Lib' })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.job.filesTotal).toBe(1)
+    expect(r.job.missing).toBe(0)
+    await env.svc.settled(r.job.jobId)
+    const copied = Object.keys(scan(path.join(env.drive, 'Lib'))).filter(
+      (p) => !p.startsWith(LIBRARY_DIR)
+    )
+    expect(copied).toHaveLength(1)
+    expect(copied[0].split(path.sep)[0]).toBe('Gamma')
+    const job = JSON.parse(
+      fs.readFileSync(path.join(env.userData, JOBS_DIR, `${r.job.jobId}.json`), 'utf8')
+    ) as JobRecord
+    expect(job.titles).toEqual([{ animeId: 9, name: 'Gamma' }])
+  })
+
+  it('a title deleted from the Library (record and folder gone, entries left): not listed', async () => {
+    env = makeExportEnv()
+    env.addEpisode({ animeId: 1, title: 'Alpha', episodeInt: '1', translationId: 11 })
+    env.addEpisode({ animeId: 5, title: 'Deleted', episodeInt: '1', translationId: 51 })
+    env.addEpisode({ animeId: 5, title: 'Deleted', episodeInt: '2', translationId: 51 })
+    fs.rmSync(path.join(env.hot, 'Deleted'), { recursive: true })
+    dropRecord(5)
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles.map((t) => t.animeId)).toEqual([1])
+  })
+
+  it('a record-less starred title with cached details: its stale entry becomes a not-downloaded episode', async () => {
+    env = makeExportEnv()
+    env.store.set('library', { 6: record(6, 'Starred') })
+    env.store.set('animeCache', {
+      6: {
+        animeDetail: {
+          ...record(6, 'Starred'),
+          episodes: [1, 2].map((n) => ({
+            id: 600 + n,
+            episodeInt: String(n),
+            episodeFull: `${n} серия`,
+            episodeType: 'tv',
+            isActive: 1
+          }))
+        }
+      }
+    })
+    env.store.set('downloadedEpisodes', {
+      '6:1:61': { translationType: 'subRu', author: 'Studio', quality: 720, translationId: 61 }
+    })
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles).toHaveLength(1)
+    expect(plan.titles[0]).toMatchObject({ animeId: 6, name: 'Starred', translations: [] })
+    expect(plan.titles[0].notDownloaded.map((e) => e.episodeInt)).toEqual(['1', '2'])
   })
 })
 

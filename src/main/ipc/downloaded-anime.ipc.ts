@@ -4,6 +4,7 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
 import { addDownloadedAnime } from '../lib/downloaded-anime'
+import { dropDownloadedEpisodesForAnime } from '../lib/downloaded-episodes'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
@@ -21,6 +22,7 @@ export function register({
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     delete downloaded[String(animeId)]
     store.set('downloadedAnime', downloaded)
+    dropDownloadedEpisodesForAnime(store, animeId)
 
     const dirName = sanitizeFilename(animeName)
     const dirsToCheck = [coldStorageService.getDownloadDir()]

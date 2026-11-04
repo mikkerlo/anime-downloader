@@ -10,6 +10,12 @@
  * every service + router into a single fake makes the harness as complex as
  * the production it stands in for. The helpers below are small, targeted,
  * and composable — each integration test wires what it needs explicitly.
+ *
+ * `offline-world.ts` (#659) is the one composed builder: the offline scenario
+ * matrix's "PC", built on `makeHarness` / `InMemoryStorage`. It constructs per
+ * row only the services and routers that row's oracles and actions call, and
+ * takes steps 3 and 4's deps from the production builders, so it stays a
+ * fixture rather than a second `App`.
  */
 import { vi } from 'vitest'
 import { InMemoryStorage } from './in-memory-storage'

@@ -58,6 +58,8 @@ export default defineConfig({
         'src/main/services/mp4-stats/**': { statements: 95, lines: 95 },
         'src/main/services/shikimori-sync/**': { statements: 65, lines: 65 },
         'src/main/services/cold-storage/**': { statements: 65, lines: 65 },
+        // Measured 96.25 at #659.
+        'src/main/services/prepare-offline/**': { statements: 85, lines: 85 },
         'src/renderer/src/stores/**': { statements: 85, lines: 85 },
         'src/renderer/src/composables/**': { statements: 55, lines: 55 },
         // Measured 97.15 at #361.

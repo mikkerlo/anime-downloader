@@ -44,15 +44,15 @@ import { ensureFpcalc, getFpcalcPath, fpcalcInstallPath } from './fpcalc-binarie
 import { createPrepareOfflineService } from './services/prepare-offline'
 import { createBinariesStep } from './services/prepare-offline/steps/binaries'
 import { createShikimoriRatesStep } from './services/prepare-offline/steps/shikimori-rates'
-import { cachableIdsFrom, createMetadataStep } from './services/prepare-offline/steps/metadata'
+import { createMetadataStep } from './services/prepare-offline/steps/metadata'
 import { createLocalIntegrityStep } from './services/prepare-offline/steps/local-integrity'
+import { localIntegrityDeps, metadataDeps } from './services/prepare-offline/wiring'
 import { createAttachedIntegrityStep } from './services/prepare-offline/steps/attached-integrity'
 import {
   needReviewFrom,
   createLibrarySyncStep
 } from './services/prepare-offline/steps/library-sync'
 import { probeDuration } from './lib/probe-duration'
-import { animeRecordFrom, playerRecordFrom } from './lib/anime-record'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
 import { registerSyncplayBroadcasts } from './ipc/syncplay-broadcasts'
@@ -678,38 +678,22 @@ prepareOffline.registerStep(
   })
 )
 prepareOffline.registerStep(
-  createMetadataStep({
-    cachableIds: () => cachableIdsFrom(store, isCachableAnime),
-    getAnime: (id) => smotretApi.getAnime(id),
-    getEpisodesBatch: (ids) => smotretApi.getEpisodesBatch(ids),
-    refreshAnimeDetail: (id, detail) => animeCacheService.refreshAnimeDetail(id, detail),
-    updateEpisodes: (id, details) => animeCacheService.updateEpisodes(id, details)
-  })
+  createMetadataStep(
+    metadataDeps({ store, isCachable: isCachableAnime, smotretApi, animeCacheService })
+  )
 )
 prepareOffline.registerStep(
-  createLocalIntegrityStep({
-    downloadedEpisodes: () =>
-      store.get('downloadedEpisodes') as Record<string, { author?: string }>,
-    downloadedAnime: () => store.get('downloadedAnime') as Record<string, AnimeSearchResult>,
-    animeRecord: (id) => animeRecordFrom(store, id),
-    playerRecord: (id) => playerRecordFrom(store, id),
-    displayName: getDisplayName,
-    sanitizeFilename,
-    roots: () => {
-      const cold = coldStorageService.isAdvanced() ? coldStorageService.getColdStorageDir() : ''
-      return cold
-        ? [coldStorageService.getDownloadDir(), cold]
-        : [coldStorageService.getDownloadDir()]
-    },
-    missingRoots: () => coldStorageService.missingConfiguredRoots(),
-    probeDuration: (file, signal) => {
-      const ffprobe = getFfprobePath()
-      return ffprobe && fs.existsSync(ffprobe)
-        ? probeDuration(ffprobe, file, signal)
-        : Promise.resolve(null)
-    },
-    isActivePart: (p) => downloadManager?.getActiveDownloadByPath(p) != null
-  })
+  createLocalIntegrityStep(
+    localIntegrityDeps({
+      store,
+      coldStorageService,
+      getDownloadManager: () => downloadManager,
+      getFfprobePath,
+      probeDuration,
+      sanitizeFilename,
+      getDisplayName
+    })
+  )
 )
 prepareOffline.registerStep(createAttachedIntegrityStep(attachedLibraryService))
 prepareOffline.registerStep(

@@ -1085,13 +1085,14 @@ four rules replace it.
 
 `test:coverage` enforces **per-glob** floors (in `vitest.config.ts`) on the
 seams Phase 7 covers — `src/shared`, `src/main/lib`, `src/main/store`, the
-unit-tested `src/main/services/*`, `src/renderer/src/stores`, and
-`src/renderer/src/composables`. A single global number isn't used: it would be
-dominated by the `.vue` components and `main/ipc` routers that are out of scope
-for unit testing. Floors sit a few points below current coverage so churn
-doesn't flake CI; raise them in follow-ups as coverage climbs. The CI `quality`
-job runs `test:coverage` (not plain `test`) so a threshold regression fails the
-PR.
+unit-tested `src/main/services/*` (`src/main/services/prepare-offline` among
+them, with its deps builder `wiring.ts`, since `index.ts` is excluded),
+`src/renderer/src/stores`, and `src/renderer/src/composables`. A single global
+number isn't used: it would be dominated by the `.vue` components and
+`main/ipc` routers that are out of scope for unit testing. Floors sit a few
+points below current coverage so churn doesn't flake CI; raise them in
+follow-ups as coverage climbs. The CI `quality` job runs `test:coverage` (not
+plain `test`) so a threshold regression fails the PR.
 
 Two entries name a **single file** rather than a directory (#361). With
 `perFile: false` every glob is an aggregate, and an aggregate is exactly what a
@@ -1484,3 +1485,68 @@ CI runs it in `.github/workflows/shared-library-e2e.yml` (Linux only; the
 per-OS checks are #587's manual matrix), after `scripts/ci-install-ffmpeg.sh`
 and `scripts/ci-electron-libs.sh`: the profile helper links ffmpeg from
 `PATH`, and the spec builds its clips with it.
+
+## Scenario matrix (offline)
+
+`test/integration/offline-matrix/` (#659) checks Prepare for offline's
+Downloaded episodes step, and the readers it has to agree with, over store
+states built on purpose rather than the ones a step test's author had in mind.
+#655 and #657 were both states no test built.
+
+- **A world is one PC.** `buildWorld(spec)` in `test/helpers/offline-world.ts`
+  writes temp hot and cold roots with the episode files the spec declares, and
+  a `makeHarness` / `InMemoryStorage` store with `downloadedEpisodes`,
+  `downloadedAnime`, `library`, `animeCache`, `recentAnimeMeta` and
+  `watchProgress`. Over it run the real cold-storage and anime-cache services
+  and the cache scope. It is not an `App` reconstruction: it registers only the
+  routers a row's oracles and actions call (`player` and `anime` for O1 and O9,
+  `downloaded-anime` for Library → Delete, `downloads` for cancel-by-episode),
+  and builds the export service only for O3.
+- **One world at a time.** The `ipcMain` mock has one handler map and `handle`
+  overwrites quietly, so a second live world's routers would answer the first
+  one's `invoke` with no error. `buildWorld` throws while a world is live, and
+  `dispose()` (the runner's `afterEach`) calls `__reset()`.
+- **Steps 3 and 4 use the production deps.** `index.ts` hands
+  `localIntegrityDeps(...)` and `metadataDeps(...)` from
+  `src/main/services/prepare-offline/wiring.ts` straight to the step factories,
+  and the world calls the same builders over its own services, before its
+  download-manager stub exists, as `index.ts` does. So the roots rule, the
+  ffprobe guard, the record chain, the cache scope and the late-bound download
+  manager are the shipped ones; the world overrides only `concurrency` (1, so
+  detail lines come in entry order). The ffprobe path is a real temp file and
+  the probe a stub; the stub's `getActiveDownloadByPath` is the real method run
+  over the stub's queue.
+- **Steps 1, 2, 5 and 6 are not.** Their deps stay inline in `index.ts`, and a
+  row that needs them builds them by hand, as `prepare-offline.test.ts` does.
+  The step order is a copy too. Only the e2e case that drives a run through the
+  built app checks the real wiring of those four and the real order.
+- **Oracles** (`test/helpers/offline-oracles.ts`) each return a list of
+  violations, `{ scenario, entry, oracle, actual }`. O1: ok means the offline
+  player route (`GET_ANIME`, then `player:find-local-file` under
+  `getAnimeName`) finds that entry's file. O2: no entry with its file on disk
+  is skipped silently, except a deleted title's leftovers. O3: a deleted
+  title's entries get no line, no count and no export row, before and after a
+  restart's reconcile. O4: an entry on an unplugged drive names the drive. O6:
+  the step changes no store key and no file. O7: an action on one episode never
+  drops the title's record or cached details while its files remain. O8: an
+  entry's problem is a line, never a failed step, and the summary adds up. O9:
+  every title on a line or counted ok opens offline. To tie a count to its
+  entry, the step is also run over each entry alone.
+- **Adding a row**: append to `scenarios.ts` with a made-up id range, the
+  oracles it runs, and step 4's exact output as `expect`. Cite issue numbers
+  and function names, never `file:line`, in the table and its comments, so a
+  change that moves `local-integrity.ts` doesn't have to edit the matrix. A new
+  axis value goes into `WorldSpec` and the builder first.
+- **`known` pins.** A pair that reports violations because of a filed bug
+  carries `known: { issue, oracle, violations }`, the exact list seen today
+  with temp roots normalised to `<hot>`, `<cold>` and `<root>`. The fix PR
+  turns it red and removes it (the flip). A pin and its fix can land in either
+  order: a bug fixed before its row lands is a row with no pin.
+- **`agreed` exemptions.** A pair whose violations are behaviour mikkerlo or an
+  approved plan accepted carries `agreed: { source, oracle }`. The oracle still
+  runs and must report at least one violation, so a stale exemption goes red
+  once the behaviour changes. A guard test accepts only a positive issue number
+  for `known` and a GitHub comment URL or a quoted Risks line
+  (`#657 Risks: "…"`) for `agreed`.
+- **Locked-file rows** use a read-only folder for a file Windows holds open, so
+  they are skipped on Windows and as root.

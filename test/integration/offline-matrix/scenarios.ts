@@ -1,0 +1,473 @@
+// The offline scenario matrix (#659): each row is a "PC" (`WorldSpec`), what
+// the user does on it, the oracles that must hold, and step 4's exact output.
+// Titles and comments cite issue numbers and function names, never file:line,
+// so a PR that moves `local-integrity.ts` doesn't have to edit this table.
+// Made-up ids and names only.
+//
+// A (row, oracle) pair that reports violations carries exactly one of:
+// - `known`: a filed bug. The pin is the exact list seen today, so the fix PR
+//   turns it red and removes it.
+// - `agreed`: behaviour mikkerlo or an approved plan accepted, citing where.
+//   The oracle must still report at least one violation, so the exemption
+//   can't outlive the behaviour it excuses.
+// A pin and its fix can land in either order: a bug fixed before its row
+// landed (#660 in S07/S08, #662 in S31, #664 in S17) is a row with no pin, and
+// a fix that lands after its pin removes it (#661 in S15/S16).
+
+import { named, type Action, type WorldSpec } from '../../helpers/offline-world'
+import type { OracleId, Violation } from '../../helpers/offline-oracles'
+
+export interface Scenario {
+  id: string
+  title: string
+  world: WorldSpec
+  actions?: Action[]
+  oracles: OracleId[]
+  /** Step 4's run, temp roots normalised. */
+  expect?: { status: PrepareOfflineStatus; details: string[] }
+  known?: { issue: number; oracle: OracleId; violations: Violation[] }[]
+  agreed?: { source: string; oracle: OracleId }[]
+  /** Uses a read-only folder for a file locked open, which neither Windows nor root honours. */
+  locked?: true
+}
+
+const Q3 = 'https://github.com/mikkerlo/anime-downloader/issues/659#issuecomment-6634458758'
+const RECORD_LESS =
+  '#657 Risks: "Not fixed here: record-less titles still aren\'t in the Library or the cache scope"'
+const LOCKED = '#657 Risks: "A title deleted while a file was locked"'
+
+const SHOW = named('Show')
+const COLD_SHOW = named('Cold Show')
+
+export const SCENARIOS: Scenario[] = [
+  {
+    id: 'S01',
+    title:
+      'recorded, cached under the same name, a healthy hot file, and a .part the download manager owns',
+    world: {
+      titles: [{ id: 101, downloaded: SHOW, cache: SHOW, entries: [{ ep: '1', trId: 1011 }] }],
+      parts: [{ under: 'Show', ep: '2', status: 'downloading' }]
+    },
+    oracles: ['O1', 'O2', 'O6', 'O8'],
+    // The owned .part is not an orphan line, and ffprobe ran, so no ffprobe line.
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
+  {
+    id: 'S02',
+    title: 'recorded, a healthy file in cold storage (advanced mode)',
+    world: {
+      mode: 'advanced',
+      titles: [
+        {
+          id: 102,
+          downloaded: SHOW,
+          cache: SHOW,
+          entries: [{ ep: '1', trId: 1021, where: 'cold' }]
+        }
+      ]
+    },
+    oracles: ['O1', 'O6'],
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
+  {
+    id: 'S03',
+    title: 'recorded: a 0-byte file, a truncated .mp4, a missing file and an orphan .part',
+    world: {
+      titles: [
+        {
+          id: 103,
+          downloaded: named('Broken'),
+          cache: named('Broken'),
+          entries: [
+            { ep: '1', trId: 1031, file: 'empty' },
+            { ep: '2', trId: 1032, file: 'truncated' },
+            { ep: '3', trId: 1033, file: 'none' }
+          ]
+        }
+      ],
+      parts: [{ under: 'Broken', ep: '4', status: null }]
+    },
+    oracles: ['O2', 'O6', 'O8'],
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 3 episodes ok',
+        'Broken episode 1: the video file is empty (0 bytes)',
+        "Broken episode 2: ffprobe can't read it (moov atom not found)",
+        'Broken episode 3: the video file is missing',
+        'Broken - 04 [Author].mp4.part: a partial download with no download running'
+      ]
+    }
+  },
+  {
+    id: 'S04',
+    title: 'an untagged file from before author tags, under a three-part key',
+    world: {
+      titles: [
+        {
+          id: 104,
+          downloaded: named('Untagged'),
+          cache: named('Untagged'),
+          entries: [{ ep: '1', trId: 1041, untagged: true }]
+        }
+      ]
+    },
+    oracles: ['O1'],
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
+  {
+    id: 'S05',
+    title: "an entry tagged with author A, and only author B's file on disk",
+    world: {
+      titles: [
+        {
+          id: 105,
+          downloaded: named('Wrong Tag'),
+          cache: named('Wrong Tag'),
+          entries: [{ ep: '1', trId: 1051, author: 'A', fileAuthor: 'B' }]
+        }
+      ]
+    },
+    oracles: ['O1', 'O2'],
+    expect: {
+      status: 'warning',
+      details: ['0 of 1 episode ok', 'Wrong Tag episode 1: the video file is missing']
+    }
+  },
+  {
+    id: 'S06',
+    title: 'two translations of one episode, one of the files gone',
+    world: {
+      titles: [
+        {
+          id: 106,
+          downloaded: named('Two Tr'),
+          cache: named('Two Tr'),
+          entries: [
+            { ep: '1', trId: 1061, author: 'A' },
+            { ep: '1', trId: 1062, author: 'B', file: 'none' }
+          ]
+        }
+      ]
+    },
+    oracles: ['O2', 'O8'],
+    expect: {
+      status: 'warning',
+      details: ['1 of 2 episodes ok', 'Two Tr episode 1: the video file is missing']
+    }
+  },
+  {
+    // #660 part A, fixed before this row landed: the step looks under the
+    // player's record (`playerRecordFrom`, the cached details first).
+    id: 'S07',
+    title: 'name drift: the downloadedAnime record says "Old Name", the cached details "New Name"',
+    world: {
+      titles: [
+        {
+          id: 107,
+          downloaded: named('Old Name'),
+          cache: named('New Name'),
+          entries: [{ ep: '1', trId: 1071 }]
+        }
+      ]
+    },
+    oracles: ['O1'],
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 1 episode ok',
+        'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"'
+      ]
+    }
+  },
+  {
+    // #660 part A, fixed before this row landed.
+    id: 'S08',
+    title: 'romaji empty at download (folder under ru), the cached details gain romaji later',
+    world: {
+      titles: [
+        {
+          id: 108,
+          downloaded: { romaji: '', ru: 'Дельта', title: 'Delta' },
+          cache: { romaji: 'Delta R', ru: 'Дельта', title: 'Delta' },
+          entries: [{ ep: '1', trId: 1081 }]
+        }
+      ]
+    },
+    oracles: ['O1'],
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 1 episode ok',
+        'Delta R episode 1: the file is in the "Дельта" folder, but the player looks in "Delta R"'
+      ]
+    }
+  },
+  {
+    id: 'S09',
+    title: "recorded, the file only under the title's ru folder",
+    world: {
+      titles: [
+        {
+          id: 109,
+          downloaded: { romaji: 'Nine', ru: 'Девять', title: 'Nine' },
+          cache: { romaji: 'Nine', ru: 'Девять', title: 'Nine' },
+          entries: [{ ep: '1', trId: 1091, under: 'Девять' }]
+        }
+      ]
+    },
+    oracles: ['O1', 'O2'],
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 1 episode ok',
+        'Nine episode 1: the file is in the "Девять" folder, but the player looks in "Nine"'
+      ]
+    }
+  },
+  {
+    id: 'S10',
+    title:
+      'no downloadedAnime record, a recentAnimeMeta name, watched within 90 days; an online step 3 first',
+    world: {
+      titles: [
+        {
+          id: 110,
+          recent: named('Watched'),
+          watchedDaysAgo: 5,
+          entries: [{ ep: '1', trId: 1101 }]
+        }
+      ]
+    },
+    actions: [{ do: 'metadata' }],
+    oracles: ['O1', 'O9'],
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
+  {
+    id: 'S11',
+    title:
+      'auto-downloaded (no record, a recentAnimeMeta name), not watched in 90 days; an online step 3 first',
+    world: {
+      titles: [
+        {
+          id: 111,
+          recent: named('Auto Show'),
+          watchedDaysAgo: 120,
+          entries: [
+            { ep: '1', trId: 1111 },
+            { ep: '2', trId: 1112 }
+          ]
+        }
+      ]
+    },
+    actions: [{ do: 'metadata' }],
+    oracles: ['O2', 'O9'],
+    agreed: [{ source: RECORD_LESS, oracle: 'O9' }],
+    expect: { status: 'ok', details: ['2 of 2 episodes ok'] }
+  },
+  {
+    id: 'S12',
+    title: 'recorded, animeDetail: null in the cache, run offline',
+    world: {
+      titles: [
+        {
+          id: 112,
+          downloaded: named('No Details'),
+          cache: null,
+          entries: [{ ep: '1', trId: 1121 }]
+        }
+      ]
+    },
+    oracles: ['O2', 'O6', 'O8', 'O9'],
+    agreed: [{ source: Q3, oracle: 'O9' }],
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
+  {
+    id: 'S13',
+    title: 'Library → Delete while a file is locked, a recentAnimeMeta name, then Prepare',
+    world: {
+      titles: [
+        {
+          id: 113,
+          downloaded: named('Locked'),
+          cache: named('Locked'),
+          recent: named('Locked'),
+          entries: [{ ep: '1', trId: 1131 }]
+        }
+      ]
+    },
+    actions: [{ do: 'delete', id: 113, locked: true }],
+    oracles: ['O3', 'O9'],
+    agreed: [
+      { source: LOCKED, oracle: 'O3' },
+      { source: LOCKED, oracle: 'O9' }
+    ],
+    locked: true,
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
+  {
+    id: 'S14',
+    title: 'Library → Delete while a file is locked, no other name source, then Prepare',
+    world: {
+      titles: [
+        {
+          id: 114,
+          downloaded: named('Locked Bare'),
+          cache: named('Locked Bare'),
+          entries: [{ ep: '1', trId: 1141 }]
+        }
+      ]
+    },
+    actions: [{ do: 'delete', id: 114, locked: true }],
+    oracles: ['O2'],
+    locked: true,
+    // #657 Risks: "A record-less title with files and no name source … is
+    // skipped", kept silent by mikkerlo's #657 answer 1
+    // (https://github.com/mikkerlo/anime-downloader/issues/657#issuecomment-6617346173);
+    // `0 of 0` reads `ok` (the #657 pin).
+    expect: { status: 'ok', details: ['0 of 0 episodes ok'] }
+  },
+  {
+    id: 'S15',
+    title:
+      'advanced, a cold-only title: cancel its queued episode after "Clear completed", then Prepare',
+    world: {
+      mode: 'advanced',
+      titles: [
+        {
+          id: 115,
+          downloaded: COLD_SHOW,
+          cache: COLD_SHOW,
+          queued: [{ ep: '3', trId: 1153 }],
+          entries: [
+            { ep: '1', trId: 1151, where: 'cold' },
+            { ep: '2', trId: 1152, where: 'cold' }
+          ]
+        }
+      ]
+    },
+    actions: [{ do: 'cancel-by-episode', id: 115, ep: '3' }],
+    oracles: ['O7', 'O2'],
+    // #661: the cancel sweep looks for files in every configured root, so the
+    // title keeps its record and cached details, and both cold files count.
+    expect: { status: 'ok', details: ['2 of 2 episodes ok'] }
+  },
+  {
+    id: 'S16',
+    title: 'S15 with a recentAnimeMeta name',
+    world: {
+      mode: 'advanced',
+      titles: [
+        {
+          id: 116,
+          downloaded: COLD_SHOW,
+          cache: COLD_SHOW,
+          recent: COLD_SHOW,
+          queued: [{ ep: '3', trId: 1163 }],
+          entries: [
+            { ep: '1', trId: 1161, where: 'cold' },
+            { ep: '2', trId: 1162, where: 'cold' }
+          ]
+        }
+      ]
+    },
+    actions: [{ do: 'cancel-by-episode', id: 116, ep: '3' }],
+    oracles: ['O7', 'O9'],
+    // #661: the title keeps its record and cached details, so its page opens.
+    expect: { status: 'ok', details: ['2 of 2 episodes ok'] }
+  },
+  {
+    // #664, fixed in this row's base: the line names the unplugged drive.
+    id: 'S17',
+    title: 'advanced, the cold drive unplugged, recorded episodes on it',
+    world: {
+      mode: 'advanced',
+      coldAway: true,
+      titles: [
+        {
+          id: 117,
+          downloaded: named('Away'),
+          cache: named('Away'),
+          entries: [
+            { ep: '1', trId: 1171, where: 'cold' },
+            { ep: '2', trId: 1172, where: 'cold' }
+          ]
+        }
+      ]
+    },
+    oracles: ['O4'],
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 2 episodes ok',
+        "Away episode 1: cold storage isn't connected (<cold>), so this episode wasn't checked",
+        "Away episode 2: cold storage isn't connected (<cold>), so this episode wasn't checked"
+      ]
+    }
+  },
+  {
+    id: 'S18',
+    title: 'advanced, the cold drive unplugged, record-less episodes on it',
+    world: {
+      mode: 'advanced',
+      coldAway: true,
+      titles: [
+        {
+          id: 118,
+          recent: named('Away Auto'),
+          entries: [{ ep: '1', trId: 1181, where: 'cold' }]
+        }
+      ]
+    },
+    oracles: ['O2'],
+    // #657 Risks: "Away cold drive": a record-less title whose files are only
+    // on an unplugged cold drive is skipped, not reported.
+    expect: { status: 'ok', details: ['0 of 0 episodes ok'] }
+  },
+  {
+    // #662, fixed before this row landed: a file gone before its `stat` is a line.
+    id: 'S31',
+    title: 'a file is unlinked mid-run, between the lookup and its stat',
+    world: {
+      titles: [
+        {
+          id: 131,
+          downloaded: named('Race'),
+          cache: named('Race'),
+          entries: [{ ep: '1', trId: 1311 }]
+        },
+        {
+          id: 132,
+          downloaded: named('Other'),
+          cache: named('Other'),
+          entries: [{ ep: '1', trId: 1321 }]
+        }
+      ]
+    },
+    actions: [{ do: 'unlink-before-stat', match: 'Race - 01' }],
+    oracles: ['O8', 'O2'],
+    expect: {
+      status: 'warning',
+      details: ['1 of 2 episodes ok', 'Race episode 1: the video file is missing']
+    }
+  },
+  {
+    // Going offline puts an active transfer back to 'queued' and keeps its
+    // .part (`suspendForOffline`); any item that isn't cancelled owns it.
+    id: 'S35',
+    title: 'the .part of a download that going offline suspended',
+    world: {
+      titles: [
+        {
+          id: 135,
+          downloaded: named('Suspended'),
+          cache: named('Suspended'),
+          entries: [{ ep: '1', trId: 1351 }]
+        }
+      ],
+      parts: [{ under: 'Suspended', ep: '2', status: 'queued' }]
+    },
+    oracles: ['O2'],
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  }
+]

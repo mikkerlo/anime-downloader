@@ -6,8 +6,9 @@
 // counts as ok. An entry of a title with no `downloadedAnime` record whose file
 // isn't found is stale (#657): skipped and not counted. A file that goes away
 // between the lookup and its `stat` counts as not found, and one `stat` can't
-// read is a line (#662), never a step failure. Reports only: it never deletes,
-// moves or rewrites anything.
+// read is a line (#662), never a step failure. A recorded entry with no file
+// found while a root it searched is away names that root, not a missing file
+// (#664). Reports only: it never deletes, moves or rewrites anything.
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -29,6 +30,8 @@ export interface LocalIntegrityStepDeps {
   sanitizeFilename(name: string): string
   /** Hot first, then cold. */
   roots(): string[]
+  /** Configured roots that aren't on disk, `ColdStorageService.missingConfiguredRoots()`. */
+  missingRoots(): string[]
   /** The duration ffprobe reads, or an error; null when ffprobe isn't installed. */
   probeDuration(
     filePath: string,
@@ -51,6 +54,16 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
       const episodes = Object.entries(deps.downloadedEpisodes())
       const anime = deps.downloadedAnime()
       const roots = deps.roots().filter(Boolean)
+      const missing = deps.missingRoots()
+      const away = roots.filter((r) => missing.includes(r))
+      const awayRoot =
+        roots.indexOf(away[0]) === 1
+          ? "cold storage isn't connected"
+          : "the download folder isn't there"
+      const notFound =
+        away.length === 0
+          ? 'the video file is missing'
+          : `${awayRoot} (${away[0]}), so this episode wasn't checked`
       const details: PrepareStepResult['details'] = []
       let ok = 0
       let skipped = 0
@@ -93,7 +106,7 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
             skipped++
             return
           }
-          if (!file) return report('the video file is missing')
+          if (!file) return report(notFound)
           let size: number
           try {
             size = (await fs.promises.stat(file)).size

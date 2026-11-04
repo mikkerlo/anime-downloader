@@ -430,6 +430,7 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
       displayName: (a) => a.titles?.romaji || a.title,
       sanitizeFilename,
       roots: () => [hot, cold],
+      missingRoots: () => [],
       probeDuration: (f, signal) => probeDuration(ffprobe, f, signal),
       isActivePart: (p) => p === activePart
     })
@@ -464,6 +465,7 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
       displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
       sanitizeFilename,
       roots: () => [hot],
+      missingRoots: () => [],
       probeDuration: async () => ({ duration: 1420 }),
       isActivePart: () => false,
       concurrency: 1
@@ -562,6 +564,7 @@ describe('step 4: a file that goes away or fails to read while the step runs', (
       displayName: (a) => a.titles?.romaji || a.title,
       sanitizeFilename: opts.sanitize ?? sanitizeFilename,
       roots: () => [hot],
+      missingRoots: () => [],
       probeDuration: opts.probe ?? (async () => ({ duration: 1 })),
       isActivePart: () => false,
       concurrency: 1
@@ -694,38 +697,42 @@ describe('step 4: the wiring in src/main/index.ts (source pin)', () => {
     const body = src.slice(start, src.indexOf('isActivePart:', start))
     expect(body).toContain('playerRecord: (id) => playerRecordFrom(store, id),')
     expect(body).toContain('animeRecord: (id) => animeRecordFrom(store, id),')
+    expect(body).toContain('missingRoots: () => coldStorageService.missingConfiguredRoots(),')
   })
 })
 
-describe('step 4: titles with no downloadedAnime record', () => {
-  const meta = { author: 'Author', translationId: 1 }
-  const titled = (id: number, romaji: string, ru?: string): AnimeSearchResult =>
-    ({ id, title: romaji, titles: { romaji, ru } }) as AnimeSearchResult
-  const writeEp = (root: string, folder: string, ep: string, content: string): void => {
-    fs.mkdirSync(path.join(root, sanitizeFilename(folder)), { recursive: true })
-    const base = sanitizeFilename(`${folder} - ${ep.padStart(2, '0')}`)
-    fs.writeFileSync(path.join(root, sanitizeFilename(folder), `${base} [Author].mp4`), content)
-  }
-  const stepOver = (
-    hot: string,
-    downloadedEpisodes: Record<string, typeof meta>,
-    downloadedAnime: Record<string, AnimeSearchResult>,
-    animeRecord: (id: number) => AnimeSearchResult | null,
-    opts: { cold?: string; probe?: { duration: number } | null } = {}
-  ) =>
-    createLocalIntegrityStep({
-      downloadedEpisodes: () => downloadedEpisodes,
-      downloadedAnime: () => downloadedAnime,
-      animeRecord,
-      playerRecord: animeRecord,
-      displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
-      sanitizeFilename,
-      roots: () => (opts.cold ? [hot, opts.cold] : [hot]),
-      probeDuration: async () => (opts.probe === undefined ? { duration: 1420 } : opts.probe),
-      isActivePart: () => false,
-      concurrency: 1
-    })
+// Shared by the two step 4 describes below: the record-less titles (#657) and
+// the away root (#664).
+const meta = { author: 'Author', translationId: 1 }
+const titled = (id: number, romaji: string, ru?: string): AnimeSearchResult =>
+  ({ id, title: romaji, titles: { romaji, ru } }) as AnimeSearchResult
+const writeEp = (root: string, folder: string, ep: string, content: string): void => {
+  fs.mkdirSync(path.join(root, sanitizeFilename(folder)), { recursive: true })
+  const base = sanitizeFilename(`${folder} - ${ep.padStart(2, '0')}`)
+  fs.writeFileSync(path.join(root, sanitizeFilename(folder), `${base} [Author].mp4`), content)
+}
+const stepOver = (
+  hot: string,
+  downloadedEpisodes: Record<string, typeof meta>,
+  downloadedAnime: Record<string, AnimeSearchResult>,
+  animeRecord: (id: number) => AnimeSearchResult | null,
+  opts: { cold?: string; probe?: { duration: number } | null; missingRoots?: string[] } = {}
+) =>
+  createLocalIntegrityStep({
+    downloadedEpisodes: () => downloadedEpisodes,
+    downloadedAnime: () => downloadedAnime,
+    animeRecord,
+    playerRecord: animeRecord,
+    displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
+    sanitizeFilename,
+    roots: () => (opts.cold ? [hot, opts.cold] : [hot]),
+    missingRoots: () => opts.missingRoots ?? [],
+    probeDuration: async () => (opts.probe === undefined ? { duration: 1420 } : opts.probe),
+    isActivePart: () => false,
+    concurrency: 1
+  })
 
+describe('step 4: titles with no downloadedAnime record', () => {
   it("an auto-downloaded title is checked by file under its record-chain name; a deleted title's leftovers are skipped and not counted", async () => {
     const hot = tmp('prep-norec-')
     const show = titled(10, 'Show')
@@ -874,6 +881,87 @@ describe('step 4: titles with no downloadedAnime record', () => {
     const out = await step.run(ctx())
 
     expect(out).toEqual({ status: 'ok', details: [{ text: '0 of 0 episodes ok', status: 'ok' }] })
+  })
+})
+
+// #664: a recorded entry with no file found while a root the step searched is
+// away names the root, not a missing file. Still counted, still not ok.
+describe('step 4: an away root', () => {
+  const show = titled(10, 'Show')
+  const records = (id: number): AnimeSearchResult | null => (id === 10 ? show : null)
+  const entries = { '10:1:1': meta, '10:2:1': meta, '5:1:1': meta }
+
+  it("an unplugged cold root: the line says cold storage isn't connected, and the rest is checked as before", async () => {
+    const hot = tmp('prep-away-hot-')
+    const cold = path.join(hot, 'unplugged')
+    writeEp(hot, 'Show', '1', 'video')
+    const step = stepOver(hot, entries, { 10: show }, records, { cold, missingRoots: [cold] })
+    const out = await step.run(ctx())
+
+    expect(out).toEqual({
+      status: 'warning',
+      details: [
+        { text: '1 of 2 episodes ok', status: 'warning' },
+        {
+          text: `Show episode 2: cold storage isn't connected (${cold}), so this episode wasn't checked`,
+          status: 'warning',
+          animeId: 10
+        }
+      ]
+    })
+  })
+
+  it('a missing root the step did not search changes nothing: the file is still missing', async () => {
+    const hot = tmp('prep-away-unsearched-')
+    const cold = path.join(hot, 'unplugged')
+    writeEp(hot, 'Show', '1', 'video')
+    const step = stepOver(hot, entries, { 10: show }, records, { missingRoots: [cold] })
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      { text: 'Show episode 2: the video file is missing', status: 'warning', animeId: 10 }
+    ])
+  })
+
+  it("an away hot root: the line says the download folder isn't there", async () => {
+    const cold = tmp('prep-away-cold-')
+    const hotAway = path.join(cold, 'unplugged-hot')
+    writeEp(cold, 'Show', '1', 'video')
+    const step = stepOver(hotAway, entries, { 10: show }, records, {
+      cold,
+      missingRoots: [hotAway]
+    })
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      {
+        text: `Show episode 2: the download folder isn't there (${hotAway}), so this episode wasn't checked`,
+        status: 'warning',
+        animeId: 10
+      }
+    ])
+  })
+
+  it('two away roots: the line names the first in search order, not in missingRoots order', async () => {
+    const base = tmp('prep-away-both-')
+    const hotAway = path.join(base, 'unplugged-hot')
+    const coldAway = path.join(base, 'unplugged-cold')
+    const step = stepOver(hotAway, { '10:2:1': meta }, { 10: show }, records, {
+      cold: coldAway,
+      missingRoots: [coldAway, hotAway]
+    })
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: `Show episode 2: the download folder isn't there (${hotAway}), so this episode wasn't checked`,
+        status: 'warning',
+        animeId: 10
+      }
+    ])
   })
 })
 

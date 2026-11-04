@@ -218,6 +218,72 @@ describe('Copy to this PC from the fixture library', () => {
     expect((await findLocal('Local Name', '1', 9001, 101))?.filePath).toBe(local)
   })
 
+  describe('a title this PC has no downloadedAnime record for (#660)', () => {
+    const titled = (romaji: string): AnimeSearchResult =>
+      ({
+        id: 101,
+        title: romaji,
+        titles: { romaji },
+        posterUrlSmall: '',
+        numberOfEpisodes: 28,
+        type: 'tv',
+        typeTitle: 'TV',
+        year: 2023,
+        season: 'fall'
+      }) as AnimeSearchResult
+    const cacheOf = (romaji: string): Record<string, unknown> => ({
+      '101': {
+        animeDetail: {
+          ...titled(romaji),
+          posterUrl: '',
+          descriptions: [],
+          episodes: [],
+          genres: []
+        },
+        episodes: {},
+        qualityProbes: {},
+        cachedAt: 1,
+        posterCached: false
+      }
+    })
+    const importedUnder = async (name: string): Promise<void> => {
+      await attach()
+      await importKeys([FRIEREN])
+      const local = path.join(downloadDir, name, `${name} - 01 [Crunchyroll].mp4`)
+      expect(fs.readdirSync(downloadDir)).toEqual([name])
+      expect(fs.existsSync(local)).toBe(true)
+      const anime = harness.store.get<Record<string, AnimeSearchResult>>('downloadedAnime')!
+      expect(anime['101'].titles?.romaji).toBe(name)
+      await attached.forget(FIXTURE_LIBRARY_ID)
+      expect((await findLocal(name, '1', 9001, 101))?.filePath).toBe(local)
+    }
+
+    it("a starred title with cached details is filed and registered under this PC's name, not the drive's", async () => {
+      setMetaTitle(drive, 101, 'Foreign Name')
+      harness.store.set('library', { '101': titled('Local Name') })
+      harness.store.set('animeCache', cacheOf('Local Name'))
+      const cache = JSON.stringify(harness.store.get('animeCache'))
+
+      await importedUnder('Local Name')
+      expect(JSON.stringify(harness.store.get('animeCache'))).toBe(cache)
+    })
+
+    it("the cached details win over a stale library record: the player's name, not the star's", async () => {
+      setMetaTitle(drive, 101, 'Foreign Name')
+      harness.store.set('library', { '101': titled('Old Star Name') })
+      harness.store.set('animeCache', cacheOf('Local Name'))
+
+      await importedUnder('Local Name')
+    })
+
+    it('with no cached details, the library record names it, not the drive', async () => {
+      setMetaTitle(drive, 101, 'Foreign Name')
+      harness.store.set('library', { '101': titled('Star Name') })
+
+      await importedUnder('Star Name')
+    })
+  })
+
   it('a snapshot title of "..": nothing is created for it, nothing lands above the root, and the other titles still import', async () => {
     setMetaTitle(drive, 101, '..')
     await attach()

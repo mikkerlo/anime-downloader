@@ -1,10 +1,11 @@
 // Step 4 (#592): every `downloadedEpisodes` entry has its video in the hot or
-// cold root (the player's name rule, under each of the title's names from its
-// record chain), larger than 0 bytes, with a duration ffprobe can read; and
-// `.part` files no download owns are reported. Only a file under the first
-// name, the one the player looks in, counts as ok. An entry of a title with no
-// `downloadedAnime` record whose file isn't found is stale (#657): skipped and
-// not counted. Reports only: it never deletes, moves or rewrites anything.
+// cold root (the player's name rule, under each of the title's names: the
+// player's record's (#660), then its record chain's), larger than 0 bytes, with
+// a duration ffprobe can read; and `.part` files no download owns are
+// reported. Only a file under the first name, the one the player looks in,
+// counts as ok. An entry of a title with no `downloadedAnime` record whose file
+// isn't found is stale (#657): skipped and not counted. Reports only: it never
+// deletes, moves or rewrites anything.
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -16,10 +17,12 @@ type EpisodeMeta = { author?: string; translationId?: number }
 
 export interface LocalIntegrityStepDeps {
   downloadedEpisodes(): Record<string, EpisodeMeta>
-  /** Only whether a title has a record; names come from `animeRecord`. */
+  /** Only whether a title has a record; names come from `playerRecord`, then `animeRecord`. */
   downloadedAnime(): Record<string, AnimeSearchResult>
-  /** The record chain (`lib/anime-record.ts`). */
+  /** The record chain (`lib/anime-record.ts`): its names after the player's, e.g. a pre-rename folder. */
   animeRecord(animeId: number): AnimeSearchResult | null
+  /** The record the player takes its name from (`playerRecordFrom`): the first name, and the label. */
+  playerRecord(animeId: number): AnimeSearchResult | null
   displayName(anime: AnimeSearchResult): string
   sanitizeFilename(name: string): string
   /** Hot first, then cold. */
@@ -57,15 +60,18 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
         const [animeIdStr, episodeInt] = key.split(':')
         const animeId = Number(animeIdStr)
         const hasRecord = !!anime[animeIdStr]
+        const player = deps.playerRecord(animeId)
         const entry = deps.animeRecord(animeId)
-        const name = entry ? deps.displayName(entry) : `#${animeIdStr}`
+        const names = titleNames(player)
+        for (const n of titleNames(entry)) if (!names.includes(n)) names.push(n)
+        const named = player ?? entry
+        const name = named ? deps.displayName(named) : `#${animeIdStr}`
         const label = `${name} episode ${episodeInt}`
         const report = (text: string): void => {
           details.push({ text: `${label}: ${text}`, status: 'warning', animeId })
         }
         try {
           if (!episodeInt) return report('the entry has no episode number')
-          const names = titleNames(entry)
           let file: string | undefined
           let foundUnder: string | undefined
           for (const animeName of names) {

@@ -2,6 +2,8 @@
 // `scenarios.ts`, then the row's actions, Prepare for offline's step 4, and
 // one oracle over what it reported. See `docs/testing.md`, "Scenario matrix
 // (offline)".
+import * as fs from 'fs'
+import * as os from 'os'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ACTION_ROUTERS, buildWorld, type World } from '../../helpers/offline-world'
 import { check, ORACLE_ROUTERS, type Run } from '../../helpers/offline-oracles'
@@ -34,6 +36,20 @@ describe('one world at a time', () => {
   it('buildWorld throws while another world is live', () => {
     world = buildWorld({ titles: [] })
     expect(() => buildWorld({ titles: [] })).toThrow(/another world is still live/)
+  })
+
+  it('a build that throws partway leaves no live world, so the next build works', () => {
+    // A NUL in a folder name makes `mkdirSync` throw while the files are written.
+    const bad = { titles: [{ id: 1, entries: [{ ep: '1', trId: 11, under: 'Bad\0Name' }] }] }
+    const roots = (): string[] =>
+      fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('offline-world-'))
+    const before = roots()
+    expect(() => buildWorld(bad)).toThrow(/null bytes/)
+    const left = roots().filter((d) => !before.includes(d))
+    expect(left).toHaveLength(1)
+    world = buildWorld({ titles: [] })
+    expect(world.files.size).toBe(0)
+    expect(roots()).not.toContain(left[0])
   })
 })
 

@@ -204,12 +204,18 @@ const details = (id: number, n: Names, eps: string[]): AnimeDetail =>
 const CONTENT = { healthy: 'video-bytes', empty: '', truncated: 'truncated' } as const
 
 let live = false
+/** The temp root of a build that threw before it returned a world. */
+let unfinished: string | null = null
 
 export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): World {
   if (live) throw new Error('buildWorld: another world is still live; dispose() it first')
-  live = true
+  // A build that threw partway left no live world, but may have left its
+  // folders and some handlers.
+  if (unfinished) fs.rmSync(unfinished, { recursive: true, force: true })
+  __reset()
   const need = new Set(routers)
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'offline-world-')))
+  unfinished = root
   const hot = path.join(root, 'hot')
   const cold = path.join(root, 'cold')
   const userData = path.join(root, 'userData')
@@ -697,5 +703,8 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
       live = false
     }
   }
+  // Live only once built, so a throw above doesn't fail every later test.
+  unfinished = null
+  live = true
   return world
 }

@@ -195,7 +195,8 @@ async function awayRootNamed(r: Run): Promise<Found[]> {
 
 /**
  * O6: report only (`docs/architecture.md`, Prepare for offline: "Reports
- * only"). Step 4 leaves every store key deep-equal and every file as it was.
+ * only"). Steps 4 and 5 leave every store key deep-equal and every file as
+ * it was.
  */
 async function reportOnly(r: Run): Promise<Found[]> {
   const found: Found[] = []

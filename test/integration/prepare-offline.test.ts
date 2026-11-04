@@ -686,13 +686,15 @@ describe('step 4: a file that goes away or fails to read while the step runs', (
 
 describe('step 4: the wiring in src/main/index.ts (source pin)', () => {
   it("hands the step the player's record (cached details first) and the record chain", () => {
-    // `index.ts` boots Electron at module scope and can't be imported here, and
-    // every test above builds the deps by hand, so the wiring is read as text.
-    const src = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'),
-      'utf-8'
-    )
-    const start = src.indexOf('createLocalIntegrityStep({')
+    // `index.ts` boots Electron at module scope and can't be imported here, so
+    // that it passes the deps builder's result straight through is read as
+    // text; the builder itself (`wiring.ts`, #659) is read as text too, since
+    // every test above builds the deps by hand.
+    const read = (...p: string[]): string =>
+      fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', ...p), 'utf-8')
+    expect(read('index.ts')).toContain('createLocalIntegrityStep(\n    localIntegrityDeps({')
+    const src = read('services', 'prepare-offline', 'wiring.ts')
+    const start = src.indexOf('export function localIntegrityDeps(')
     expect(start).toBeGreaterThan(-1)
     const body = src.slice(start, src.indexOf('isActivePart:', start))
     expect(body).toContain('playerRecord: (id) => playerRecordFrom(store, id),')

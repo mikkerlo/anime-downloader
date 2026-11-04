@@ -1596,3 +1596,23 @@ test's author had in mind. #655 and #657 were both states no test built.
   (`#657 Risks: "…"`) for `agreed`.
 - **Locked-file rows** use a read-only folder for a file Windows holds open, so
   they are skipped on Windows and as root.
+
+### The e2e cases
+
+`e2e/offline-prepare.spec.ts` runs Prepare for offline on the built app, with
+Work offline on, over profiles seeded as the store a matrix row leaves (no
+download or Delete runs there).
+
+- **Case 1** seeds S01, S10 and S14 and runs Prepare from Settings → General.
+  It asserts the six steps in `index.ts`'s order, the offline and "not
+  available" statuses of steps 2, 3, 5 and 6, and the Downloaded episodes row:
+  `Ready`, with `2 of 2 episodes ok` (S14 skipped). It is the only check that
+  the real step order and the production wiring of all six steps match the
+  matrix's copy. The ffprobe it runs is real (`makeProfile` links it from
+  `PATH`), so each file it expects ok is a copy of `e2e/fixtures/test-pattern.mp4`.
+- **Case 2 (O9)** seeds S07 (#660) and S17 (#664), checks their lines, and
+  follows a line's link to its title's page offline, once per title, each on
+  its own launch with a single run until #675 is fixed (the spec says why).
+  The page paints from `GET_ANIME_CACHE` and falls back to offline
+  `GET_ANIME`, so the case stays green while either route still answers from
+  the title's cache entry.

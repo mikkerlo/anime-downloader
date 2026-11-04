@@ -354,6 +354,32 @@ describe('downloaded-anime-delete', () => {
       }
     )
 
+    // Red without the helper's `author ?? ''`: the throw landed after the record was deleted.
+    it('an entry with no author still completes the delete', async () => {
+      const h = harness('downloaded')
+      h.store.set('downloadedAnime', { [ID]: { ...anime, titles: { romaji: NAME, ru: RU } } })
+      h.store.set('downloadedEpisodes', {
+        [`${ID}:1:11`]: { translationType: 'subRu', quality: 720, translationId: 11 }
+      })
+      const ruVideo = put(h.downloadDir, RU, `${RU} - 01.mp4`)
+      await expect(h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)).resolves.toBeUndefined()
+      expect(h.store.get('downloadedAnime')).toEqual({})
+      expect(fs.existsSync(ruVideo)).toBe(false)
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(false)
+      expect(entries(h)).toEqual([])
+      expect(survived(h)).toEqual(EVICTED)
+    })
+
+    it('a subtitle whose video is already gone is removed, and so is the folder', async () => {
+      const h = harness('downloaded')
+      ruTitle(h)
+      const ruSubs = put(h.downloadDir, RU, `${RU} - 01 [Studio].ass`)
+      await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+      expect(fs.existsSync(ruSubs)).toBe(false)
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(false)
+      expect(entries(h)).toEqual(['7:1:71'])
+    })
+
     // The folder stands in for one Explorer holds open on Windows (EPERM/EBUSY).
     it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
       'a ru folder that cannot be removed once its files are gone drops the entries',

@@ -33,8 +33,9 @@ function unlinkFile(fp: string): 'gone' | 'absent' | 'failed' {
 
 /**
  * Unlinks every existing candidate video of each of the title's entries, and
- * its `.ass`, under each name other than `removedName`, then removes each such
- * folder if it is left empty.
+ * each candidate's `.ass` (even one whose video is already gone), under each
+ * name other than `removedName`, then removes each such folder if it is left
+ * empty.
  *
  * @returns whether a file failed to unlink (a locked file): the caller keeps
  * the title's entries, as for a folder left on disk (#656). A folder that
@@ -59,13 +60,11 @@ export function deleteEpisodeFilesUnderOtherNames(q: OtherNameFilesQuery): boole
           dirs: [dir],
           animeName: name,
           episodeInt: key.split(':')[1],
-          author: entry.author,
+          author: entry.author ?? '',
           sanitizeFilename: q.sanitizeFilename
         })
         for (const fp of candidates) {
-          const video = unlinkFile(fp)
-          if (video === 'absent') continue
-          if (video === 'failed') leftOnDisk = true
+          if (unlinkFile(fp) === 'failed') leftOnDisk = true
           if (unlinkFile(fp.replace(VIDEO_EXT_RE, '.ass')) === 'failed') leftOnDisk = true
         }
       }

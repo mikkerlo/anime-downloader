@@ -701,6 +701,7 @@ prepareOffline.registerStep(
         ? [coldStorageService.getDownloadDir(), cold]
         : [coldStorageService.getDownloadDir()]
     },
+    missingRoots: () => coldStorageService.missingConfiguredRoots(),
     probeDuration: (file, signal) => {
       const ffprobe = getFfprobePath()
       return ffprobe && fs.existsSync(ffprobe)

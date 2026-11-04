@@ -11,6 +11,9 @@
  * registered on the mocked `ipcMain`. Steps 5 and 6 run over the real
  * attached-library service, as `index.ts` hands it to step 5; a world with a
  * `library` attaches a copy of the checked-in fixture library in `ready()`.
+ * Steps 1 and 2 run over hand-written deps (this world's binaries folder, and
+ * a stand-in for the Shikimori sync service), and every step asks the real
+ * offline service, over the store's `workOffline`, whether it is offline.
  *
  * One world at a time: the `ipcMain` mock has one handler map and `handle`
  * overwrites quietly, so a second live world's routers would answer the first
@@ -33,8 +36,11 @@ import { createColdStorageService } from '../../src/main/services/cold-storage'
 import { createAnimeCacheService } from '../../src/main/services/anime-cache'
 import { createCacheScope } from '../../src/main/services/anime-cache/scope'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
+import { createOfflineService } from '../../src/main/services/offline'
 import { createAttachedIntegrityStep } from '../../src/main/services/prepare-offline/steps/attached-integrity'
+import { createBinariesStep } from '../../src/main/services/prepare-offline/steps/binaries'
 import { createLibrarySyncStep } from '../../src/main/services/prepare-offline/steps/library-sync'
+import { createShikimoriRatesStep } from '../../src/main/services/prepare-offline/steps/shikimori-rates'
 import { createLocalIntegrityStep } from '../../src/main/services/prepare-offline/steps/local-integrity'
 import { createMetadataStep } from '../../src/main/services/prepare-offline/steps/metadata'
 import { localIntegrityDeps, metadataDeps } from '../../src/main/services/prepare-offline/wiring'
@@ -128,8 +134,10 @@ export interface WorldSpec {
   ffmpeg?: boolean
   /** The `playerMode` setting (default `system`). */
   playerMode?: 'system' | 'builtin'
-  /** Work offline during the run (default true). */
+  /** Work offline during the run (default true): the store's `workOffline`, so `offline-manual`. */
   offline?: boolean
+  /** Logged in to Shikimori, with this many edits in the offline queue; logged out without it. */
+  shikimori?: { queued: number }
   titles: TitleSpec[]
   parts?: PartSpec[]
   library?: LibrarySpec
@@ -211,10 +219,7 @@ export interface World {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
   act(action: Action): Promise<void>
   runStep(id: 'local-integrity' | 'metadata' | 'attached-integrity'): Promise<StepRun>
-  /**
-   * Steps 3 to 6 through the real runner, in `index.ts`'s order. Steps 1 and 2
-   * aren't in the world yet.
-   */
+  /** All six steps through the real runner, in `index.ts`'s order (a copy of it). */
   runPrepare(): Promise<PreparedStep[]>
   /** Step 4 over each entry alone, so a count in the summary is tied to its entry. */
   entryOutcomes(): Promise<Map<string, Outcome>>
@@ -454,7 +459,16 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     watchProgress,
     priorityAnimeIds: [],
     autoCleanupSnoozedAnimeIds: {},
-    shikimoriUser: null,
+    workOffline: spec.offline !== false,
+    shikimoriUser: spec.shikimori ? { id: 7, nickname: 'Viewer' } : null,
+    shikimoriUserRates: [],
+    shikimoriUpdateQueue: Array.from({ length: spec.shikimori?.queued ?? 0 }, (_, i) => ({
+      malId: 9000 + i,
+      rateId: 9900 + i,
+      before: { episodes: 1, status: 'watching', score: 6, rewatches: 0 },
+      after: { episodes: 2, status: 'watching', score: 6, rewatches: 0 },
+      queuedAt: 1000 + i
+    })),
     attachedLibraries: {},
     playerMode: spec.playerMode ?? 'system',
     prepareOfflineLastRun: null
@@ -493,25 +507,38 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
       const n = remoteOf.get(id)
       if (!n) throw new Error(`stub smotret: no title ${id}`)
       const t = spec.titles.find((x) => x.id === id)!
-      return {
-        data: details(
-          id,
-          n,
-          t.entries.map((e) => e.ep)
-        )
-      }
+      const data = details(
+        id,
+        n,
+        t.entries.map((e) => e.ep)
+      )
+      // `fetchPoster` is a stub, so this URL is never fetched.
+      return { data: { ...data, posterUrl: `https://poster.invalid/${id}.jpg` } }
     },
     getEpisodesBatch: async () => ({ data: [] })
   }
 
   // ffprobe: a real file at the path `getFfprobePath` returns, so the shipped
   // `existsSync` guard in `localIntegrityDeps` passes; the probe itself is a
-  // stub that reads what the world wrote.
-  const ffprobe = path.join(root, 'bin', 'ffprobe')
+  // stub that reads what the world wrote. Step 1 checks the same folder.
+  const bin = path.join(root, 'bin')
+  const ffmpegBin = path.join(bin, 'ffmpeg')
+  const ffprobe = path.join(bin, 'ffprobe')
+  const fpcalc = path.join(bin, 'fpcalc')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(fpcalc, '')
   if (spec.ffmpeg !== false) {
-    fs.mkdirSync(path.dirname(ffprobe))
+    fs.writeFileSync(ffmpegBin, '')
     fs.writeFileSync(ffprobe, '')
   }
+  const offlineService = createOfflineService({
+    store,
+    probeUrls: () => [],
+    onOnline: () => {},
+    onOffline: () => {},
+    probe: async () => false
+  })
+  const isOffline = (): boolean => offlineService.isOffline()
   const probeDuration = async (
     _ffprobe: string,
     file: string
@@ -538,6 +565,38 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     concurrency: 1
   }
   const steps = {
+    // Steps 1 and 2: hand-written deps, as `prepare-offline.test.ts` builds them.
+    // `ensureFfmpeg` answers as the real one does without a download: the
+    // path when both files are there, '' offline; this world has no network.
+    binaries: createBinariesStep({
+      ensureFfmpeg: async () => {
+        if (fs.existsSync(ffmpegBin) && fs.existsSync(ffprobe)) return ffmpegBin
+        if (isOffline()) return ''
+        throw new Error('this world has no network to download ffmpeg')
+      },
+      ensureFpcalc: async () => fpcalc,
+      paths: () => ({ ffmpeg: ffmpegBin, ffprobe, fpcalc }),
+      exists: (p) => fs.existsSync(p),
+      verify: async () => ({ ok: true, version: 'stub' }),
+      remove: (p) => fs.promises.rm(p, { force: true }),
+      clearFfmpegPaths: () => {},
+      refreshFfmpegStatus: async () => {},
+      ffmpegUser: () => null,
+      isPlayerOpen: () => false,
+      isSkipAnalysisRunning: () => false
+    }),
+    // A stand-in for the sync service: the drain sends the whole queue, and
+    // the refresh writes the server's (empty) list.
+    'shikimori-rates': createShikimoriRatesStep({
+      isLoggedIn: () => store.get('shikimoriUser') !== null,
+      drain: async () => store.set('shikimoriUpdateQueue', []),
+      refreshRates: async () => {
+        store.set('shikimoriUserRates', [])
+        return { entries: [], waitingMalIds: [] }
+      },
+      prefetchShikimoriDetails: async () => {},
+      abortPrefetch: () => {}
+    }),
     'local-integrity': createLocalIntegrityStep(integrityDeps),
     metadata: createMetadataStep({
       ...metadataDeps({ store, isCachable: scope.isCachable, smotretApi, animeCacheService }),
@@ -636,6 +695,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     coldStorageService,
     downloadManager,
     rememberAnimeMeta: () => {},
+    // The routers answer as on the trip: offline, whatever the run was.
     offlineService: { isOffline: () => true },
     recentWatch: scope.recentWatch,
     mp4StatsService: { recordCheck: async () => {} },
@@ -659,7 +719,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
 
   const ctx = (): PrepareStepContext => ({
     signal: new AbortController().signal,
-    isOffline: () => spec.offline !== false,
+    isOffline,
     progress: () => {}
   })
   const run = async (step: {
@@ -828,11 +888,13 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
       needReady('runPrepare')
       const svc = createPrepareOfflineService({
         store,
-        isOffline: () => spec.offline !== false,
+        isOffline,
         broadcast: () => {},
         progressChannel: 'prepare-offline:progress'
       })
       for (const id of [
+        'binaries',
+        'shikimori-rates',
         'metadata',
         'local-integrity',
         'attached-integrity',
@@ -939,6 +1001,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     },
     dispose() {
       for (const d of chmodded.splice(0)) fs.chmodSync(d, 0o755)
+      offlineService.dispose()
       fs.rmSync(root, { recursive: true, force: true })
       __reset()
       vi.restoreAllMocks()

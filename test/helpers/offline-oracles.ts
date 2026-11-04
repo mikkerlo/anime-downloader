@@ -8,7 +8,9 @@
  * `downloadedEpisodes` agree) joins with the legacy-key rows.
  */
 import * as fs from 'fs'
+import * as path from 'path'
 import { isDeepStrictEqual } from 'util'
+import { sanitizeFilename } from '../../src/main/download-manager'
 import {
   entryKey,
   type ItemOutcome,
@@ -32,9 +34,13 @@ export interface Violation {
 export interface Run {
   scenario: string
   world: World
-  /** Store and files right before step 4, and right after it (and step 5). */
+  /**
+   * Store and files right before step 4, and right after it (and step 5). With
+   * `whole`, they also bracket a whole `runPrepare()` before step 4.
+   */
   before: Snapshot
   after: Snapshot
+  whole: boolean
   out: StepRun
   /** Step 4 over each entry alone (`World.entryOutcomes`), after the run. */
   outcomes: Map<string, Outcome>
@@ -57,6 +63,26 @@ function episodes(w: World): Record<string, { translationId: number }> {
 function onDisk(w: World, key: string): boolean {
   const file = w.files.get(key)
   return file !== undefined && fs.existsSync(file)
+}
+
+/** The folders the title's names give, from every record the store holds for it. */
+function heldFolders(w: World, id: number): Set<string> {
+  const of = (key: string): unknown =>
+    (w.store.get(key) as Record<string, unknown> | undefined)?.[id]
+  const cached = of('animeCache') as { animeDetail?: unknown } | undefined
+  const out = new Set<string>()
+  for (const r of [
+    of('downloadedAnime'),
+    of('library'),
+    cached?.animeDetail,
+    of('recentAnimeMeta')
+  ]) {
+    const rec = r as AnimeSearchResult | null | undefined
+    for (const n of [rec?.titles?.romaji, rec?.titles?.ru, rec?.title]) {
+      if (n) out.add(sanitizeFilename(n))
+    }
+  }
+  return out
 }
 
 const remoteError = (message: string): string =>
@@ -104,16 +130,19 @@ async function okMeansPlayable(r: Run): Promise<Found[]> {
 
 /**
  * O2: nothing a user can act on is skipped silently (#657). Every entry whose
- * file is on disk is counted ok or gets a line. The one silent skip allowed is
- * #658's: a title the user deleted, whose leftovers have no record. Step 5
- * the same: every item of an available library whose file is on the drive is
- * counted ok or gets a line.
+ * file is on disk under one of the title's names (any record the store holds
+ * for it) is counted ok or gets a line. The silent skips allowed are #658's: a
+ * title with no record whose file isn't under any of its names, and a title
+ * the user deleted. Step 5 the same: every item of an available library whose
+ * file is on the drive is counted ok or gets a line.
  */
 async function nothingOnDiskSkipped(r: Run): Promise<Found[]> {
   const found: Found[] = []
   for (const [key, o] of r.outcomes) {
     if (o.kind !== 'skipped' || !onDisk(r.world, key)) continue
     if (r.world.deleted.has(animeIdOf(key))) continue
+    const folder = path.basename(path.dirname(r.world.files.get(key)!))
+    if (!heldFolders(r.world, animeIdOf(key)).has(folder)) continue
     found.push({ entry: key, actual: 'not counted and no line, with its file on disk' })
   }
   for (const { key, file, outcome } of r.items) {
@@ -196,12 +225,15 @@ async function awayRootNamed(r: Run): Promise<Found[]> {
 /**
  * O6: report only (`docs/architecture.md`, Prepare for offline: "Reports
  * only"). Steps 4 and 5 leave every store key deep-equal and every file as
- * it was.
+ * it was. A whole offline run does too, apart from the runner's own record of
+ * it (`prepareOfflineLastRun`): the network steps are skipped, so nothing
+ * refreshes the cache or sends the Shikimori queue.
  */
 async function reportOnly(r: Run): Promise<Found[]> {
   const found: Found[] = []
   const { before, after } = r
   for (const k of new Set([...Object.keys(before.store), ...Object.keys(after.store)])) {
+    if (r.whole && k === 'prepareOfflineLastRun') continue
     if (!isDeepStrictEqual(before.store[k], after.store[k])) {
       found.push({ entry: `store ${k}`, actual: 'changed' })
     }
@@ -270,14 +302,15 @@ async function linksOpenOffline(r: Run): Promise<Found[]> {
  * O7: a title whose files are on disk keeps its record (mikkerlo, #655: "A
  * title whose files are on disk belongs in the Library"). A user action on one
  * episode never drops the title's record or cached details while its files
- * remain.
+ * remain, and neither does a Library → Delete that leaves some of them on
+ * disk (#663).
  */
 async function recordKept(r: Run): Promise<Found[]> {
   const found: Found[] = []
   const recorded = r.world.store.get('downloadedAnime') as Record<string, unknown>
   const cache = r.world.store.get('animeCache') as Record<string, unknown>
   for (const t of r.world.spec.titles) {
-    if (!t.downloaded || r.world.deleted.has(t.id)) continue
+    if (!t.downloaded) continue
     const keys = [...r.world.files.keys()].filter((k) => animeIdOf(k) === t.id)
     if (!keys.some((k) => onDisk(r.world, k))) continue
     if (!recorded[t.id]) found.push({ entry: `title ${t.id}`, actual: 'its record is gone' })

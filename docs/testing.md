@@ -1520,30 +1520,61 @@ test's author had in mind. #655 and #657 were both states no test built.
   detail lines come in entry order). The ffprobe path is a real temp file and
   the probe a stub; the stub's `getActiveDownloadByPath` is the real method run
   over the stub's queue.
-- **Steps 1, 2, 5 and 6 are not.** Their deps stay inline in `index.ts`, and a
-  row that needs them builds them by hand, as `prepare-offline.test.ts` does.
-  Step 5 gets the attached-library service itself, as in `index.ts`; step 6
-  lists the same libraries, and its `runAll` is a stub that throws, since no
-  row runs a sync yet. Steps 1 and 2 aren't in the world yet, so
-  `runPrepare()` runs steps 3 to 6 through the real runner, in `index.ts`'s
-  order. That order is a copy too. Only the e2e case that drives a run through
-  the built app checks the real wiring of those four and the real order.
+- **Steps 1, 2, 5 and 6 are not.** Their deps stay inline in `index.ts`, and
+  the world builds them by hand, as `prepare-offline.test.ts` does. Step 1
+  checks the world's own binaries folder (ffmpeg and ffprobe there unless the
+  spec says ffmpeg is missing, fpcalc always), and its `ensureFfmpeg` answers
+  as the real one does without a download. Step 2 reads the store's
+  `shikimoriUser`, as `index.ts` does, over a stand-in for the sync service
+  whose drain sends the whole `shikimoriUpdateQueue`. Step 5 gets the
+  attached-library service itself, as in `index.ts`; step 6 lists the same
+  libraries, and its `runAll` is a stub that throws, since no row runs a sync.
+  `runPrepare()` runs all six through the real runner, in `index.ts`'s order,
+  and every step asks the real offline service, over the store's
+  `workOffline`, whether it is offline. That order is a copy too. So S27–S30
+  check the runner over these deps, not the production wiring: only the e2e
+  case that drives a run through the built app checks the real wiring of
+  those four and the real order.
 - **Oracles** (`test/helpers/offline-oracles.ts`) each return a list of
   violations, `{ scenario, entry, oracle, actual }`. O1: ok means the offline
   player route (`GET_ANIME`, then `player:find-local-file` under
   `getAnimeName`) finds that entry's file; for an attached library's item that
-  step 5 counts ok, the drive's file or this PC's copy of it. O2: no entry with
-  its file on disk, and no item with its file on the drive, is skipped
+  step 5 counts ok, the drive's file or this PC's copy of it. O2: no entry
+  whose file is on disk under one of the title's names (from any record the
+  store holds for it), and no item with its file on the drive, is skipped
   silently, except a deleted title's leftovers. O3: a deleted title's entries
   get no line, no count and no export row, before and after a restart's
   reconcile. O4: an entry on an unplugged cold drive names the drive, and an
   unplugged library gets step 5's "not connected" line with no item reported
-  missing. O6: steps 4 and 5 change no store key and no file. O7: an action on
-  one episode never drops the title's record or cached details while its files
-  remain. O8: an entry's problem is a line, never a failed step, and the
-  summary adds up. O9: every title on a line or counted ok opens offline. To
-  tie a count to its entry or item, steps 4 and 5 are also run over each entry
-  and item alone.
+  missing. O6: steps 4 and 5 change no store key and no file; in a row with
+  `expectRun`, the whole offline run doesn't either, apart from the runner's
+  own `prepareOfflineLastRun`. O7: an action on one episode, or a Library →
+  Delete that leaves some of a title's files on disk, never drops the title's
+  record or cached details while its files remain. O8: an entry's problem is
+  a line, never a failed step, and the summary adds up. O9: every title on a
+  line or counted ok opens offline. To tie a count to its entry or item, steps
+  4 and 5 are also run over each entry and item alone. O5 (the readers of
+  `downloadedEpisodes` agree on every key shape) and the legacy-key rows S19
+  and S20 join once mikkerlo's export issue for two-part keys is filed.
+- **The pairwise sweep** (`pairwise.ts`): 23 worlds, P01–P23, of one title
+  with one entry, which together hold every pair of values of 15 factors
+  (record, starred, cache, `recentAnimeMeta`, watched recently, key shape,
+  location, folder, file state, tag, container, mode, ffmpeg, `playerMode`,
+  offline). Cold storage needs advanced mode, and a row with no file on this
+  PC (nowhere, or on an unplugged cold drive) has no folder, file state, tag
+  or container, so those pairs count only in a row whose file is there. An
+  online row runs step 3 first. Each row runs O1, O2, O6, O8 and O9; a row
+  whose O9 fires cites S11's acceptance (no record) or S12's (a recorded
+  title whose details aren't cached, in an offline run). The rows are a
+  committed literal table. `pairwise-coverage.test.ts` builds no world: it
+  recomputes the pairs from the factor list and checks that the rows cover
+  every one, that each row covers a pair no other does, and that each row's
+  world spec reads back as its values, so a new level, or a deleted row,
+  fails and names the uncovered pairs. S32 runs O6 over every pairwise world
+  again with the fixture library attached, so step 5 runs too.
+- **Adding a factor level**: add it to `FACTORS`, teach `rowScenario` and the
+  self-test's read-back what it means, then add or change rows until the
+  self-test names no uncovered pair.
 - **Adding a row**: append to `scenarios.ts` with a made-up id range, the
   oracles it runs, and step 4's exact output as `expect` (step 5's as
   `expectAttached`, a whole `runPrepare()` as `expectRun`). Cite issue numbers

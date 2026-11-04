@@ -106,18 +106,24 @@ export function register(deps: AppDeps): void {
       const hasActive = groups.some((g) => g.animeName === animeName)
       if (!hasActive) {
         const animeDirName = sanitizeFilename(animeName)
-        const animeDir = path.join(coldStorageService.getDownloadDir(), animeDirName)
-        let hasFiles = false
-        try {
-          const files = fs.readdirSync(animeDir)
-          // Case-sensitive, as before: `VIDEO_EXTS` shares the list, not the
-          // matching (#429).
-          hasFiles = files.some((f) => VIDEO_EXTS.some((ext) => f.endsWith(ext)))
-        } catch {
-          /* dir doesn't exist */
-        }
-
-        if (!hasFiles) {
+        // Every root ever written into, whatever the mode: this sweep deletes
+        // metadata only, like `pruneDownloadedEpisode` above (#661).
+        const hasFiles = coldStorageService.allConfiguredRoots().some((root) => {
+          try {
+            const files = fs.readdirSync(path.join(root, animeDirName))
+            // Case-sensitive, as before: `VIDEO_EXTS` shares the list, not the
+            // matching (#429).
+            return files.some((f) => VIDEO_EXTS.some((ext) => f.endsWith(ext)))
+          } catch {
+            return false
+          }
+        })
+        const missingRoot = hasFiles ? null : coldStorageService.missingConfiguredRoot()
+        if (missingRoot) {
+          console.warn(
+            `[storage] skipping downloadedAnime sweep — configured root is missing: ${missingRoot}`
+          )
+        } else if (!hasFiles) {
           const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
           const key = Object.keys(downloaded).find((k) => {
             const a = downloaded[k]

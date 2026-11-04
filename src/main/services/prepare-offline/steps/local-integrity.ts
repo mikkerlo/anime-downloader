@@ -4,14 +4,16 @@
 // a duration ffprobe can read; and `.part` files no download owns are
 // reported. Only a file under the first name, the one the player looks in,
 // counts as ok. An entry of a title with no `downloadedAnime` record whose file
-// isn't found is stale (#657): skipped and not counted. Reports only: it never
-// deletes, moves or rewrites anything.
+// isn't found is stale (#657): skipped and not counted. A file that goes away
+// between the lookup and its `stat` counts as not found, and one `stat` can't
+// read is a line (#662), never a step failure. Reports only: it never deletes,
+// moves or rewrites anything.
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { titleNames } from '../../../lib/anime-record'
 import { episodeVideoCandidates } from '../../../lib/episode-video-path'
-import { type PrepareStep, type PrepareStepResult, worstStatus } from '../index'
+import { errorText, type PrepareStep, type PrepareStepResult, worstStatus } from '../index'
 
 type EpisodeMeta = { author?: string; translationId?: number }
 
@@ -92,7 +94,18 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
             return
           }
           if (!file) return report('the video file is missing')
-          const size = (await fs.promises.stat(file)).size
+          let size: number
+          try {
+            size = (await fs.promises.stat(file)).size
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException | null)?.code
+            if (code !== 'ENOENT') return report(`can't read it (${code ?? errorText(err)})`)
+            if (!hasRecord) {
+              skipped++
+              return
+            }
+            return report('the video file is missing')
+          }
           if (size <= 0) return report('the video file is empty (0 bytes)')
           const probe = await deps.probeDuration(file, ctx.signal)
           if (probe === null) noProbe = true

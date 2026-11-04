@@ -530,6 +530,157 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
   })
 })
 
+// #662: no ffprobe here, so this runs on win32 too, where the cold root is a
+// network drive.
+describe('step 4: a file that goes away or fails to read while the step runs', () => {
+  const race = { id: 30, title: 'Race', titles: { romaji: 'Race' } } as AnimeSearchResult
+  const other = { id: 31, title: 'Other', titles: { romaji: 'Other' } } as AnimeSearchResult
+  const records: Record<number, AnimeSearchResult> = { 30: race, 31: other }
+  const fileOf = (hot: string, folder: string): string =>
+    path.join(hot, folder, `${sanitizeFilename(`${folder} - 01`)} [A].mp4`)
+  const world = (
+    opts: {
+      raceRecorded?: boolean
+      probe?: () => Promise<{ duration: number }>
+      sanitize?: (name: string) => string
+    } = {}
+  ) => {
+    const hot = tmp('prep-race-')
+    for (const folder of ['Race', 'Other']) {
+      fs.mkdirSync(path.join(hot, folder))
+      fs.writeFileSync(fileOf(hot, folder), 'GOOD video')
+    }
+    const step = createLocalIntegrityStep({
+      downloadedEpisodes: () => ({
+        '30:1:1': { author: 'A', translationId: 1 },
+        '31:1:1': { author: 'A', translationId: 1 }
+      }),
+      downloadedAnime: (): Record<string, AnimeSearchResult> =>
+        opts.raceRecorded === false ? { 31: other } : { 30: race, 31: other },
+      animeRecord: (id) => records[id] ?? null,
+      playerRecord: (id) => records[id] ?? null,
+      displayName: (a) => a.titles?.romaji || a.title,
+      sanitizeFilename: opts.sanitize ?? sanitizeFilename,
+      roots: () => [hot],
+      probeDuration: opts.probe ?? (async () => ({ duration: 1 })),
+      isActivePart: () => false,
+      concurrency: 1
+    })
+    return { hot, step, raceFile: fileOf(hot, 'Race') }
+  }
+  type Stat = typeof fs.promises.stat
+  const realStat: Stat = fs.promises.stat.bind(fs.promises)
+  const unlinkBeforeStat = (file: string) =>
+    vi.spyOn(fs.promises, 'stat').mockImplementation(((p: fs.PathLike, o?: never) => {
+      if (p === file) fs.unlinkSync(file)
+      return realStat(p, o)
+    }) as Stat)
+  const rejectStatFor = (file: string, err: unknown) =>
+    vi
+      .spyOn(fs.promises, 'stat')
+      .mockImplementation(((p: fs.PathLike, o?: never) =>
+        p === file ? Promise.reject(err) : realStat(p, o)) as Stat)
+
+  it('a file deleted between the lookup and the stat is "missing"; the other title is still counted', async () => {
+    const { step, raceFile } = world()
+    const stat = unlinkBeforeStat(raceFile)
+    const out = await step.run(ctx())
+
+    expect(stat).toHaveBeenCalledWith(raceFile)
+    expect(fs.existsSync(raceFile)).toBe(false)
+    expect(out).toEqual({
+      status: 'warning',
+      details: [
+        { text: '1 of 2 episodes ok', status: 'warning' },
+        { text: 'Race episode 1: the video file is missing', status: 'warning', animeId: 30 }
+      ]
+    })
+  })
+
+  it('a record-less title whose file is deleted before the stat is skipped and not counted, as when not found', async () => {
+    const { step, raceFile } = world({ raceRecorded: false })
+    unlinkBeforeStat(raceFile)
+    const out = await step.run(ctx())
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '1 of 1 episode ok', status: 'ok' }] })
+  })
+
+  it('a stat that fails with another code is "can\'t read it (<code>)"; the other title is still counted', async () => {
+    const { step, raceFile } = world()
+    rejectStatFor(
+      raceFile,
+      Object.assign(new Error(`EIO: i/o error, stat '${raceFile}'`), { code: 'EIO' })
+    )
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      { text: "Race episode 1: can't read it (EIO)", status: 'warning', animeId: 30 }
+    ])
+  })
+
+  it('a stat rejection with no code reads its text, not "can\'t read it (undefined)"', async () => {
+    const { step, raceFile } = world()
+    rejectStatFor(raceFile, 'the share went away')
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      {
+        text: "Race episode 1: can't read it (the share went away)",
+        status: 'warning',
+        animeId: 30
+      }
+    ])
+  })
+
+  it('through the runner, a deleted file leaves the step a warning with its summary, not failed', async () => {
+    const { step, raceFile } = world()
+    unlinkBeforeStat(raceFile)
+    const svc = createPrepareOfflineService({
+      store: new InMemoryStorage({ prepareOfflineLastRun: null }),
+      isOffline: () => false,
+      broadcast: () => {},
+      progressChannel: 'p',
+      log: { error: vi.fn() }
+    })
+    svc.registerStep(step)
+    svc.start()
+    await svc.idle()
+
+    expect(svc.getState().run!.steps[0]).toMatchObject({
+      state: 'done',
+      status: 'warning',
+      done: 2,
+      total: 2,
+      details: [
+        { text: '1 of 2 episodes ok', status: 'warning' },
+        { text: 'Race episode 1: the video file is missing', status: 'warning', animeId: 30 }
+      ]
+    })
+  })
+
+  it('a throw from the probeDuration dep (a bug: it never rejects) still fails the step', async () => {
+    const { step } = world({
+      probe: async () => {
+        throw new Error('probe dep bug')
+      }
+    })
+
+    await expect(step.run(ctx())).rejects.toThrow('probe dep bug')
+  })
+
+  it('a throw while looking the file up (a bug, not I/O) still fails the step', async () => {
+    const { step } = world({
+      sanitize: () => {
+        throw new Error('name lookup bug')
+      }
+    })
+
+    await expect(step.run(ctx())).rejects.toThrow('name lookup bug')
+  })
+})
+
 describe('step 4: the wiring in src/main/index.ts (source pin)', () => {
   it("hands the step the player's record (cached details first) and the record chain", () => {
     // `index.ts` boots Electron at module scope and can't be imported here, and

@@ -16,6 +16,7 @@ import {
   type World
 } from '../../helpers/offline-world'
 import { check, ORACLE_ROUTERS, type Run } from '../../helpers/offline-oracles'
+import { PAIRWISE } from './pairwise'
 import { SCENARIOS, type Scenario } from './scenarios'
 
 let world: World | null = null
@@ -40,6 +41,8 @@ async function setUp(s: Scenario): Promise<World> {
 async function observe(s: Scenario): Promise<Run> {
   const w = await setUp(s)
   const before = w.snapshot()
+  // A row that runs Prepare whole: the snapshots bracket that run too, for O6.
+  if (s.expectRun) await w.runPrepare()
   const out = await w.runStep('local-integrity')
   const attached = s.world.library ? await w.runStep('attached-integrity') : null
   const after = w.snapshot()
@@ -48,6 +51,7 @@ async function observe(s: Scenario): Promise<Run> {
     world: w,
     before,
     after,
+    whole: s.expectRun !== undefined,
     out,
     outcomes: await w.entryOutcomes(),
     attached,
@@ -134,6 +138,21 @@ describe('a world with a library', () => {
         { kind: 'ok' }
       ]
     ])
+  })
+})
+
+describe('the pairwise sweep', () => {
+  it('counts some entries ok, reports some and skips some, so its oracles have something to check', async () => {
+    const kinds = { ok: 0, line: 0, skipped: 0 }
+    for (const p of PAIRWISE) {
+      const w = await setUp(p)
+      for (const o of (await w.entryOutcomes()).values()) kinds[o.kind]++
+      w.dispose()
+      world = null
+    }
+    expect(kinds.ok).toBeGreaterThan(0)
+    expect(kinds.line).toBeGreaterThan(0)
+    expect(kinds.skipped).toBeGreaterThan(0)
   })
 })
 

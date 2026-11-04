@@ -11,11 +11,15 @@
 //   The oracle must still report at least one violation, so the exemption
 //   can't outlive the behaviour it excuses.
 // A pin and its fix can land in either order: a bug fixed before its row
-// landed (#660 in S07, S08 and S21, #662 in S31, #664 in S17) is a row with
-// no pin, and a fix that lands after its pin removes it (#661 in S15/S16).
+// landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17) is
+// a row with no pin, and a fix that lands after its pin removes it (#661 in
+// S15/S16). S36 is pinned on #674, which this matrix found. The pairwise rows
+// P01–P23 and S32's are built in `pairwise.ts`.
 
 import { named, type Action, type PreparedStep, type WorldSpec } from '../../helpers/offline-world'
 import type { OracleId, Violation } from '../../helpers/offline-oracles'
+import { PAIRWISE, S32 } from './pairwise'
+import { LOCKED, Q3, RECORD_LESS } from './sources'
 
 export interface Scenario {
   id: string
@@ -27,7 +31,7 @@ export interface Scenario {
   expect?: { status: PrepareOfflineStatus; details: string[] }
   /** Step 5's run (Shared Libraries), in a world with a `library`. */
   expectAttached?: { status: PrepareOfflineStatus; details: string[] }
-  /** A whole run through the runner (`World.runPrepare`). */
+  /** A whole run through the runner (`World.runPrepare`); O6 then covers that run too. */
   expectRun?: PreparedStep[]
   known?: { issue: number; oracle: OracleId; violations: Violation[] }[]
   agreed?: { source: string; oracle: OracleId }[]
@@ -35,13 +39,26 @@ export interface Scenario {
   locked?: true
 }
 
-const Q3 = 'https://github.com/mikkerlo/anime-downloader/issues/659#issuecomment-6634458758'
-const RECORD_LESS =
-  '#657 Risks: "Not fixed here: record-less titles still aren\'t in the Library or the cache scope"'
-const LOCKED = '#657 Risks: "A title deleted while a file was locked"'
-
 const SHOW = named('Show')
 const COLD_SHOW = named('Cold Show')
+
+const BINARIES_OK: PreparedStep = {
+  id: 'binaries',
+  status: 'ok',
+  details: ['ffmpeg: ok', 'ffprobe: ok', 'fpcalc: ok']
+}
+const offlineSkip = (id: PreparedStep['id']): PreparedStep => ({
+  id,
+  status: 'skipped',
+  reason: 'Offline: connect to run this step',
+  details: []
+})
+const NO_LIBRARY: PreparedStep[] = (['attached-integrity', 'library-sync'] as const).map((id) => ({
+  id,
+  status: 'unavailable',
+  reason: 'No Shared Library attached',
+  details: []
+}))
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -530,25 +547,60 @@ export const SCENARIOS: Scenario[] = [
     },
     oracles: [],
     expectRun: [
-      {
-        id: 'metadata',
-        status: 'skipped',
-        reason: 'Offline: connect to run this step',
-        details: []
-      },
+      BINARIES_OK,
+      offlineSkip('shikimori-rates'),
+      offlineSkip('metadata'),
       { id: 'local-integrity', status: 'ok', details: ['1 of 1 episode ok'] },
-      {
-        id: 'attached-integrity',
-        status: 'unavailable',
-        reason: 'No Shared Library attached',
-        details: []
-      },
-      {
-        id: 'library-sync',
-        status: 'unavailable',
-        reason: 'No Shared Library attached',
-        details: []
-      }
+      ...NO_LIBRARY
+    ]
+  },
+  {
+    id: 'S28',
+    title: 'Work offline (offline-manual): the network steps are skipped, the local ones run',
+    world: {
+      titles: [{ id: 128, downloaded: SHOW, cache: SHOW, entries: [{ ep: '1', trId: 1281 }] }]
+    },
+    // O6 over the whole run: step 3 would refresh this title's cached details.
+    oracles: ['O6'],
+    expectRun: [
+      BINARIES_OK,
+      offlineSkip('shikimori-rates'),
+      offlineSkip('metadata'),
+      { id: 'local-integrity', status: 'ok', details: ['1 of 1 episode ok'] },
+      ...NO_LIBRARY
+    ]
+  },
+  {
+    id: 'S29',
+    title: 'logged out of Shikimori, an online run',
+    world: {
+      offline: false,
+      titles: [{ id: 129, downloaded: SHOW, cache: SHOW, entries: [{ ep: '1', trId: 1291 }] }]
+    },
+    oracles: [],
+    expectRun: [
+      BINARIES_OK,
+      { id: 'shikimori-rates', status: 'skipped', details: ['Not logged in'] },
+      { id: 'metadata', status: 'ok', details: ['1 of 1 title up to date'] },
+      { id: 'local-integrity', status: 'ok', details: ['1 of 1 episode ok'] },
+      ...NO_LIBRARY
+    ]
+  },
+  {
+    id: 'S30',
+    title: 'logged in to Shikimori with one queued edit, an offline run',
+    world: {
+      shikimori: { queued: 1 },
+      titles: [{ id: 130, downloaded: SHOW, cache: SHOW, entries: [{ ep: '1', trId: 1301 }] }]
+    },
+    // O6 over the whole run: the queued edit is still there, unsent.
+    oracles: ['O6'],
+    expectRun: [
+      BINARIES_OK,
+      offlineSkip('shikimori-rates'),
+      offlineSkip('metadata'),
+      { id: 'local-integrity', status: 'ok', details: ['1 of 1 episode ok'] },
+      ...NO_LIBRARY
     ]
   },
   {
@@ -578,6 +630,56 @@ export const SCENARIOS: Scenario[] = [
       details: ['1 of 2 episodes ok', 'Race episode 1: the video file is missing']
     }
   },
+  ...S32,
+  {
+    // #663, fixed before this row landed: Delete also removes the title's
+    // episodes under its ru and title folders (`deleteEpisodeFilesUnderOtherNames`).
+    id: 'S33',
+    title:
+      'Library → Delete of a recorded title with episode 1 under its ru folder, 2 under romaji',
+    world: {
+      titles: [
+        {
+          id: 133,
+          downloaded: { romaji: 'Split', ru: 'Сплит', title: 'Split' },
+          cache: { romaji: 'Split', ru: 'Сплит', title: 'Split' },
+          entries: [
+            { ep: '1', trId: 1331, under: 'Сплит' },
+            { ep: '2', trId: 1332 }
+          ]
+        }
+      ]
+    },
+    actions: [{ do: 'delete', id: 133 }],
+    oracles: ['O2', 'O7'],
+    expect: { status: 'ok', details: ['0 of 0 episodes ok'] }
+  },
+  {
+    id: 'S34',
+    title: "Library → Delete, then Prepare, then a restart's reconcile, then the export",
+    world: {
+      titles: [
+        {
+          id: 134,
+          downloaded: named('Gone'),
+          cache: named('Gone'),
+          entries: [
+            { ep: '1', trId: 1341 },
+            { ep: '2', trId: 1342 }
+          ]
+        },
+        {
+          id: 234,
+          downloaded: named('Kept'),
+          cache: named('Kept'),
+          entries: [{ ep: '1', trId: 2341 }]
+        }
+      ]
+    },
+    actions: [{ do: 'delete', id: 134 }],
+    oracles: ['O3'],
+    expect: { status: 'ok', details: ['1 of 1 episode ok'] }
+  },
   {
     // Going offline puts an active transfer back to 'queued' and keeps its
     // .part (`suspendForOffline`); any item that isn't cancelled owns it.
@@ -596,5 +698,44 @@ export const SCENARIOS: Scenario[] = [
     },
     oracles: ['O2'],
     expect: { status: 'ok', details: ['1 of 1 episode ok'] }
-  }
+  },
+  {
+    // #674: step 4 searches the cached details' names and stops there
+    // (`animeRecordFrom` returns the cache before `recentAnimeMeta`), so the
+    // folder under the name the title was watched and downloaded under is
+    // never searched, and #658's rule skips the entry.
+    id: 'S36',
+    title:
+      'no downloadedAnime record, watched online under the old name, renamed upstream; an online step 3 first',
+    world: {
+      titles: [
+        {
+          id: 136,
+          recent: named('Old Name'),
+          cache: named('Old Name'),
+          remote: named('New Name'),
+          watchedDaysAgo: 5,
+          entries: [{ ep: '1', trId: 1361 }]
+        }
+      ]
+    },
+    actions: [{ do: 'metadata' }],
+    oracles: ['O1', 'O2', 'O9'],
+    expect: { status: 'ok', details: ['0 of 0 episodes ok'] },
+    known: [
+      {
+        issue: 674,
+        oracle: 'O2',
+        violations: [
+          {
+            scenario: 'S36',
+            entry: '136:1:1361',
+            oracle: 'O2',
+            actual: 'not counted and no line, with its file on disk'
+          }
+        ]
+      }
+    ]
+  },
+  ...PAIRWISE
 ]

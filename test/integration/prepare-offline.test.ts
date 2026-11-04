@@ -32,6 +32,7 @@ import { createCacheScope } from '../../src/main/services/anime-cache/scope'
 import { SmotretApi } from '../../src/main/smotret-api'
 import { applyApiBaseOverrides } from '../../src/main/lib/api-bases'
 import { probeDuration } from '../../src/main/lib/probe-duration'
+import { animeRecordFrom, playerRecordFrom } from '../../src/main/lib/anime-record'
 import { sanitizeFilename } from '../../src/main/download-manager'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
 import { FIXTURE_LIBRARY_ID, copyFixtureLibrary, mtimeSnapshot } from '../helpers/attached-library'
@@ -422,9 +423,14 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
     const step = createLocalIntegrityStep({
       downloadedEpisodes: () => ({ '10:1': meta, '10:2': meta, '10:3': meta, '10:4': meta }),
       downloadedAnime: () => ({ '10': { id: 10, title: show, titles: { romaji: show } } as never }),
+      animeRecord: (id) =>
+        id === 10 ? ({ id: 10, title: show, titles: { romaji: show } } as never) : null,
+      playerRecord: (id) =>
+        id === 10 ? ({ id: 10, title: show, titles: { romaji: show } } as never) : null,
       displayName: (a) => a.titles?.romaji || a.title,
       sanitizeFilename,
       roots: () => [hot, cold],
+      missingRoots: () => [],
       probeDuration: (f, signal) => probeDuration(ffprobe, f, signal),
       isActivePart: (p) => p === activePart
     })
@@ -445,6 +451,517 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
       { text: `${name('5')}.part: a partial download with no download running`, status: 'warning' }
     ])
     expect({ hot: treeSnapshot(hot), cold: treeSnapshot(cold) }).toEqual(before)
+  })
+
+  // #660: the player looks under the cached details' name (offline GET_ANIME),
+  // not under the `downloadedAnime` record's.
+  const driftStep = (hot: string, data: Record<string, unknown>) => {
+    const store = { get: (key: string): unknown => data[key] }
+    return createLocalIntegrityStep({
+      downloadedEpisodes: () => ({ '11:1:111': { author: 'A', translationId: 111 } }),
+      downloadedAnime: () => (data.downloadedAnime ?? {}) as Record<string, AnimeSearchResult>,
+      animeRecord: (id) => animeRecordFrom(store, id),
+      playerRecord: (id) => playerRecordFrom(store, id),
+      displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
+      sanitizeFilename,
+      roots: () => [hot],
+      missingRoots: () => [],
+      probeDuration: async () => ({ duration: 1420 }),
+      isActivePart: () => false,
+      concurrency: 1
+    })
+  }
+  const record = (romaji: string, ru?: string): AnimeSearchResult =>
+    ({ id: 11, title: ru ?? romaji, titles: { romaji, ru } }) as AnimeSearchResult
+  const writeGood = (hot: string, folder: string): void => {
+    fs.mkdirSync(path.join(hot, folder))
+    fs.writeFileSync(
+      path.join(hot, folder, `${sanitizeFilename(`${folder} - 01`)} [A].mp4`),
+      'GOOD video'
+    )
+  }
+  const cached = (anime: AnimeSearchResult): Record<string, unknown> => ({
+    11: { animeDetail: anime, episodes: {} }
+  })
+
+  it('a title renamed since its download: a file under the old name is the folder line, not ok', async () => {
+    const hot = tmp('prep-drift-')
+    writeGood(hot, 'Old Name')
+    const out = await driftStep(hot, {
+      downloadedAnime: { 11: record('Old Name') },
+      animeCache: cached(record('New Name'))
+    }).run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: 'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"',
+        status: 'warning',
+        animeId: 11
+      }
+    ])
+  })
+
+  it('romaji filled in after the download: a file under the ru folder is the folder line, not ok', async () => {
+    const hot = tmp('prep-drift-ru-')
+    writeGood(hot, 'Дельта')
+    const out = await driftStep(hot, {
+      downloadedAnime: { 11: record('', 'Дельта') },
+      animeCache: cached(record('Delta R', 'Дельта'))
+    }).run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: 'Delta R episode 1: the file is in the "Дельта" folder, but the player looks in "Delta R"',
+        status: 'warning',
+        animeId: 11
+      }
+    ])
+  })
+
+  it("a record-less title is checked under its cached name before its library record's", async () => {
+    const hot = tmp('prep-drift-norec-')
+    writeGood(hot, 'Cache Name')
+    const out = await driftStep(hot, {
+      library: { 11: record('Star Name') },
+      animeCache: cached(record('Cache Name'))
+    }).run(ctx())
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '1 of 1 episode ok', status: 'ok' }] })
+  })
+})
+
+// #662: no ffprobe here, so this runs on win32 too, where the cold root is a
+// network drive.
+describe('step 4: a file that goes away or fails to read while the step runs', () => {
+  const race = { id: 30, title: 'Race', titles: { romaji: 'Race' } } as AnimeSearchResult
+  const other = { id: 31, title: 'Other', titles: { romaji: 'Other' } } as AnimeSearchResult
+  const records: Record<number, AnimeSearchResult> = { 30: race, 31: other }
+  const fileOf = (hot: string, folder: string): string =>
+    path.join(hot, folder, `${sanitizeFilename(`${folder} - 01`)} [A].mp4`)
+  const world = (
+    opts: {
+      raceRecorded?: boolean
+      probe?: () => Promise<{ duration: number }>
+      sanitize?: (name: string) => string
+    } = {}
+  ) => {
+    const hot = tmp('prep-race-')
+    for (const folder of ['Race', 'Other']) {
+      fs.mkdirSync(path.join(hot, folder))
+      fs.writeFileSync(fileOf(hot, folder), 'GOOD video')
+    }
+    const step = createLocalIntegrityStep({
+      downloadedEpisodes: () => ({
+        '30:1:1': { author: 'A', translationId: 1 },
+        '31:1:1': { author: 'A', translationId: 1 }
+      }),
+      downloadedAnime: (): Record<string, AnimeSearchResult> =>
+        opts.raceRecorded === false ? { 31: other } : { 30: race, 31: other },
+      animeRecord: (id) => records[id] ?? null,
+      playerRecord: (id) => records[id] ?? null,
+      displayName: (a) => a.titles?.romaji || a.title,
+      sanitizeFilename: opts.sanitize ?? sanitizeFilename,
+      roots: () => [hot],
+      missingRoots: () => [],
+      probeDuration: opts.probe ?? (async () => ({ duration: 1 })),
+      isActivePart: () => false,
+      concurrency: 1
+    })
+    return { hot, step, raceFile: fileOf(hot, 'Race') }
+  }
+  type Stat = typeof fs.promises.stat
+  const realStat: Stat = fs.promises.stat.bind(fs.promises)
+  const unlinkBeforeStat = (file: string) =>
+    vi.spyOn(fs.promises, 'stat').mockImplementation(((p: fs.PathLike, o?: never) => {
+      if (p === file) fs.unlinkSync(file)
+      return realStat(p, o)
+    }) as Stat)
+  const rejectStatFor = (file: string, err: unknown) =>
+    vi
+      .spyOn(fs.promises, 'stat')
+      .mockImplementation(((p: fs.PathLike, o?: never) =>
+        p === file ? Promise.reject(err) : realStat(p, o)) as Stat)
+
+  it('a file deleted between the lookup and the stat is "missing"; the other title is still counted', async () => {
+    const { step, raceFile } = world()
+    const stat = unlinkBeforeStat(raceFile)
+    const out = await step.run(ctx())
+
+    expect(stat).toHaveBeenCalledWith(raceFile)
+    expect(fs.existsSync(raceFile)).toBe(false)
+    expect(out).toEqual({
+      status: 'warning',
+      details: [
+        { text: '1 of 2 episodes ok', status: 'warning' },
+        { text: 'Race episode 1: the video file is missing', status: 'warning', animeId: 30 }
+      ]
+    })
+  })
+
+  it('a record-less title whose file is deleted before the stat is skipped and not counted, as when not found', async () => {
+    const { step, raceFile } = world({ raceRecorded: false })
+    unlinkBeforeStat(raceFile)
+    const out = await step.run(ctx())
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '1 of 1 episode ok', status: 'ok' }] })
+  })
+
+  it('a stat that fails with another code is "can\'t read it (<code>)"; the other title is still counted', async () => {
+    const { step, raceFile } = world()
+    rejectStatFor(
+      raceFile,
+      Object.assign(new Error(`EIO: i/o error, stat '${raceFile}'`), { code: 'EIO' })
+    )
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      { text: "Race episode 1: can't read it (EIO)", status: 'warning', animeId: 30 }
+    ])
+  })
+
+  it('a stat rejection with no code reads its text, not "can\'t read it (undefined)"', async () => {
+    const { step, raceFile } = world()
+    rejectStatFor(raceFile, 'the share went away')
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      {
+        text: "Race episode 1: can't read it (the share went away)",
+        status: 'warning',
+        animeId: 30
+      }
+    ])
+  })
+
+  it('through the runner, a deleted file leaves the step a warning with its summary, not failed', async () => {
+    const { step, raceFile } = world()
+    unlinkBeforeStat(raceFile)
+    const svc = createPrepareOfflineService({
+      store: new InMemoryStorage({ prepareOfflineLastRun: null }),
+      isOffline: () => false,
+      broadcast: () => {},
+      progressChannel: 'p',
+      log: { error: vi.fn() }
+    })
+    svc.registerStep(step)
+    svc.start()
+    await svc.idle()
+
+    expect(svc.getState().run!.steps[0]).toMatchObject({
+      state: 'done',
+      status: 'warning',
+      done: 2,
+      total: 2,
+      details: [
+        { text: '1 of 2 episodes ok', status: 'warning' },
+        { text: 'Race episode 1: the video file is missing', status: 'warning', animeId: 30 }
+      ]
+    })
+  })
+
+  it('a throw from the probeDuration dep (a bug: it never rejects) still fails the step', async () => {
+    const { step } = world({
+      probe: async () => {
+        throw new Error('probe dep bug')
+      }
+    })
+
+    await expect(step.run(ctx())).rejects.toThrow('probe dep bug')
+  })
+
+  it('a throw while looking the file up (a bug, not I/O) still fails the step', async () => {
+    const { step } = world({
+      sanitize: () => {
+        throw new Error('name lookup bug')
+      }
+    })
+
+    await expect(step.run(ctx())).rejects.toThrow('name lookup bug')
+  })
+})
+
+describe('step 4: the wiring in src/main/index.ts (source pin)', () => {
+  it("hands the step the player's record (cached details first) and the record chain", () => {
+    // `index.ts` boots Electron at module scope and can't be imported here, and
+    // every test above builds the deps by hand, so the wiring is read as text.
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'),
+      'utf-8'
+    )
+    const start = src.indexOf('createLocalIntegrityStep({')
+    expect(start).toBeGreaterThan(-1)
+    const body = src.slice(start, src.indexOf('isActivePart:', start))
+    expect(body).toContain('playerRecord: (id) => playerRecordFrom(store, id),')
+    expect(body).toContain('animeRecord: (id) => animeRecordFrom(store, id),')
+    expect(body).toContain('missingRoots: () => coldStorageService.missingConfiguredRoots(),')
+  })
+})
+
+// Shared by the two step 4 describes below: the record-less titles (#657) and
+// the away root (#664).
+const meta = { author: 'Author', translationId: 1 }
+const titled = (id: number, romaji: string, ru?: string): AnimeSearchResult =>
+  ({ id, title: romaji, titles: { romaji, ru } }) as AnimeSearchResult
+const writeEp = (root: string, folder: string, ep: string, content: string): void => {
+  fs.mkdirSync(path.join(root, sanitizeFilename(folder)), { recursive: true })
+  const base = sanitizeFilename(`${folder} - ${ep.padStart(2, '0')}`)
+  fs.writeFileSync(path.join(root, sanitizeFilename(folder), `${base} [Author].mp4`), content)
+}
+const stepOver = (
+  hot: string,
+  downloadedEpisodes: Record<string, typeof meta>,
+  downloadedAnime: Record<string, AnimeSearchResult>,
+  animeRecord: (id: number) => AnimeSearchResult | null,
+  opts: { cold?: string; probe?: { duration: number } | null; missingRoots?: string[] } = {}
+) =>
+  createLocalIntegrityStep({
+    downloadedEpisodes: () => downloadedEpisodes,
+    downloadedAnime: () => downloadedAnime,
+    animeRecord,
+    playerRecord: animeRecord,
+    displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
+    sanitizeFilename,
+    roots: () => (opts.cold ? [hot, opts.cold] : [hot]),
+    missingRoots: () => opts.missingRoots ?? [],
+    probeDuration: async () => (opts.probe === undefined ? { duration: 1420 } : opts.probe),
+    isActivePart: () => false,
+    concurrency: 1
+  })
+
+describe('step 4: titles with no downloadedAnime record', () => {
+  it("an auto-downloaded title is checked by file under its record-chain name; a deleted title's leftovers are skipped and not counted", async () => {
+    const hot = tmp('prep-norec-')
+    const show = titled(10, 'Show')
+    const records: Record<number, AnimeSearchResult> = {
+      10: show,
+      9: titled(9, 'Gamma'),
+      6: titled(6, 'Gone')
+    }
+    writeEp(hot, 'Show', '2', 'video')
+    writeEp(hot, 'Gamma', '1', 'video')
+    writeEp(hot, 'Gamma', '2', '')
+
+    const step = stepOver(
+      hot,
+      {
+        '10:1:1': meta,
+        '10:2:1': meta,
+        '9:1:1': meta,
+        '9:2:1': meta,
+        '5:1:1': meta,
+        '5:2:1': meta,
+        '6:1:1': meta
+      },
+      { 10: show },
+      (id) => records[id] ?? null
+    )
+    const c = ctx()
+    const out = await step.run(c)
+
+    expect(out.details).toEqual([
+      { text: '2 of 4 episodes ok', status: 'warning' },
+      { text: 'Show episode 1: the video file is missing', status: 'warning', animeId: 10 },
+      { text: 'Gamma episode 2: the video file is empty (0 bytes)', status: 'warning', animeId: 9 }
+    ])
+    expect(c.ticks.at(-1)).toMatchObject({ done: 7, total: 7 })
+  })
+
+  it('a record-less title whose folder is under its ru name is checked, not counted ok: the player looks under the first name', async () => {
+    const hot = tmp('prep-norec-ru-')
+    writeEp(hot, 'Дельта', '1', 'video')
+    writeEp(hot, 'Дельта', '2', '')
+    const store = {
+      get: (key: string): unknown =>
+        key === 'recentAnimeMeta' ? { 12: titled(12, 'Delta', 'Дельта') } : undefined
+    }
+
+    const step = stepOver(hot, { '12:1:1': meta, '12:2:1': meta }, {}, (id) =>
+      animeRecordFrom(store, id)
+    )
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 2 episodes ok', status: 'warning' },
+      {
+        text: 'Delta episode 1: the file is in the "Дельта" folder, but the player looks in "Delta"',
+        status: 'warning',
+        animeId: 12
+      },
+      { text: 'Delta episode 2: the video file is empty (0 bytes)', status: 'warning', animeId: 12 }
+    ])
+  })
+
+  it('a recorded title whose only file is under its ru name gets the folder line, not "missing" and not ok', async () => {
+    const hot = tmp('prep-rec-ru-')
+    const show = titled(10, 'Show', 'Шоу')
+    writeEp(hot, 'Шоу', '1', 'video')
+
+    const step = stepOver(hot, { '10:1:1': meta }, { 10: show }, (id) => (id === 10 ? show : null))
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: 'Show episode 1: the file is in the "Шоу" folder, but the player looks in "Show"',
+        status: 'warning',
+        animeId: 10
+      }
+    ])
+  })
+
+  it('with ffprobe missing, a file under a non-first name is still reported, and the missing ffprobe too', async () => {
+    const hot = tmp('prep-rec-ru-noprobe-')
+    const show = titled(10, 'Show', 'Шоу')
+    writeEp(hot, 'Шоу', '1', 'video')
+
+    const step = stepOver(
+      hot,
+      { '10:1:1': meta },
+      { 10: show },
+      (id) => (id === 10 ? show : null),
+      {
+        probe: null
+      }
+    )
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: 'Show episode 1: the file is in the "Шоу" folder, but the player looks in "Show"',
+        status: 'warning',
+        animeId: 10
+      },
+      { text: "ffprobe isn't installed, so durations weren't checked", status: 'warning' }
+    ])
+  })
+
+  it('names come before roots: the first name in cold wins over the ru name in hot', async () => {
+    const hot = tmp('prep-order-hot-')
+    const cold = tmp('prep-order-cold-')
+    const show = titled(10, 'Show', 'Шоу')
+    writeEp(hot, 'Шоу', '1', 'video')
+    writeEp(cold, 'Show', '1', 'video')
+
+    const step = stepOver(
+      hot,
+      { '10:1:1': meta },
+      { 10: show },
+      (id) => (id === 10 ? show : null),
+      {
+        cold
+      }
+    )
+    const out = await step.run(ctx())
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '1 of 1 episode ok', status: 'ok' }] })
+  })
+
+  it('an entry with no episode number is reported as such, not as a missing title record', async () => {
+    const hot = tmp('prep-noep-')
+    const show = titled(10, 'Show')
+    const step = stepOver(hot, { '10::1': meta }, { 10: show }, (id) => (id === 10 ? show : null))
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      { text: 'Show episode : the entry has no episode number', status: 'warning', animeId: 10 }
+    ])
+  })
+
+  it('reads 0 of 0 episodes ok, status ok, when every entry is skipped', async () => {
+    const hot = tmp('prep-norec-none-')
+    const step = stepOver(hot, { '5:1:1': meta, '6:1:1': meta }, {}, (id) =>
+      id === 6 ? titled(6, 'Gone') : null
+    )
+    const out = await step.run(ctx())
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '0 of 0 episodes ok', status: 'ok' }] })
+  })
+})
+
+// #664: a recorded entry with no file found while a root the step searched is
+// away names the root, not a missing file. Still counted, still not ok.
+describe('step 4: an away root', () => {
+  const show = titled(10, 'Show')
+  const records = (id: number): AnimeSearchResult | null => (id === 10 ? show : null)
+  const entries = { '10:1:1': meta, '10:2:1': meta, '5:1:1': meta }
+
+  it("an unplugged cold root: the line says cold storage isn't connected, and the rest is checked as before", async () => {
+    const hot = tmp('prep-away-hot-')
+    const cold = path.join(hot, 'unplugged')
+    writeEp(hot, 'Show', '1', 'video')
+    const step = stepOver(hot, entries, { 10: show }, records, { cold, missingRoots: [cold] })
+    const out = await step.run(ctx())
+
+    expect(out).toEqual({
+      status: 'warning',
+      details: [
+        { text: '1 of 2 episodes ok', status: 'warning' },
+        {
+          text: `Show episode 2: cold storage isn't connected (${cold}), so this episode wasn't checked`,
+          status: 'warning',
+          animeId: 10
+        }
+      ]
+    })
+  })
+
+  it('a missing root the step did not search changes nothing: the file is still missing', async () => {
+    const hot = tmp('prep-away-unsearched-')
+    const cold = path.join(hot, 'unplugged')
+    writeEp(hot, 'Show', '1', 'video')
+    const step = stepOver(hot, entries, { 10: show }, records, { missingRoots: [cold] })
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      { text: 'Show episode 2: the video file is missing', status: 'warning', animeId: 10 }
+    ])
+  })
+
+  it("an away hot root: the line says the download folder isn't there", async () => {
+    const cold = tmp('prep-away-cold-')
+    const hotAway = path.join(cold, 'unplugged-hot')
+    writeEp(cold, 'Show', '1', 'video')
+    const step = stepOver(hotAway, entries, { 10: show }, records, {
+      cold,
+      missingRoots: [hotAway]
+    })
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '1 of 2 episodes ok', status: 'warning' },
+      {
+        text: `Show episode 2: the download folder isn't there (${hotAway}), so this episode wasn't checked`,
+        status: 'warning',
+        animeId: 10
+      }
+    ])
+  })
+
+  it('two away roots: the line names the first in search order, not in missingRoots order', async () => {
+    const base = tmp('prep-away-both-')
+    const hotAway = path.join(base, 'unplugged-hot')
+    const coldAway = path.join(base, 'unplugged-cold')
+    const step = stepOver(hotAway, { '10:2:1': meta }, { 10: show }, records, {
+      cold: coldAway,
+      missingRoots: [coldAway, hotAway]
+    })
+    const out = await step.run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: `Show episode 2: the download folder isn't there (${hotAway}), so this episode wasn't checked`,
+        status: 'warning',
+        animeId: 10
+      }
+    ])
   })
 })
 

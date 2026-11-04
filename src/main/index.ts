@@ -52,6 +52,7 @@ import {
   createLibrarySyncStep
 } from './services/prepare-offline/steps/library-sync'
 import { probeDuration } from './lib/probe-duration'
+import { animeRecordFrom, playerRecordFrom } from './lib/anime-record'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
 import { registerSyncplayBroadcasts } from './ipc/syncplay-broadcasts'
@@ -690,6 +691,8 @@ prepareOffline.registerStep(
     downloadedEpisodes: () =>
       store.get('downloadedEpisodes') as Record<string, { author?: string }>,
     downloadedAnime: () => store.get('downloadedAnime') as Record<string, AnimeSearchResult>,
+    animeRecord: (id) => animeRecordFrom(store, id),
+    playerRecord: (id) => playerRecordFrom(store, id),
     displayName: getDisplayName,
     sanitizeFilename,
     roots: () => {
@@ -698,6 +701,7 @@ prepareOffline.registerStep(
         ? [coldStorageService.getDownloadDir(), cold]
         : [coldStorageService.getDownloadDir()]
     },
+    missingRoots: () => coldStorageService.missingConfiguredRoots(),
     probeDuration: (file, signal) => {
       const ffprobe = getFfprobePath()
       return ffprobe && fs.existsSync(ffprobe)

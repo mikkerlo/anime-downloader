@@ -16,6 +16,7 @@ import {
   type ExportMergeChoice
 } from '@shared/shared-library-export'
 import type { MergeStatus } from '../../download-manager'
+import { animeRecordFrom } from '../../lib/anime-record'
 import type { FileCheckResult } from '../../lib/episode-file-scan'
 import type { DownloadedEpisodesMap } from '../../lib/downloaded-episodes'
 import { CAPS, itemKey } from '../../lib/shared-library/format'
@@ -169,12 +170,7 @@ export function createSharedLibraryExportService(
   const writes = new Map<string, Promise<void>>()
 
   const get = <T>(key: string): T => deps.store.get(key) as T
-  const animeRecord = (id: number): AnimeSearchResult | null =>
-    get<Record<string, AnimeSearchResult>>('downloadedAnime')?.[id] ??
-    get<Record<string, AnimeSearchResult>>('library')?.[id] ??
-    detail(id) ??
-    get<Record<string, AnimeSearchResult>>('recentAnimeMeta')?.[id] ??
-    null
+  const animeRecord = (id: number): AnimeSearchResult | null => animeRecordFrom(deps.store, id)
   const detail = (id: number): AnimeDetail | null =>
     get<Record<string, { animeDetail?: AnimeDetail | null }>>('animeCache')?.[id]?.animeDetail ??
     null

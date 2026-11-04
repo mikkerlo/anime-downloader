@@ -33,7 +33,11 @@ export interface ImportItem {
 
 /** What planning reads from this PC. */
 export interface ImportSource {
-  /** `downloadedAnime[animeId]`: this PC's own record, which wins over the drive's. */
+  /**
+   * This PC's own record, which wins over the drive's (`playerRecordFrom`): the
+   * cached details the player takes its name from, then `downloadedAnime`,
+   * `library` and `recentAnimeMeta`.
+   */
   localAnime: (animeId: number) => AnimeSearchResult | null
 }
 
@@ -140,14 +144,17 @@ function episodeLabel(meta: SharedLibraryMeta | null, episodeInt: string): strin
 
 export interface ImportTitleInfo {
   animeId: number
-  /** The drive's record, from its snapshot: `downloadedAnime` gets it only when this PC has none. */
+  /** The drive's record, from its snapshot. */
   snapshot: AnimeSearchResult
-  /** The record the local name comes from: this PC's own `downloadedAnime` entry, else `snapshot`. */
+  /**
+   * The record the local name comes from: this PC's own (`ImportSource.localAnime`),
+   * else `snapshot`. `downloadedAnime` gets it when it has no entry for the title.
+   */
   record: AnimeSearchResult
   name: string
 }
 
-/** The local name of each title: this PC's own record when it has one, else the drive's. */
+/** The local name of each title: this PC's own record when it has any, else the drive's. */
 export function titleInfo(
   src: ImportSource,
   manifest: SharedLibraryManifest,

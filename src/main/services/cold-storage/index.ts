@@ -157,6 +157,14 @@ export interface ColdStorageService {
    * exist, no file can be inside it.
    */
   missingConfiguredRoot(): string | null
+  /**
+   * Every configured, non-empty stored root that is not on disk, in `ROOT_KEYS`
+   * order, with the same fallback exemption; `missingConfiguredRoot()` is its
+   * head. Prepare for offline's step 4 reads the full list (#664), since an
+   * earlier missing root, such as a stale `downloadDir`, masks the cold one in
+   * the singular.
+   */
+  missingConfiguredRoots(): string[]
   /** Walk hot/cold roots, total bytes per anime/episode, classify by bucket. */
   scanUsage(): Promise<StorageUsage>
 
@@ -337,6 +345,10 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
   }
 
   function missingConfiguredRoot(): string | null {
+    return missingConfiguredRoots()[0] ?? null
+  }
+
+  function missingConfiguredRoots(): string[] {
     // Keys from `ROOT_KEYS`, values raw — deliberately not `allConfiguredRoots()`,
     // which adds the fallback. The fallback must stay out of this check (see the
     // interface doc), so the two lists still have to be able to shrink
@@ -344,10 +356,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     // change that, it only stops this copy from being the one place a fourth
     // root key could be forgotten (#454).
     const storedRoots = ROOT_KEYS.map((key) => (store.get(key) as string) || '').filter(Boolean)
-    for (const root of storedRoots) {
-      if (!fs.existsSync(root)) return root
-    }
-    return null
+    return storedRoots.filter((root) => !fs.existsSync(root))
   }
 
   async function scanUsage(): Promise<StorageUsage> {
@@ -1027,6 +1036,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     dirsForScan,
     allConfiguredRoots,
     missingConfiguredRoot,
+    missingConfiguredRoots,
     scanUsage,
     deleteEpisodeFiles,
     episodeHasInProgressDownload,

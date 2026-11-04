@@ -3,6 +3,7 @@
 // how the chosen folder is treated (the target table in docs/shared-library.md).
 
 import * as path from 'path'
+import { titleNames } from '../../lib/anime-record'
 import type { FileCheckResult } from '../../lib/episode-file-scan'
 import type { DownloadedEpisodesMap } from '../../lib/downloaded-episodes'
 import { discoverLibraries } from '../../lib/shared-library/discover'
@@ -70,16 +71,6 @@ export interface ResolvedItem {
 }
 
 const BUSY = new Set(['merging', 'deferred'])
-
-/** The names a title's folder can have: `getAnimeName`'s order (romaji, ru, title). */
-export function titleNames(anime: AnimeSearchResult | null): string[] {
-  if (!anime) return []
-  const out: string[] = []
-  for (const n of [anime.titles?.romaji, anime.titles?.ru, anime.title]) {
-    if (n && !out.includes(n)) out.push(n)
-  }
-  return out
-}
 
 export function displayName(anime: AnimeSearchResult | null, animeId: number): string {
   return titleNames(anime)[0] ?? `Anime ${animeId}`

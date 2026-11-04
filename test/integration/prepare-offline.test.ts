@@ -32,7 +32,7 @@ import { createCacheScope } from '../../src/main/services/anime-cache/scope'
 import { SmotretApi } from '../../src/main/smotret-api'
 import { applyApiBaseOverrides } from '../../src/main/lib/api-bases'
 import { probeDuration } from '../../src/main/lib/probe-duration'
-import { animeRecordFrom } from '../../src/main/lib/anime-record'
+import { animeRecordFrom, playerRecordFrom } from '../../src/main/lib/anime-record'
 import { sanitizeFilename } from '../../src/main/download-manager'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
 import { FIXTURE_LIBRARY_ID, copyFixtureLibrary, mtimeSnapshot } from '../helpers/attached-library'
@@ -425,6 +425,8 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
       downloadedAnime: () => ({ '10': { id: 10, title: show, titles: { romaji: show } } as never }),
       animeRecord: (id) =>
         id === 10 ? ({ id: 10, title: show, titles: { romaji: show } } as never) : null,
+      playerRecord: (id) =>
+        id === 10 ? ({ id: 10, title: show, titles: { romaji: show } } as never) : null,
       displayName: (a) => a.titles?.romaji || a.title,
       sanitizeFilename,
       roots: () => [hot, cold],
@@ -449,6 +451,99 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
     ])
     expect({ hot: treeSnapshot(hot), cold: treeSnapshot(cold) }).toEqual(before)
   })
+
+  // #660: the player looks under the cached details' name (offline GET_ANIME),
+  // not under the `downloadedAnime` record's.
+  const driftStep = (hot: string, data: Record<string, unknown>) => {
+    const store = { get: (key: string): unknown => data[key] }
+    return createLocalIntegrityStep({
+      downloadedEpisodes: () => ({ '11:1:111': { author: 'A', translationId: 111 } }),
+      downloadedAnime: () => (data.downloadedAnime ?? {}) as Record<string, AnimeSearchResult>,
+      animeRecord: (id) => animeRecordFrom(store, id),
+      playerRecord: (id) => playerRecordFrom(store, id),
+      displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
+      sanitizeFilename,
+      roots: () => [hot],
+      probeDuration: async () => ({ duration: 1420 }),
+      isActivePart: () => false,
+      concurrency: 1
+    })
+  }
+  const record = (romaji: string, ru?: string): AnimeSearchResult =>
+    ({ id: 11, title: ru ?? romaji, titles: { romaji, ru } }) as AnimeSearchResult
+  const writeGood = (hot: string, folder: string): void => {
+    fs.mkdirSync(path.join(hot, folder))
+    fs.writeFileSync(
+      path.join(hot, folder, `${sanitizeFilename(`${folder} - 01`)} [A].mp4`),
+      'GOOD video'
+    )
+  }
+  const cached = (anime: AnimeSearchResult): Record<string, unknown> => ({
+    11: { animeDetail: anime, episodes: {} }
+  })
+
+  it('a title renamed since its download: a file under the old name is the folder line, not ok', async () => {
+    const hot = tmp('prep-drift-')
+    writeGood(hot, 'Old Name')
+    const out = await driftStep(hot, {
+      downloadedAnime: { 11: record('Old Name') },
+      animeCache: cached(record('New Name'))
+    }).run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: 'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"',
+        status: 'warning',
+        animeId: 11
+      }
+    ])
+  })
+
+  it('romaji filled in after the download: a file under the ru folder is the folder line, not ok', async () => {
+    const hot = tmp('prep-drift-ru-')
+    writeGood(hot, 'Дельта')
+    const out = await driftStep(hot, {
+      downloadedAnime: { 11: record('', 'Дельта') },
+      animeCache: cached(record('Delta R', 'Дельта'))
+    }).run(ctx())
+
+    expect(out.details).toEqual([
+      { text: '0 of 1 episode ok', status: 'warning' },
+      {
+        text: 'Delta R episode 1: the file is in the "Дельта" folder, but the player looks in "Delta R"',
+        status: 'warning',
+        animeId: 11
+      }
+    ])
+  })
+
+  it("a record-less title is checked under its cached name before its library record's", async () => {
+    const hot = tmp('prep-drift-norec-')
+    writeGood(hot, 'Cache Name')
+    const out = await driftStep(hot, {
+      library: { 11: record('Star Name') },
+      animeCache: cached(record('Cache Name'))
+    }).run(ctx())
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '1 of 1 episode ok', status: 'ok' }] })
+  })
+})
+
+describe('step 4: the wiring in src/main/index.ts (source pin)', () => {
+  it("hands the step the player's record (cached details first) and the record chain", () => {
+    // `index.ts` boots Electron at module scope and can't be imported here, and
+    // every test above builds the deps by hand, so the wiring is read as text.
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'),
+      'utf-8'
+    )
+    const start = src.indexOf('createLocalIntegrityStep({')
+    expect(start).toBeGreaterThan(-1)
+    const body = src.slice(start, src.indexOf('isActivePart:', start))
+    expect(body).toContain('playerRecord: (id) => playerRecordFrom(store, id),')
+    expect(body).toContain('animeRecord: (id) => animeRecordFrom(store, id),')
+  })
 })
 
 describe('step 4: titles with no downloadedAnime record', () => {
@@ -471,6 +566,7 @@ describe('step 4: titles with no downloadedAnime record', () => {
       downloadedEpisodes: () => downloadedEpisodes,
       downloadedAnime: () => downloadedAnime,
       animeRecord,
+      playerRecord: animeRecord,
       displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
       sanitizeFilename,
       roots: () => (opts.cold ? [hot, opts.cold] : [hot]),

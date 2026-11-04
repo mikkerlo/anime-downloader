@@ -4,8 +4,16 @@
 // (offline)".
 import * as fs from 'fs'
 import * as os from 'os'
+import * as path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ACTION_ROUTERS, buildWorld, type World } from '../../helpers/offline-world'
+import { CHANNELS } from '../../../src/shared/ipc/channels'
+import {
+  ACTION_ROUTERS,
+  buildHooks,
+  buildWorld,
+  named,
+  type World
+} from '../../helpers/offline-world'
 import { check, ORACLE_ROUTERS, type Run } from '../../helpers/offline-oracles'
 import { SCENARIOS, type Scenario } from './scenarios'
 
@@ -38,18 +46,45 @@ describe('one world at a time', () => {
     expect(() => buildWorld({ titles: [] })).toThrow(/another world is still live/)
   })
 
-  it('a build that throws partway leaves no live world, so the next build works', () => {
-    // A NUL in a folder name makes `mkdirSync` throw while the files are written.
-    const bad = { titles: [{ id: 1, entries: [{ ep: '1', trId: 11, under: 'Bad\0Name' }] }] }
-    const roots = (): string[] =>
-      fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('offline-world-'))
-    const before = roots()
-    expect(() => buildWorld(bad)).toThrow(/null bytes/)
-    const left = roots().filter((d) => !before.includes(d))
-    expect(left).toHaveLength(1)
+  it('a build that throws partway leaves no live world; the next build removes its temp root', () => {
+    // A private temp dir, so another worker's worlds never show up in the scan
+    // (`os.tmpdir()` reads these on every call).
+    const keys = ['TMPDIR', 'TEMP', 'TMP'] as const
+    const saved = keys.map((k) => process.env[k])
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'offline-world-test-')))
+    for (const k of keys) process.env[k] = tmp
+    try {
+      // A NUL in a folder name makes `mkdirSync` throw while the files are written.
+      const bad = { titles: [{ id: 1, entries: [{ ep: '1', trId: 11, under: 'Bad\0Name' }] }] }
+      expect(() => buildWorld(bad)).toThrow(/null bytes/)
+      const left = fs.readdirSync(tmp)
+      expect(left).toHaveLength(1)
+      world = buildWorld({ titles: [] })
+      expect(world.files.size).toBe(0)
+      expect(fs.readdirSync(tmp)).not.toContain(left[0])
+    } finally {
+      world?.dispose()
+      world = null
+      keys.forEach((k, i) => {
+        if (saved[i] === undefined) delete process.env[k]
+        else process.env[k] = saved[i]
+      })
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it("a build that throws after registering its routers leaves no handler for the next world's invoke", async () => {
+    buildHooks.afterRegister = () => {
+      throw new Error('thrown after register')
+    }
+    try {
+      const first = { titles: [{ id: 7, cache: named('First World'), entries: [] }] }
+      expect(() => buildWorld(first, ['anime'])).toThrow(/thrown after register/)
+    } finally {
+      buildHooks.afterRegister = null
+    }
     world = buildWorld({ titles: [] })
-    expect(world.files.size).toBe(0)
-    expect(roots()).not.toContain(left[0])
+    await expect(world.invoke(CHANNELS.GET_ANIME, 7)).rejects.toThrow(/No handler registered/)
   })
 })
 

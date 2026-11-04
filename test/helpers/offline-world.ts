@@ -207,6 +207,9 @@ let live = false
 /** The temp root of a build that threw before it returned a world. */
 let unfinished: string | null = null
 
+/** Test-only: runs right after a build registers its routers, so a test can make it throw there. */
+export const buildHooks: { afterRegister: (() => void) | null } = { afterRegister: null }
+
 export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): World {
   if (live) throw new Error('buildWorld: another world is still live; dispose() it first')
   // A build that threw partway left no live world, but may have left its
@@ -512,6 +515,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
   if (need.has('anime')) registerAnime(deps)
   if (need.has('downloads')) registerDownloads(deps)
   if (need.has('downloaded-anime')) registerDownloadedAnime(deps)
+  buildHooks.afterRegister?.()
   __enableIpcLoop()
 
   const exportService = need.has('export')

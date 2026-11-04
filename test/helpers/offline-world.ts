@@ -426,7 +426,9 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
       ? { error: 'moov atom not found' }
       : { duration: 1420 }
 
-  // As in `index.ts`: the step deps are built before the download manager is.
+  // As in `index.ts`: the step deps are built before the download manager is,
+  // so they must read it through the getter, at run time.
+  // eslint-disable-next-line prefer-const -- assigned below, after the deps
   let downloadManager: DownloadManagerStub | undefined
   const integrityDeps = {
     ...localIntegrityDeps({

@@ -1,6 +1,7 @@
 // The offline scenario matrix (#659): one world per test, built from a row of
 // `scenarios.ts`, then the row's actions, Prepare for offline's step 4, and
-// one oracle over what it reported.
+// one oracle over what it reported. See `docs/testing.md`, "Scenario matrix
+// (offline)".
 import { afterEach, describe, expect, it } from 'vitest'
 import { ACTION_ROUTERS, buildWorld, type World } from '../../helpers/offline-world'
 import { check, ORACLE_ROUTERS, type Run } from '../../helpers/offline-oracles'
@@ -26,6 +27,9 @@ async function observe(s: Scenario): Promise<Run> {
   return { scenario: s.id, world: w, before, after, out, outcomes: await w.entryOutcomes() }
 }
 
+// A read-only folder stands in for a file Windows holds open; root ignores it.
+const noLock = process.platform === 'win32' || process.getuid?.() === 0
+
 describe('one world at a time', () => {
   it('buildWorld throws while another world is live', () => {
     world = buildWorld({ titles: [] })
@@ -34,7 +38,7 @@ describe('one world at a time', () => {
 })
 
 for (const s of SCENARIOS) {
-  describe(`${s.id}: ${s.title}`, () => {
+  describe.skipIf(s.locked && noLock)(`${s.id}: ${s.title}`, () => {
     if (s.expect) {
       it('step 4 reports exactly this', async () => {
         const { out, world: w } = await observe(s)
@@ -46,9 +50,48 @@ for (const s of SCENARIOS) {
       })
     }
     for (const oracle of s.oracles) {
-      it(oracle, async () => {
-        expect(await check(oracle, await observe(s))).toEqual([])
+      const known = s.known?.find((k) => k.oracle === oracle)
+      const agreed = s.agreed?.find((a) => a.oracle === oracle)
+      const name = known
+        ? `${oracle} (known: #${known.issue})`
+        : agreed
+          ? `${oracle} (agreed, still fires)`
+          : oracle
+      it(name, async () => {
+        const violations = await check(oracle, await observe(s))
+        if (known) expect(violations).toEqual(known.violations)
+        else if (agreed) expect(violations.length).toBeGreaterThan(0)
+        else expect(violations).toEqual([])
       })
     }
   })
 }
+
+// Every pair with violations needs a filed issue or a cited acceptance.
+const COMMENT_URL =
+  /^https:\/\/github\.com\/mikkerlo\/anime-downloader\/issues\/\d+#issuecomment-\d+$/
+const RISKS_LINE = /^#\d+ Risks: ".+"$/
+
+describe('known pins and agreed exemptions', () => {
+  for (const s of SCENARIOS) {
+    it(`${s.id}: each names a filed issue or a source, on an oracle the row runs`, () => {
+      const exempted = [...(s.known ?? []), ...(s.agreed ?? [])].map((x) => x.oracle)
+      expect(new Set(exempted).size).toBe(exempted.length)
+      for (const k of s.known ?? []) {
+        expect(Number.isInteger(k.issue) && k.issue > 0).toBe(true)
+        expect(s.oracles).toContain(k.oracle)
+        expect(k.violations.length).toBeGreaterThan(0)
+        for (const v of k.violations) expect(v).toMatchObject({ scenario: s.id, oracle: k.oracle })
+      }
+      for (const a of s.agreed ?? []) {
+        expect(COMMENT_URL.test(a.source) || RISKS_LINE.test(a.source)).toBe(true)
+        expect(s.oracles).toContain(a.oracle)
+      }
+    })
+  }
+
+  it('row ids are unique', () => {
+    const ids = SCENARIOS.map((s) => s.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})

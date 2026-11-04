@@ -40,8 +40,10 @@ interface Harness {
 }
 
 let root: string
-/** Advanced mode's cold root, when a test sets one. */
+/** The cold root, when a test configures one. */
 let coldDir: string | null
+/** `storageMode === 'advanced'`, kept apart from `coldDir` so a test can flip back to simple. */
+let advanced: boolean
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -49,6 +51,7 @@ beforeEach(() => {
   vi.setSystemTime(T0)
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-eviction-scope-'))
   coldDir = null
+  advanced = false
 })
 
 afterEach(() => {
@@ -59,6 +62,7 @@ afterEach(() => {
 function harness(...members: Membership[]): Harness {
   const downloadDir = path.join(root, 'downloads')
   fs.mkdirSync(downloadDir, { recursive: true })
+  const configuredRoots = (): string[] => [downloadDir, coldDir].filter((r): r is string => !!r)
   const store = new InMemoryStorage({
     installId: 'install-a',
     library: members.includes('starred') ? { [ID]: anime } : {},
@@ -101,9 +105,11 @@ function harness(...members: Membership[]): Harness {
     },
     coldStorageService: {
       getDownloadDir: () => downloadDir,
-      isAdvanced: () => coldDir !== null,
+      isAdvanced: () => advanced,
       getColdStorageDir: () => coldDir,
-      dirsForScan: () => [downloadDir],
+      dirsForScan: () => (advanced && coldDir ? [downloadDir, coldDir] : [downloadDir]),
+      allConfiguredRoots: () => configuredRoots(),
+      missingConfiguredRoot: () => configuredRoots().find((r) => !fs.existsSync(r)) ?? null,
       pruneDownloadedEpisode: vi.fn()
     },
     skipAnalysisService: { pruneCacheForAnime: vi.fn(), dropDetectionsForAnime: vi.fn() },
@@ -197,6 +203,48 @@ describe('download-cancel-by-episode: the vanished-files sweep', () => {
     expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
     expect(survived(h)).toEqual(KEPT)
   })
+
+  // #661: red on the hot-only sweep, which dropped the record and evicted the cache.
+  const filesOnlyInCold = (): void => {
+    coldDir = path.join(root, 'cold')
+    fs.mkdirSync(path.join(coldDir, NAME), { recursive: true })
+    fs.writeFileSync(path.join(coldDir, NAME, `${NAME} - 01.mkv`), 'v')
+  }
+
+  it('advanced mode, files only in cold: keeps the record and the cache', async () => {
+    advanced = true
+    filesOnlyInCold()
+    const h = harness('downloaded')
+    await sweep(h)
+    expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
+    expect(survived(h)).toEqual(KEPT)
+  })
+
+  // Nothing moves cold files back on a flip to simple mode, so a mode-scoped root set misses them.
+  it('flipped back to simple mode, files only in cold: keeps the record and the cache', async () => {
+    filesOnlyInCold()
+    const h = harness('downloaded')
+    await sweep(h)
+    expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
+    expect(survived(h)).toEqual(KEPT)
+  })
+
+  it('cold configured but away: keeps the record and the cache, and logs the skip', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      advanced = true
+      coldDir = path.join(root, 'cold-unplugged')
+      const h = harness('downloaded')
+      await sweep(h)
+      expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
+      expect(survived(h)).toEqual(KEPT)
+      expect(warn).toHaveBeenCalledWith(
+        `[storage] skipping downloadedAnime sweep — configured root is missing: ${coldDir}`
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('downloaded-anime-delete', () => {
@@ -220,6 +268,7 @@ describe('downloaded-anime-delete', () => {
   })
 
   it('advanced mode, the title only in hot: the folder goes and the entries are dropped', async () => {
+    advanced = true
     coldDir = path.join(root, 'cold')
     fs.mkdirSync(coldDir)
     const h = harness('downloaded')
@@ -256,6 +305,150 @@ describe('downloaded-anime-delete', () => {
       }
     }
   )
+
+  describe("a title's episodes under its ru folder (#663)", () => {
+    const RU = 'Шоу'
+
+    function ruTitle(h: Harness): void {
+      h.store.set('downloadedAnime', { [ID]: { ...anime, titles: { romaji: NAME, ru: RU } } })
+      seedEntries(h)
+    }
+
+    function put(dir: string, folder: string, file: string): string {
+      fs.mkdirSync(path.join(dir, folder), { recursive: true })
+      const fp = path.join(dir, folder, file)
+      fs.writeFileSync(fp, 'v')
+      return fp
+    }
+
+    function episodeOneUnderRu(h: Harness): { ruVideo: string; ruSubs: string; video: string } {
+      return {
+        ruVideo: put(h.downloadDir, RU, `${RU} - 01 [Studio].mp4`),
+        ruSubs: put(h.downloadDir, RU, `${RU} - 01 [Studio].ass`),
+        video: put(h.downloadDir, NAME, `${NAME} - 02 [Studio].mp4`)
+      }
+    }
+
+    const entries = (h: Harness): string[] =>
+      Object.keys(h.store.get('downloadedEpisodes') as object).sort()
+
+    // Red on the old handler, which removed only the `animeName` folder.
+    it('deletes the video and subtitles under the ru folder, then the empty folder', async () => {
+      const h = harness('downloaded')
+      ruTitle(h)
+      const { ruVideo, ruSubs, video } = episodeOneUnderRu(h)
+      await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+      expect(fs.existsSync(ruVideo)).toBe(false)
+      expect(fs.existsSync(ruSubs)).toBe(false)
+      expect(fs.existsSync(video)).toBe(false)
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(false)
+      expect(entries(h)).toEqual(['7:1:71'])
+    })
+
+    it("leaves another title's file in a shared ru folder, and the folder", async () => {
+      const h = harness('downloaded')
+      ruTitle(h)
+      const { ruVideo } = episodeOneUnderRu(h)
+      const other = put(h.downloadDir, RU, `${RU} - 05 [Other].mp4`)
+      await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+      expect(fs.existsSync(ruVideo)).toBe(false)
+      expect(fs.existsSync(other)).toBe(true)
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(true)
+      expect(entries(h)).toEqual(['7:1:71'])
+    })
+
+    it('deletes every candidate of an episode: both containers and the legacy name', async () => {
+      const h = harness('downloaded')
+      ruTitle(h)
+      const files = [
+        put(h.downloadDir, RU, `${RU} - 01 [Studio].mkv`),
+        put(h.downloadDir, RU, `${RU} - 01 [Studio].mp4`),
+        put(h.downloadDir, RU, `${RU} - 01.mp4`)
+      ]
+      await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+      expect(files.filter((fp) => fs.existsSync(fp))).toEqual([])
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(false)
+    })
+
+    it('advanced mode, the ru folder in cold: its file and folder go too', async () => {
+      advanced = true
+      coldDir = path.join(root, 'cold')
+      fs.mkdirSync(coldDir)
+      const h = harness('downloaded')
+      ruTitle(h)
+      const coldVideo = put(coldDir, RU, `${RU} - 01 [Studio].mkv`)
+      const video = put(h.downloadDir, NAME, `${NAME} - 02 [Studio].mp4`)
+      await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+      expect(fs.existsSync(coldVideo)).toBe(false)
+      expect(fs.existsSync(path.join(coldDir, RU))).toBe(false)
+      expect(fs.existsSync(video)).toBe(false)
+      expect(entries(h)).toEqual(['7:1:71'])
+    })
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a locked file under the ru folder keeps the entries',
+      async () => {
+        const h = harness('downloaded')
+        ruTitle(h)
+        const { ruVideo } = episodeOneUnderRu(h)
+        const ruFolder = path.join(h.downloadDir, RU)
+        fs.chmodSync(ruFolder, 0o555)
+        try {
+          await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+          expect(fs.existsSync(ruVideo)).toBe(true)
+          expect(fs.existsSync(path.join(h.downloadDir, NAME))).toBe(false)
+          expect(entries(h)).toEqual([`${ID}:1:11`, `${ID}:2:11`, '7:1:71'])
+        } finally {
+          fs.chmodSync(ruFolder, 0o755)
+        }
+      }
+    )
+
+    // Red without the helper's `author ?? ''`: the throw landed after the record was deleted.
+    it('an entry with no author still completes the delete', async () => {
+      const h = harness('downloaded')
+      h.store.set('downloadedAnime', { [ID]: { ...anime, titles: { romaji: NAME, ru: RU } } })
+      h.store.set('downloadedEpisodes', {
+        [`${ID}:1:11`]: { translationType: 'subRu', quality: 720, translationId: 11 }
+      })
+      const ruVideo = put(h.downloadDir, RU, `${RU} - 01.mp4`)
+      await expect(h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)).resolves.toBeUndefined()
+      expect(h.store.get('downloadedAnime')).toEqual({})
+      expect(fs.existsSync(ruVideo)).toBe(false)
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(false)
+      expect(entries(h)).toEqual([])
+      expect(survived(h)).toEqual(EVICTED)
+    })
+
+    it('a subtitle whose video is already gone is removed, and so is the folder', async () => {
+      const h = harness('downloaded')
+      ruTitle(h)
+      const ruSubs = put(h.downloadDir, RU, `${RU} - 01 [Studio].ass`)
+      await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+      expect(fs.existsSync(ruSubs)).toBe(false)
+      expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(false)
+      expect(entries(h)).toEqual(['7:1:71'])
+    })
+
+    // The folder stands in for one Explorer holds open on Windows (EPERM/EBUSY).
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a ru folder that cannot be removed once its files are gone drops the entries',
+      async () => {
+        const h = harness('downloaded')
+        ruTitle(h)
+        const ruVideo = put(h.downloadDir, RU, `${RU} - 01 [Studio].mp4`)
+        fs.chmodSync(h.downloadDir, 0o555)
+        try {
+          await h.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, ID, NAME)
+          expect(fs.existsSync(ruVideo)).toBe(false)
+          expect(fs.existsSync(path.join(h.downloadDir, RU))).toBe(true)
+          expect(entries(h)).toEqual(['7:1:71'])
+        } finally {
+          fs.chmodSync(h.downloadDir, 0o755)
+        }
+      }
+    )
+  })
 })
 
 function seedEntries(h: Harness): void {

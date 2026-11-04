@@ -575,7 +575,7 @@ describe('step 4: a file that goes away or fails to read while the step runs', (
       if (p === file) fs.unlinkSync(file)
       return realStat(p, o)
     }) as Stat)
-  const rejectStatOnce = (file: string, err: unknown) =>
+  const rejectStatFor = (file: string, err: unknown) =>
     vi
       .spyOn(fs.promises, 'stat')
       .mockImplementation(((p: fs.PathLike, o?: never) =>
@@ -607,7 +607,7 @@ describe('step 4: a file that goes away or fails to read while the step runs', (
 
   it('a stat that fails with another code is "can\'t read it (<code>)"; the other title is still counted', async () => {
     const { step, raceFile } = world()
-    rejectStatOnce(
+    rejectStatFor(
       raceFile,
       Object.assign(new Error(`EIO: i/o error, stat '${raceFile}'`), { code: 'EIO' })
     )
@@ -621,7 +621,7 @@ describe('step 4: a file that goes away or fails to read while the step runs', (
 
   it('a stat rejection with no code reads its text, not "can\'t read it (undefined)"', async () => {
     const { step, raceFile } = world()
-    rejectStatOnce(raceFile, 'the share went away')
+    rejectStatFor(raceFile, 'the share went away')
     const out = await step.run(ctx())
 
     expect(out.details).toEqual([

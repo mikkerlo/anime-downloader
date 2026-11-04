@@ -70,6 +70,7 @@ export function createPrepareOfflineService(
   let run: PrepareOfflineRun | null = null
   let running: Promise<void> | null = null
   let controller: AbortController | null = null
+  let runSeq = 0
 
   function emit(): void {
     if (run) deps.broadcast(deps.progressChannel, structuredClone(run))
@@ -155,6 +156,7 @@ export function createPrepareOfflineService(
       controller = new AbortController()
       const current: PrepareOfflineRun = {
         runId: makeId(),
+        runSeq: ++runSeq,
         startedAt: now(),
         finishedAt: null,
         cancelled: false,

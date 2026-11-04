@@ -50,7 +50,7 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } 
   return { promise, resolve }
 }
 
-function service(opts: { offline?: boolean; store?: InMemoryStorage } = {}) {
+function service(opts: { offline?: boolean; store?: InMemoryStorage; now?: () => number } = {}) {
   const store = opts.store ?? new InMemoryStorage({ prepareOfflineLastRun: null })
   const broadcast = vi.fn()
   let offline = opts.offline ?? false
@@ -59,7 +59,7 @@ function service(opts: { offline?: boolean; store?: InMemoryStorage } = {}) {
     isOffline: () => offline,
     broadcast,
     progressChannel: PROGRESS,
-    now: () => 5_000,
+    now: opts.now ?? (() => 5_000),
     makeId: (() => {
       let n = 0
       return () => `run-${++n}`
@@ -118,6 +118,28 @@ describe('the runner', () => {
     expect(state.run?.steps.map((s) => s.status)).toEqual(['ok', 'ok', 'ok'])
     expect(svc.start().runId).not.toBe(first.runId)
     await svc.idle()
+  })
+
+  it('runSeq orders runs without the wall clock: it goes up when now() steps back', async () => {
+    const clock = [10_000, 10_100, 9_800, 9_900]
+    const { svc, broadcast } = service({ now: () => clock.shift()! })
+    svc.registerStep(fakeStep('binaries'))
+    const first = svc.start()
+    const firstSeq = svc.getState().run!.runSeq
+    expect(svc.start()).toEqual(first)
+    expect(svc.getState().run!.runSeq).toBe(firstSeq)
+    await svc.idle()
+    svc.start()
+    await svc.idle()
+    const runs: PrepareOfflineRun[] = broadcast.mock.calls
+      .filter((c) => c[0] === PROGRESS)
+      .map((c) => c[1])
+    const byId = new Map(runs.map((r) => [r.runId, r]))
+    expect(byId.size).toBe(2)
+    const [r1, r2] = [...byId.values()]
+    expect(r2.startedAt).toBeLessThan(r1.startedAt)
+    expect(r2.runSeq).toBeGreaterThan(r1.runSeq)
+    for (const r of runs) expect(r.runSeq).toBe(byId.get(r.runId)!.runSeq)
   })
 
   it('Cancel aborts the current step at its next check and marks the rest skipped', async () => {

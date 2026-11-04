@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto'
 import { promises as fsp } from 'fs'
 import * as path from 'path'
 import { fitsFreeSpace, requiredBytes } from '@shared/shared-library-export'
+import { playerRecordFrom } from '../../lib/anime-record'
 import { persistDownloadedEpisode } from '../../lib/downloaded-episodes'
 import { parseEpisodeFromFilename } from '../../lib/filename'
 import { nodeFs, writeSmallFile, type ExportFs } from '../../lib/shared-library/copy'
@@ -163,8 +164,7 @@ export function createSharedLibraryImportService(
   }
 
   const source = {
-    localAnime: (animeId: number): AnimeSearchResult | null =>
-      get<Record<string, AnimeSearchResult> | undefined>('downloadedAnime')?.[animeId] ?? null
+    localAnime: (animeId: number): AnimeSearchResult | null => playerRecordFrom({ get }, animeId)
   }
 
   async function plan(req: ImportPlanRequest): Promise<ImportPlan> {
@@ -309,9 +309,9 @@ export function createSharedLibraryImportService(
 
   /**
    * Registers one copied episode, through the single writers: the title's
-   * `downloadedAnime` entry, cached details and poster only when this PC has
-   * none (an existing entry is never overwritten), then the episode with
-   * `arrivedAt`.
+   * `downloadedAnime` entry (from the record its name came from), cached
+   * details and poster only when this PC has none (an existing entry is never
+   * overwritten), then the episode with `arrivedAt`.
    */
   async function register(
     rec: ImportJobRecord,
@@ -324,7 +324,7 @@ export function createSharedLibraryImportService(
     const id = String(item.animeId)
     const downloaded = get<Record<string, AnimeSearchResult> | undefined>('downloadedAnime') ?? {}
     if (!downloaded[id] && info) {
-      deps.store.set('downloadedAnime', { ...downloaded, [id]: info.snapshot })
+      deps.store.set('downloadedAnime', { ...downloaded, [id]: info.record })
     }
     const poster = path.join(posterDir, `${item.animeId}.jpg`)
     const posterCopied =

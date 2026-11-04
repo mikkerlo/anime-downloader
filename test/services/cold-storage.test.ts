@@ -243,6 +243,36 @@ describe('ColdStorageService write-side disk ops', () => {
     ).toBe(coldAway)
   })
 
+  it('missingConfiguredRoots is empty with every root present and exempts the fallback', () => {
+    expect(svcWithDirs().svc.missingConfiguredRoots()).toEqual([])
+    const away = join(tmpRoot, 'away')
+    expect(svcWithDirs({ coldStorageDir: away }).svc.missingConfiguredRoots()).toEqual([away])
+  })
+
+  it('missingConfiguredRoots lists every missing root in ROOT_KEYS order', () => {
+    const hotAway = join(tmpRoot, 'hot-away')
+    const coldAway = join(tmpRoot, 'cold-away')
+    const { svc } = svcWithDirs({ hotStorageDir: hotAway, coldStorageDir: coldAway })
+    expect(svc.missingConfiguredRoots()).toEqual([hotAway, coldAway])
+  })
+
+  it('a stale downloadDir masks the away cold root in the singular, not in the plural (#664)', () => {
+    // Advanced mode with `hotStorageDir` present, so `getDownloadDir()` resolves
+    // through it and the stored `downloadDir` from simple mode is stale. It
+    // precedes `coldStorageDir` in `ROOT_KEYS`, so the singular names it and
+    // never the cold drive; Prepare for offline's step 4 reads the plural.
+    const staleAway = join(tmpRoot, 'stale-download-dir')
+    const coldAway = join(tmpRoot, 'cold-away')
+    const { svc } = svcWithDirs({
+      downloadDir: staleAway,
+      hotStorageDir: hotDir,
+      coldStorageDir: coldAway
+    })
+    expect(svc.getDownloadDir()).toBe(hotDir)
+    expect(svc.missingConfiguredRoots()).toEqual([staleAway, coldAway])
+    expect(svc.missingConfiguredRoot()).toBe(staleAway)
+  })
+
   it('pruneDownloadedEpisode is a no-op while a configured root is away', () => {
     const away = join(tmpRoot, 'away')
     const entries = {

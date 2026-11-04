@@ -40,8 +40,10 @@ interface Harness {
 }
 
 let root: string
-/** Advanced mode's cold root, when a test sets one. */
+/** The cold root, when a test configures one. */
 let coldDir: string | null
+/** `storageMode === 'advanced'`, kept apart from `coldDir` so a test can flip back to simple. */
+let advanced: boolean
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -49,6 +51,7 @@ beforeEach(() => {
   vi.setSystemTime(T0)
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-eviction-scope-'))
   coldDir = null
+  advanced = false
 })
 
 afterEach(() => {
@@ -59,6 +62,7 @@ afterEach(() => {
 function harness(...members: Membership[]): Harness {
   const downloadDir = path.join(root, 'downloads')
   fs.mkdirSync(downloadDir, { recursive: true })
+  const configuredRoots = (): string[] => [downloadDir, coldDir].filter((r): r is string => !!r)
   const store = new InMemoryStorage({
     installId: 'install-a',
     library: members.includes('starred') ? { [ID]: anime } : {},
@@ -101,9 +105,11 @@ function harness(...members: Membership[]): Harness {
     },
     coldStorageService: {
       getDownloadDir: () => downloadDir,
-      isAdvanced: () => coldDir !== null,
+      isAdvanced: () => advanced,
       getColdStorageDir: () => coldDir,
-      dirsForScan: () => [downloadDir],
+      dirsForScan: () => (advanced && coldDir ? [downloadDir, coldDir] : [downloadDir]),
+      allConfiguredRoots: () => configuredRoots(),
+      missingConfiguredRoot: () => configuredRoots().find((r) => !fs.existsSync(r)) ?? null,
       pruneDownloadedEpisode: vi.fn()
     },
     skipAnalysisService: { pruneCacheForAnime: vi.fn(), dropDetectionsForAnime: vi.fn() },
@@ -197,6 +203,48 @@ describe('download-cancel-by-episode: the vanished-files sweep', () => {
     expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
     expect(survived(h)).toEqual(KEPT)
   })
+
+  // #661: red on the hot-only sweep, which dropped the record and evicted the cache.
+  const filesOnlyInCold = (): void => {
+    coldDir = path.join(root, 'cold')
+    fs.mkdirSync(path.join(coldDir, NAME), { recursive: true })
+    fs.writeFileSync(path.join(coldDir, NAME, `${NAME} - 01.mkv`), 'v')
+  }
+
+  it('advanced mode, files only in cold: keeps the record and the cache', async () => {
+    advanced = true
+    filesOnlyInCold()
+    const h = harness('downloaded')
+    await sweep(h)
+    expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
+    expect(survived(h)).toEqual(KEPT)
+  })
+
+  // Nothing moves cold files back on a flip to simple mode, so a mode-scoped root set misses them.
+  it('flipped back to simple mode, files only in cold: keeps the record and the cache', async () => {
+    filesOnlyInCold()
+    const h = harness('downloaded')
+    await sweep(h)
+    expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
+    expect(survived(h)).toEqual(KEPT)
+  })
+
+  it('cold configured but away: keeps the record and the cache, and logs the skip', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      advanced = true
+      coldDir = path.join(root, 'cold-unplugged')
+      const h = harness('downloaded')
+      await sweep(h)
+      expect(Object.keys(h.store.get('downloadedAnime') as object)).toEqual([String(ID)])
+      expect(survived(h)).toEqual(KEPT)
+      expect(warn).toHaveBeenCalledWith(
+        `[storage] skipping downloadedAnime sweep — configured root is missing: ${coldDir}`
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('downloaded-anime-delete', () => {
@@ -220,6 +268,7 @@ describe('downloaded-anime-delete', () => {
   })
 
   it('advanced mode, the title only in hot: the folder goes and the entries are dropped', async () => {
+    advanced = true
     coldDir = path.join(root, 'cold')
     fs.mkdirSync(coldDir)
     const h = harness('downloaded')
@@ -322,6 +371,7 @@ describe('downloaded-anime-delete', () => {
     })
 
     it('advanced mode, the ru folder in cold: its file and folder go too', async () => {
+      advanced = true
       coldDir = path.join(root, 'cold')
       fs.mkdirSync(coldDir)
       const h = harness('downloaded')

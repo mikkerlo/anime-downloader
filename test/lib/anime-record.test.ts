@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { animeRecordFrom, titleNames } from '../../src/main/lib/anime-record'
+import { animeRecordFrom, playerRecordFrom, titleNames } from '../../src/main/lib/anime-record'
 
 const rec = (romaji: string): AnimeSearchResult =>
   ({ id: 7, title: romaji, titles: { romaji } }) as AnimeSearchResult
@@ -43,6 +43,47 @@ describe('animeRecordFrom', () => {
   it("doesn't take another id's record", () => {
     const store = storeOf({ downloadedAnime: { 8: rec('Other') }, recentAnimeMeta: {} })
     expect(animeRecordFrom(store, 7)).toBeNull()
+  })
+})
+
+describe('playerRecordFrom', () => {
+  it('returns the cached details over a downloadedAnime record', () => {
+    const store = storeOf({
+      downloadedAnime: { 7: rec('Downloaded') },
+      library: { 7: rec('Library') },
+      animeCache: { 7: { animeDetail: rec('Cached'), episodes: {} } },
+      recentAnimeMeta: { 7: rec('Recent') }
+    })
+    expect(playerRecordFrom(store, 7)?.titles?.romaji).toBe('Cached')
+  })
+
+  it("with animeDetail null or no cache entry, falls through in animeRecordFrom's order", () => {
+    const data: Record<string, unknown> = {
+      downloadedAnime: { 7: rec('Downloaded') },
+      library: { 7: rec('Library') },
+      animeCache: { 7: { animeDetail: null, episodes: {} } },
+      recentAnimeMeta: { 7: rec('Recent') }
+    }
+    const store = storeOf(data)
+    const romaji = (): string | undefined => playerRecordFrom(store, 7)?.titles?.romaji
+
+    expect(romaji()).toBe('Downloaded')
+    delete data.downloadedAnime
+    expect(romaji()).toBe('Library')
+    delete data.library
+    expect(romaji()).toBe('Recent')
+    delete data.animeCache
+    expect(romaji()).toBe('Recent')
+    delete data.recentAnimeMeta
+    expect(playerRecordFrom(store, 7)).toBeNull()
+  })
+
+  it("doesn't take another id's cached details", () => {
+    const store = storeOf({
+      animeCache: { 8: { animeDetail: rec('Other'), episodes: {} } },
+      library: { 7: rec('Library') }
+    })
+    expect(playerRecordFrom(store, 7)?.titles?.romaji).toBe('Library')
   })
 })
 

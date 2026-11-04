@@ -9,7 +9,8 @@
 //   - `storage:clear-root` validates its argument against it (`storage.ipc.ts`)
 //   - `set-setting`'s denylist is `[...ROOT_KEYS, 'storageMode']`
 //     (`settings.ipc.ts`)
-//   - `missingConfiguredRoot()` walks it (`services/cold-storage/index.ts`)
+//   - `missingConfiguredRoots()` walks it, and `missingConfiguredRoot()` is its
+//     head (`services/cold-storage/index.ts`)
 //   - the Storage tab maps `missingRoot` back to its key
 //     (`components/settings/StorageTab.vue`)
 //
@@ -26,10 +27,12 @@
 // beside `StorageRootKey` would emit no value.
 
 /**
- * The storage root keys, in the order `missingConfiguredRoot()` reports them.
+ * The storage root keys, in the order `missingConfiguredRoot()` and its plural
+ * `missingConfiguredRoots()` (#664) report them.
  *
  * **The order is load-bearing.** `missingConfiguredRoot()` answers with the
- * *first* stored root that is not on disk, and `StorageTab.vue` maps that path
+ * *first* stored root that is not on disk (the head of
+ * `missingConfiguredRoots()`), and `StorageTab.vue` maps that path
  * back to a key by walking this same list — so reordering it changes which key
  * the missing-root notice offers to clear. `test/services/cold-storage.test.ts`
  * pins the two-missing-roots case that reordering would otherwise slip past.

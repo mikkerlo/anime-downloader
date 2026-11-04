@@ -140,9 +140,12 @@ async function nothingOnDiskSkipped(r: Run): Promise<Found[]> {
   const found: Found[] = []
   for (const [key, o] of r.outcomes) {
     if (o.kind !== 'skipped' || !onDisk(r.world, key)) continue
-    if (r.world.deleted.has(animeIdOf(key))) continue
+    const id = animeIdOf(key)
+    if (r.world.deleted.has(id)) continue
+    // #658's skip is for a title with no record; a recorded one must get a line.
+    const recorded = (r.world.store.get('downloadedAnime') as Record<string, unknown>)[id]
     const folder = path.basename(path.dirname(r.world.files.get(key)!))
-    if (!heldFolders(r.world, animeIdOf(key)).has(folder)) continue
+    if (!recorded && !heldFolders(r.world, id).has(folder)) continue
     found.push({ entry: key, actual: 'not counted and no line, with its file on disk' })
   }
   for (const { key, file, outcome } of r.items) {

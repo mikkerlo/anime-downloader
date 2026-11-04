@@ -1539,20 +1539,21 @@ test's author had in mind. #655 and #657 were both states no test built.
   violations, `{ scenario, entry, oracle, actual }`. O1: ok means the offline
   player route (`GET_ANIME`, then `player:find-local-file` under
   `getAnimeName`) finds that entry's file; for an attached library's item that
-  step 5 counts ok, the drive's file or this PC's copy of it. O2: no entry
-  whose file is on disk under one of the title's names (from any record the
-  store holds for it), and no item with its file on the drive, is skipped
-  silently, except a deleted title's leftovers. O3: a deleted title's entries
-  get no line, no count and no export row, before and after a restart's
-  reconcile. O4: an entry on an unplugged cold drive names the drive, and an
-  unplugged library gets step 5's "not connected" line with no item reported
-  missing. O6: steps 4 and 5 change no store key and no file; in a row with
-  `expectRun`, the whole offline run doesn't either, apart from the runner's
-  own `prepareOfflineLastRun`. O7: an action on one episode, or a Library →
-  Delete that leaves some of a title's files on disk, never drops the title's
-  record or cached details while its files remain. O8: an entry's problem is
-  a line, never a failed step, and the summary adds up. O9: every title on a
-  line or counted ok opens offline. To tie a count to its entry or item, steps
+  step 5 counts ok, the drive's file or this PC's copy of it. O2: no recorded
+  entry with its file on disk, no record-less entry whose file is on disk
+  under one of the title's names (from any record the store holds for it),
+  and no item with its file on the drive, is skipped silently, except a
+  deleted title's leftovers. O3: a deleted title's entries get no line, no
+  count and no export row, before and after a restart's reconcile. O4: an
+  entry on an unplugged cold drive names the drive, and an unplugged library
+  gets step 5's "not connected" line with no item reported missing. O6: steps
+  4 and 5 change no store key and no file; in a row with `expectRun`, the
+  whole offline run doesn't either, apart from the runner's own
+  `prepareOfflineLastRun`. O7: an action on one episode, or a Library → Delete
+  that leaves some of a title's files on disk, never drops the title's record
+  or cached details while its files remain. O8: an entry's problem is a line,
+  never a failed step, and the summary adds up. O9: every title on a line or
+  counted ok opens offline. To tie a count to its entry or item, steps
   4 and 5 are also run over each entry and item alone. O5 (the readers of
   `downloadedEpisodes` agree on every key shape) and the legacy-key rows S19
   and S20 join once mikkerlo's export issue for two-part keys is filed.
@@ -1564,14 +1565,15 @@ test's author had in mind. #655 and #657 were both states no test built.
   PC (nowhere, or on an unplugged cold drive) has no folder, file state, tag
   or container, so those pairs count only in a row whose file is there. An
   online row runs step 3 first. Each row runs O1, O2, O6, O8 and O9; a row
-  whose O9 fires cites S11's acceptance (no record) or S12's (a recorded
-  title whose details aren't cached, in an offline run). The rows are a
-  committed literal table. `pairwise-coverage.test.ts` builds no world: it
-  recomputes the pairs from the factor list and checks that the rows cover
-  every one, that each row covers a pair no other does, and that each row's
-  world spec reads back as its values, so a new level, or a deleted row,
-  fails and names the uncovered pairs. S32 runs O6 over every pairwise world
-  again with the fixture library attached, so step 5 runs too.
+  whose O9 fires cites S11's acceptance (no record, outside the Library and
+  the cache scope) or S12's (a title in the cache scope whose details aren't
+  cached, in an offline run). The rows are a committed literal table.
+  `pairwise-coverage.test.ts` builds no world: it recomputes the pairs from
+  the factor list and checks that the rows cover every one, that each row
+  covers a pair no other does, and that each row's world spec reads back as
+  its values, so a new level, or a deleted row, fails and names the uncovered
+  pairs. S32 runs O6 over every pairwise world again with the fixture library
+  attached, so step 5 runs too.
 - **Adding a factor level**: add it to `FACTORS`, teach `rowScenario` and the
   self-test's read-back what it means, then add or change rows until the
   self-test names no uncovered pair.

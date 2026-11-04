@@ -95,14 +95,15 @@ export const ROWS = parseTable(TABLE).rows as Row[]
 
 /**
  * The rows whose O9 fires, and the acceptance that covers it: a title with no
- * record (S11's), or a recorded title whose details aren't cached in an
- * offline run (S12's, mikkerlo's Q3 answer to "Should step 4 flag a title
- * whose details aren't cached?"; P05 has no cache entry at all, P11 and P16
- * `animeDetail: null`). Every other row's O9 holds.
+ * record, outside the Library and the cache scope (S11's), or an in-scope title
+ * whose details aren't cached, in an offline run (S12's, the Q3 answer to
+ * "Should step 4 flag a title whose details aren't cached?"; P05 has no cache
+ * entry at all, P11 and P16 `animeDetail: null`, P09 is record-less but
+ * starred). Every other row's O9 holds.
  */
 export const AGREED_O9: Record<string, string> = {
   P05: Q3,
-  P09: RECORD_LESS,
+  P09: Q3,
   P11: Q3,
   P16: Q3,
   P22: RECORD_LESS

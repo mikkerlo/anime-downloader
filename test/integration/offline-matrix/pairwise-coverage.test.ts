@@ -149,11 +149,14 @@ describe('the pairwise sweep', () => {
     const misfit = Object.entries(AGREED_O9).flatMap(([id, source]) => {
       const r = ROWS.find((x) => x.id === id)
       if (!r) return [`${id}: no such row`]
-      if (source === RECORD_LESS) return r.record === 'no' ? [] : [`${id}: has a record`]
+      // The cache scope (`createCacheScope`): recorded, starred or watched in 90 days.
+      const inScope = r.record === 'yes' || r.starred === 'yes' || r.watched === 'yes'
+      if (source === RECORD_LESS) {
+        return r.record === 'no' && !inScope ? [] : [`${id}: in the Library or the cache scope`]
+      }
       if (source === Q3) {
-        const fits =
-          r.record === 'yes' && r.offline === 'yes' && ['null', 'absent'].includes(r.cache)
-        return fits ? [] : [`${id}: not a recorded, uncached title in an offline run`]
+        const fits = inScope && r.offline === 'yes' && ['null', 'absent'].includes(r.cache)
+        return fits ? [] : [`${id}: not an in-scope, uncached title in an offline run`]
       }
       return [`${id}: ${source}`]
     })

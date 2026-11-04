@@ -1489,19 +1489,23 @@ and `scripts/ci-electron-libs.sh`: the profile helper links ffmpeg from
 ## Scenario matrix (offline)
 
 `test/integration/offline-matrix/` (#659) checks Prepare for offline's
-Downloaded episodes step, and the readers it has to agree with, over store
-states built on purpose rather than the ones a step test's author had in mind.
-#655 and #657 were both states no test built.
+Downloaded episodes and Shared Libraries steps, and the readers they have to
+agree with, over store states built on purpose rather than the ones a step
+test's author had in mind. #655 and #657 were both states no test built.
 
 - **A world is one PC.** `buildWorld(spec)` in `test/helpers/offline-world.ts`
   writes temp hot and cold roots with the episode files the spec declares, and
   a `makeHarness` / `InMemoryStorage` store with `downloadedEpisodes`,
   `downloadedAnime`, `library`, `animeCache`, `recentAnimeMeta` and
-  `watchProgress`. Over it run the real cold-storage and anime-cache services
-  and the cache scope. It is not an `App` reconstruction: it registers only the
-  routers a row's oracles and actions call (`player` and `anime` for O1 and O9,
-  `downloaded-anime` for Library → Delete, `downloads` for cancel-by-episode),
-  and builds the export service only for O3.
+  `watchProgress`. Over it run the real cold-storage, anime-cache and
+  attached-library services and the cache scope. A spec with a `library`
+  copies the checked-in fixture library into the world's root, and `ready()`
+  attaches it, then applies the spec's damage (an item deleted or cut short,
+  the drive unplugged). It is not an `App` reconstruction: it registers only
+  the routers a row's oracles and actions call (`player` and `anime` for O1 and
+  O9, `downloaded-anime` for Library → Delete, `downloads` for
+  cancel-by-episode, `shared-library` with the real import service for Copy to
+  this PC), and builds the export service only for O3.
 - **One world at a time.** The `ipcMain` mock has one handler map and `handle`
   overwrites quietly, so a second live world's routers would answer the first
   one's `invoke` with no error. `buildWorld` throws while a world is live, and
@@ -1518,22 +1522,31 @@ states built on purpose rather than the ones a step test's author had in mind.
   over the stub's queue.
 - **Steps 1, 2, 5 and 6 are not.** Their deps stay inline in `index.ts`, and a
   row that needs them builds them by hand, as `prepare-offline.test.ts` does.
-  The step order is a copy too. Only the e2e case that drives a run through the
-  built app checks the real wiring of those four and the real order.
+  Step 5 gets the attached-library service itself, as in `index.ts`; step 6
+  lists the same libraries, and its `runAll` is a stub that throws, since no
+  row runs a sync yet. Steps 1 and 2 aren't in the world yet, so
+  `runPrepare()` runs steps 3 to 6 through the real runner, in `index.ts`'s
+  order. That order is a copy too. Only the e2e case that drives a run through
+  the built app checks the real wiring of those four and the real order.
 - **Oracles** (`test/helpers/offline-oracles.ts`) each return a list of
   violations, `{ scenario, entry, oracle, actual }`. O1: ok means the offline
   player route (`GET_ANIME`, then `player:find-local-file` under
-  `getAnimeName`) finds that entry's file. O2: no entry with its file on disk
-  is skipped silently, except a deleted title's leftovers. O3: a deleted
-  title's entries get no line, no count and no export row, before and after a
-  restart's reconcile. O4: an entry on an unplugged drive names the drive. O6:
-  the step changes no store key and no file. O7: an action on one episode never
-  drops the title's record or cached details while its files remain. O8: an
-  entry's problem is a line, never a failed step, and the summary adds up. O9:
-  every title on a line or counted ok opens offline. To tie a count to its
-  entry, the step is also run over each entry alone.
+  `getAnimeName`) finds that entry's file; for an attached library's item that
+  step 5 counts ok, the drive's file or this PC's copy of it. O2: no entry with
+  its file on disk, and no item with its file on the drive, is skipped
+  silently, except a deleted title's leftovers. O3: a deleted title's entries
+  get no line, no count and no export row, before and after a restart's
+  reconcile. O4: an entry on an unplugged cold drive names the drive, and an
+  unplugged library gets step 5's "not connected" line with no item reported
+  missing. O6: steps 4 and 5 change no store key and no file. O7: an action on
+  one episode never drops the title's record or cached details while its files
+  remain. O8: an entry's problem is a line, never a failed step, and the
+  summary adds up. O9: every title on a line or counted ok opens offline. To
+  tie a count to its entry or item, steps 4 and 5 are also run over each entry
+  and item alone.
 - **Adding a row**: append to `scenarios.ts` with a made-up id range, the
-  oracles it runs, and step 4's exact output as `expect`. Cite issue numbers
+  oracles it runs, and step 4's exact output as `expect` (step 5's as
+  `expectAttached`, a whole `runPrepare()` as `expectRun`). Cite issue numbers
   and function names, never `file:line`, in the table and its comments, so a
   change that moves `local-integrity.ts` doesn't have to edit the matrix. A new
   axis value goes into `WorldSpec` and the builder first.

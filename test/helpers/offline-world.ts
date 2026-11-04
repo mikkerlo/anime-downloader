@@ -8,7 +8,9 @@
  * builders in `services/prepare-offline/wiring.ts`, called over this world's
  * services in the same order as `index.ts` (the deps before the download
  * manager exists), and only the routers a row's oracles and actions call are
- * registered on the mocked `ipcMain`.
+ * registered on the mocked `ipcMain`. Steps 5 and 6 run over the real
+ * attached-library service, as `index.ts` hands it to step 5; a world with a
+ * `library` attaches a copy of the checked-in fixture library in `ready()`.
  *
  * One world at a time: the `ipcMain` mock has one handler map and `handle`
  * overwrites quietly, so a second live world's routers would answer the first
@@ -30,17 +32,30 @@ import { createEpisodeFileScanner } from '../../src/main/lib/episode-file-scan'
 import { createColdStorageService } from '../../src/main/services/cold-storage'
 import { createAnimeCacheService } from '../../src/main/services/anime-cache'
 import { createCacheScope } from '../../src/main/services/anime-cache/scope'
+import { createAttachedLibraryService } from '../../src/main/services/attached-library'
+import { createAttachedIntegrityStep } from '../../src/main/services/prepare-offline/steps/attached-integrity'
+import { createLibrarySyncStep } from '../../src/main/services/prepare-offline/steps/library-sync'
 import { createLocalIntegrityStep } from '../../src/main/services/prepare-offline/steps/local-integrity'
 import { createMetadataStep } from '../../src/main/services/prepare-offline/steps/metadata'
 import { localIntegrityDeps, metadataDeps } from '../../src/main/services/prepare-offline/wiring'
-import type { PrepareStepContext, PrepareStepResult } from '../../src/main/services/prepare-offline'
+import {
+  createPrepareOfflineService,
+  type PrepareStepContext,
+  type PrepareStepResult
+} from '../../src/main/services/prepare-offline'
 import { createSharedLibraryExportService } from '../../src/main/services/shared-library-export'
+import { createSharedLibraryImportService } from '../../src/main/services/shared-library-import'
 import { register as registerPlayer } from '../../src/main/ipc/player.ipc'
 import { register as registerAnime } from '../../src/main/ipc/anime.ipc'
 import { register as registerDownloads } from '../../src/main/ipc/downloads.ipc'
 import { register as registerDownloadedAnime } from '../../src/main/ipc/downloaded-anime.ipc'
+import { register as registerSharedLibrary } from '../../src/main/ipc/shared-library.ipc'
 import type { AppDeps } from '../../src/main/ipc'
 import type { AnimeDetail } from '../../src/main/smotret-api'
+import { VIDEO_EXTS } from '../../src/shared/episode-files'
+import { FIXTURE_LIBRARY, FIXTURE_LIBRARY_ID } from './attached-library'
+import { fakePresence } from './shared-library-export'
+import { keys, setMetaTitle } from './shared-library-import'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -95,19 +110,38 @@ export interface PartSpec {
   status: 'downloading' | 'queued' | 'cancelled' | null
 }
 
+/** A copy of the checked-in fixture library (`FIXTURE_LIBRARY`), attached in `ready()`. */
+export interface LibrarySpec {
+  /** The drive's snapshot names these titles so (`setMetaTitle`), before it is attached. */
+  names?: Record<number, string>
+  /** Items (`animeId:ep:trId`) deleted from the drive, or cut to the wrong size, once attached. */
+  damaged?: Record<string, 'missing' | 'wrong-size'>
+  /** The drive is unplugged once attached, and the poller noticed (`markUnavailable`). */
+  away?: boolean
+}
+
 export interface WorldSpec {
   mode?: 'simple' | 'advanced'
   /** The configured cold root is not on disk (an unplugged drive). */
   coldAway?: boolean
   /** ffmpeg and ffprobe installed (default true). */
   ffmpeg?: boolean
+  /** The `playerMode` setting (default `system`). */
+  playerMode?: 'system' | 'builtin'
   /** Work offline during the run (default true). */
   offline?: boolean
   titles: TitleSpec[]
   parts?: PartSpec[]
+  library?: LibrarySpec
 }
 
-export type Router = 'player' | 'anime' | 'downloads' | 'downloaded-anime' | 'export'
+export type Router =
+  | 'player'
+  | 'anime'
+  | 'downloads'
+  | 'downloaded-anime'
+  | 'shared-library'
+  | 'export'
 
 /** What a user does before Prepare runs. */
 export type Action =
@@ -119,18 +153,38 @@ export type Action =
   | { do: 'cancel-by-episode'; id: number; ep: string }
   /** The file whose name contains `match` is unlinked right before step 4 stats it. */
   | { do: 'unlink-before-stat'; match: string }
+  /** Copy to this PC of these drive items (`animeId:ep:trId`) into the hot root. */
+  | { do: 'copy-to-pc'; keys: string[] }
 
 export const ACTION_ROUTERS: Record<Action['do'], Router[]> = {
   metadata: [],
   delete: ['downloaded-anime'],
   'cancel-by-episode': ['downloads'],
-  'unlink-before-stat': []
+  'unlink-before-stat': [],
+  'copy-to-pc': ['shared-library']
 }
 
 export type StepRun = PrepareStepResult | { failed: string }
 
 /** What the step made of one entry, from a run over that entry alone. */
 export type Outcome = { kind: 'ok' } | { kind: 'skipped' } | { kind: 'line'; text: string }
+
+/** What step 5 made of one item of an available library, from a run over that item alone. */
+export interface ItemOutcome {
+  /** `animeId:ep:trId`. */
+  key: string
+  /** The item's file on the drive. */
+  file: string
+  outcome: Outcome
+}
+
+/** One step of a `runPrepare()`, its detail texts normalised. */
+export interface PreparedStep {
+  id: PrepareOfflineStepId
+  status: PrepareOfflineStepState['status']
+  reason?: string
+  details: string[]
+}
 
 export interface Snapshot {
   store: Record<string, unknown>
@@ -143,15 +197,31 @@ export interface World {
   readonly root: string
   readonly hot: string
   readonly cold: string
-  /** Each entry key and the video file the world wrote for it (absent for `file: 'none'`). */
+  /** The attached library's root (a copy of the fixture library), or null without a `library`. */
+  readonly drive: string | null
+  /**
+   * Each entry key and the video file the world wrote for it (absent for
+   * `file: 'none'`), and each Copy to this PC's entry and the file it landed.
+   */
   readonly files: ReadonlyMap<string, string>
   /** Titles a Library → Delete removed in this world. */
   readonly deleted: Set<number>
+  /** Attaches the spec's library and applies its damage; a no-op without one. Call it first. */
+  ready(): Promise<void>
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
   act(action: Action): Promise<void>
-  runStep(id: 'local-integrity' | 'metadata'): Promise<StepRun>
+  runStep(id: 'local-integrity' | 'metadata' | 'attached-integrity'): Promise<StepRun>
+  /**
+   * Steps 3 to 6 through the real runner, in `index.ts`'s order. Steps 1 and 2
+   * aren't in the world yet.
+   */
+  runPrepare(): Promise<PreparedStep[]>
   /** Step 4 over each entry alone, so a count in the summary is tied to its entry. */
   entryOutcomes(): Promise<Map<string, Outcome>>
+  /** Step 5 over each item of each available library alone. */
+  itemOutcomes(): Promise<ItemOutcome[]>
+  /** The attached libraries, as step 5 lists them. */
+  libraries(): AttachedLibraryInfo[]
   /** The route the detail page takes offline: `GET_ANIME`, then `find-local-file` under `getAnimeName`. */
   playOffline(
     animeId: number,
@@ -226,6 +296,13 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
   fs.mkdirSync(userData)
   const advanced = spec.mode === 'advanced'
   if (advanced && !spec.coldAway) fs.mkdirSync(cold)
+  const drive = spec.library ? path.join(root, 'drive', 'Fixture library') : null
+  if (drive) {
+    fs.cpSync(FIXTURE_LIBRARY, drive, { recursive: true })
+    for (const [id, name] of Object.entries(spec.library!.names ?? {})) {
+      setMetaTitle(drive, Number(id), name)
+    }
+  }
 
   const downloadedEpisodes: Record<string, unknown> = {}
   const downloadedAnime: Record<string, unknown> = {}
@@ -377,7 +454,10 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     watchProgress,
     priorityAnimeIds: [],
     autoCleanupSnoozedAnimeIds: {},
-    shikimoriUser: null
+    shikimoriUser: null,
+    attachedLibraries: {},
+    playerMode: spec.playerMode ?? 'system',
+    prepareOfflineLastRun: null
   })
 
   const coldStorageService = createColdStorageService({
@@ -392,6 +472,11 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     cleanupPendingChannel: 'pending',
     cleanupFinishedChannel: 'finished',
     fileEpisodesChangedChannel: 'changed'
+  })
+  const attachedLibraryService = createAttachedLibraryService({
+    store,
+    checkFfmpeg: async () => ({ available: spec.ffmpeg !== false }),
+    log: { log: () => {}, warn: () => {}, error: () => {} }
   })
   const scope = createCacheScope(store)
   const animeCacheService = createAnimeCacheService({
@@ -457,6 +542,15 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     metadata: createMetadataStep({
       ...metadataDeps({ store, isCachable: scope.isCachable, smotretApi, animeCacheService }),
       concurrency: 1
+    }),
+    // Steps 5 and 6: hand-written deps, as `index.ts`'s inline ones. Step 5
+    // gets the service itself, as there; no row runs a sync yet.
+    'attached-integrity': createAttachedIntegrityStep(attachedLibraryService),
+    'library-sync': createLibrarySyncStep({
+      list: () => attachedLibraryService.list(),
+      runAll: async () => {
+        throw new Error('this world has no sync runner')
+      }
     })
   }
 
@@ -489,35 +583,6 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
   }
   downloadManager = makeDownloadManager()
 
-  const deps = {
-    store,
-    smotretApi,
-    animeCacheService,
-    coldStorageService,
-    downloadManager,
-    rememberAnimeMeta: () => {},
-    offlineService: { isOffline: () => true },
-    recentWatch: scope.recentWatch,
-    mp4StatsService: { recordCheck: async () => {} },
-    playerLockService: { open: () => {}, close: () => {} },
-    playerPresenceService: { open: () => {}, close: () => {} },
-    getFfmpegPath: () => '',
-    getFfprobePath: () => '',
-    attachedLibraryService: {
-      resolveItem: async () => null,
-      availableSnapshots: () => [],
-      classifyMissing: async () => null
-    },
-    skipAnalysisService: { pruneCacheForAnime: () => {}, dropDetectionsForAnime: () => {} },
-    invalidateFileCache: () => {}
-  } as unknown as AppDeps
-  if (need.has('player')) registerPlayer(deps)
-  if (need.has('anime')) registerAnime(deps)
-  if (need.has('downloads')) registerDownloads(deps)
-  if (need.has('downloaded-anime')) registerDownloadedAnime(deps)
-  buildHooks.afterRegister?.()
-  __enableIpcLoop()
-
   const exportService = need.has('export')
     ? createSharedLibraryExportService({
         userDataDir: userData,
@@ -543,6 +608,54 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
         checkpointEvery: 2
       })
     : null
+  // Copy to this PC, with `index.ts`'s library and roots rules.
+  const importService = need.has('shared-library')
+    ? createSharedLibraryImportService({
+        userDataDir: userData,
+        store,
+        library: (libraryId) => attachedLibraryService.get(libraryId),
+        localRoots: () => ({
+          hot: coldStorageService.getDownloadDir(),
+          cold: coldStorageService.isAdvanced()
+            ? coldStorageService.getColdStorageDir() || null
+            : null
+        }),
+        sanitizeFilename,
+        mergeStatus: () => downloadManager!.getMergeStatus(),
+        presence: fakePresence(),
+        broadcast: () => {},
+        candidates: async () => [],
+        throttleMs: 0
+      })
+    : null
+
+  const deps = {
+    store,
+    smotretApi,
+    animeCacheService,
+    coldStorageService,
+    downloadManager,
+    rememberAnimeMeta: () => {},
+    offlineService: { isOffline: () => true },
+    recentWatch: scope.recentWatch,
+    mp4StatsService: { recordCheck: async () => {} },
+    playerLockService: { open: () => {}, close: () => {} },
+    playerPresenceService: { open: () => {}, close: () => {} },
+    getFfmpegPath: () => '',
+    getFfprobePath: () => '',
+    attachedLibraryService,
+    sharedLibraryExport: exportService,
+    sharedLibraryImport: importService,
+    skipAnalysisService: { pruneCacheForAnime: () => {}, dropDetectionsForAnime: () => {} },
+    invalidateFileCache: () => {}
+  } as unknown as AppDeps
+  if (need.has('player')) registerPlayer(deps)
+  if (need.has('anime')) registerAnime(deps)
+  if (need.has('downloads')) registerDownloads(deps)
+  if (need.has('downloaded-anime')) registerDownloadedAnime(deps)
+  if (need.has('shared-library')) registerSharedLibrary(deps)
+  buildHooks.afterRegister?.()
+  __enableIpcLoop()
 
   const ctx = (): PrepareStepContext => ({
     signal: new AbortController().signal,
@@ -562,6 +675,10 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     ipcRenderer.invoke(channel, ...args)
   const deleted = new Set<number>()
   const chmodded: string[] = []
+  let readied = !spec.library
+  const needReady = (what: string): void => {
+    if (!readied) throw new Error(`${what}: this world attaches a library; await ready() first`)
+  }
 
   const walk = (dir: string, out: Snapshot['files']): void => {
     let names: fs.Dirent[]
@@ -579,6 +696,14 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
       }
     }
   }
+  const videoFiles = (): string[] => {
+    const out: Snapshot['files'] = {}
+    walk(hot, out)
+    walk(cold, out)
+    return Object.keys(out)
+      .filter((rel) => (VIDEO_EXTS as readonly string[]).includes(path.extname(rel).toLowerCase()))
+      .map((rel) => path.join(root, rel))
+  }
 
   const world: World = {
     spec,
@@ -586,10 +711,35 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     root,
     hot,
     cold,
+    drive,
     files,
     deleted,
+    async ready() {
+      if (readied) return
+      const lib = spec.library!
+      const [candidate] = await attachedLibraryService.discover(drive!)
+      const attached = await attachedLibraryService.attach(candidate?.libraryId ?? '')
+      if (!attached.ok)
+        throw new Error(`ready: the fixture library didn't attach: ${attached.error}`)
+      for (const [key, how] of Object.entries(lib.damaged ?? {})) {
+        const item = attachedLibraryService
+          .items(FIXTURE_LIBRARY_ID)
+          .find((i) => `${i.animeId}:${i.episodeInt}:${i.translationId}` === key)
+        if (!item) throw new Error(`ready: the fixture library has no item ${key}`)
+        const file = path.join(drive!, item.path)
+        if (how === 'missing') fs.unlinkSync(file)
+        else fs.truncateSync(file, 10)
+      }
+      if (lib.away) {
+        const at = attachedLibraryService.get(FIXTURE_LIBRARY_ID)!.root
+        fs.rmSync(drive!, { recursive: true, force: true })
+        attachedLibraryService.markUnavailable(FIXTURE_LIBRARY_ID, at)
+      }
+      readied = true
+    },
     invoke,
     async act(action) {
+      needReady('act')
       const title = (id: number): TitleSpec => {
         const t = spec.titles.find((x) => x.id === id)
         if (!t) throw new Error(`act: no title ${id} in this world`)
@@ -639,10 +789,98 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
           }) as never)
           return
         }
+        case 'copy-to-pc': {
+          if (!importService) throw new Error('act: this world has no shared-library router')
+          const eps = (): Record<string, { author: string }> =>
+            store.get('downloadedEpisodes') as Record<string, { author: string }>
+          const hadKeys = new Set(Object.keys(eps()))
+          const hadFiles = new Set(videoFiles())
+          const r = (await invoke(CHANNELS.IMPORT_START, {
+            libraryId: FIXTURE_LIBRARY_ID,
+            selection: keys(...action.keys),
+            destination: 'hot'
+          })) as ImportStartResult
+          if (!r.ok) throw new Error(`act: Copy to this PC refused: ${r.reason}`)
+          await importService.settled(r.job.jobId)
+          const jobs = (await invoke(CHANNELS.IMPORT_LIST_JOBS)) as ImportJobView[]
+          const job = jobs.find((j) => j.jobId === r.job.jobId)
+          if (job?.status !== 'completed') {
+            throw new Error(`act: Copy to this PC ended ${job?.status}: ${JSON.stringify(job)}`)
+          }
+          // Each new entry and the one new video file tagged with its episode and author.
+          const landed = videoFiles().filter((f) => !hadFiles.has(f))
+          for (const [key, meta] of Object.entries(eps())) {
+            if (hadKeys.has(key)) continue
+            const tag = ` - ${key.split(':')[1].padStart(2, '0')} [${sanitizeFilename(meta.author)}].`
+            const hit = landed.filter((f) => path.basename(f).includes(tag))
+            if (hit.length !== 1) throw new Error(`act: ${key} landed as ${hit.length} files`)
+            files.set(key, hit[0])
+          }
+          return
+        }
       }
     },
-    runStep: (id) => run(steps[id]),
+    async runStep(id) {
+      needReady('runStep')
+      return run(steps[id])
+    },
+    async runPrepare() {
+      needReady('runPrepare')
+      const svc = createPrepareOfflineService({
+        store,
+        isOffline: () => spec.offline !== false,
+        broadcast: () => {},
+        progressChannel: 'prepare-offline:progress'
+      })
+      for (const id of [
+        'metadata',
+        'local-integrity',
+        'attached-integrity',
+        'library-sync'
+      ] as const) {
+        svc.registerStep(steps[id])
+      }
+      svc.start()
+      await svc.idle()
+      return svc.getState().run!.steps.map((s) => ({
+        id: s.id,
+        status: s.status,
+        ...(s.reason !== undefined ? { reason: s.reason } : {}),
+        details: s.details.map((d) => world.norm(d.text))
+      }))
+    },
+    async itemOutcomes() {
+      needReady('itemOutcomes')
+      const out: ItemOutcome[] = []
+      for (const lib of attachedLibraryService.list()) {
+        if (!lib.available) continue
+        for (const item of attachedLibraryService.items(lib.libraryId)) {
+          const one = createAttachedIntegrityStep({
+            list: () => [lib],
+            items: () => [item],
+            checkItem: (id, i) => attachedLibraryService.checkItem(id, i)
+          })
+          const r = await run(one)
+          let outcome: Outcome
+          if ('failed' in r) outcome = { kind: 'line', text: `failed: ${r.failed}` }
+          else if (r.details.length === 1 && r.details[0].text === `${lib.name}: 1 items ok`) {
+            outcome = { kind: 'ok' }
+          } else {
+            const line = r.details.find((d) => d.animeId !== undefined)
+            outcome = line ? { kind: 'line', text: line.text } : { kind: 'skipped' }
+          }
+          out.push({
+            key: `${item.animeId}:${item.episodeInt}:${item.translationId}`,
+            file: path.join(lib.root, item.path),
+            outcome
+          })
+        }
+      }
+      return out
+    },
+    libraries: () => attachedLibraryService.list(),
     async entryOutcomes() {
+      needReady('entryOutcomes')
       const out = new Map<string, Outcome>()
       const all = integrityDeps.downloadedEpisodes()
       for (const [key, meta] of Object.entries(all)) {

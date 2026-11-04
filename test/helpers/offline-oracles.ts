@@ -11,6 +11,7 @@ import * as fs from 'fs'
 import { isDeepStrictEqual } from 'util'
 import {
   entryKey,
+  type ItemOutcome,
   type Outcome,
   type Router,
   type Snapshot,
@@ -27,22 +28,27 @@ export interface Violation {
   actual: string
 }
 
-/** One world after its actions and one run of step 4. */
+/** One world after its actions and one run of step 4 (and of step 5, with a library). */
 export interface Run {
   scenario: string
   world: World
-  /** Store and files right before step 4, and right after it. */
+  /** Store and files right before step 4, and right after it (and step 5). */
   before: Snapshot
   after: Snapshot
   out: StepRun
   /** Step 4 over each entry alone (`World.entryOutcomes`), after the run. */
   outcomes: Map<string, Outcome>
+  /** Step 5's run; null in a world with no library. */
+  attached: StepRun | null
+  /** Step 5 over each item alone (`World.itemOutcomes`), after the run. */
+  items: ItemOutcome[]
 }
 
 type Found = Omit<Violation, 'scenario' | 'oracle'>
 
 const animeIdOf = (key: string): number => Number(key.split(':')[0])
 const epOf = (key: string): string => key.split(':')[1]
+const trIdOf = (key: string): number => Number(key.split(':')[2])
 
 function episodes(w: World): Record<string, { translationId: number }> {
   return w.store.get('downloadedEpisodes') as Record<string, { translationId: number }>
@@ -61,7 +67,9 @@ const remoteError = (message: string): string =>
  * offline "is meant to tell me what I can play on the train"). For every entry
  * counted ok whose title has cached details, the offline route (`GET_ANIME`,
  * then `player:find-local-file` under `getAnimeName` of its answer) returns
- * that entry's file. No `.mkv` clause (#659's Q1).
+ * that entry's file. The same for every item of an attached library that
+ * step 5 counts ok: the player returns the drive's file, or this PC's copy of
+ * it, which the player prefers. No `.mkv` clause (#659's Q1).
  */
 async function okMeansPlayable(r: Run): Promise<Found[]> {
   const found: Found[] = []
@@ -69,19 +77,27 @@ async function okMeansPlayable(r: Run): Promise<Found[]> {
     string,
     { animeDetail?: unknown } | undefined
   >
+  const check = async (
+    entry: string,
+    key: string,
+    trId: number,
+    accept: (string | undefined)[]
+  ): Promise<void> => {
+    const play = await r.world.playOffline(animeIdOf(key), epOf(key), trId)
+    if (!play.opened) {
+      found.push({ entry, actual: `the page doesn't open: ${remoteError(play.why)}` })
+    } else if (play.file === null || !accept.includes(play.file)) {
+      const got = play.file === null ? 'nothing' : r.world.norm(play.file)
+      found.push({ entry, actual: `counted ok, the player gets ${got} under "${play.name}"` })
+    }
+  }
   for (const [key, o] of r.outcomes) {
     if (o.kind !== 'ok' || !cache[animeIdOf(key)]?.animeDetail) continue
-    const play = await r.world.playOffline(
-      animeIdOf(key),
-      epOf(key),
-      episodes(r.world)[key].translationId
-    )
-    if (!play.opened) {
-      found.push({ entry: key, actual: `the page doesn't open: ${remoteError(play.why)}` })
-    } else if (play.file === null || play.file !== r.world.files.get(key)) {
-      const got = play.file === null ? 'nothing' : r.world.norm(play.file)
-      found.push({ entry: key, actual: `counted ok, the player gets ${got} under "${play.name}"` })
-    }
+    await check(key, key, episodes(r.world)[key].translationId, [r.world.files.get(key)])
+  }
+  for (const { key, file, outcome } of r.items) {
+    if (outcome.kind !== 'ok' || !cache[animeIdOf(key)]?.animeDetail) continue
+    await check(`drive ${key}`, key, trIdOf(key), [file, r.world.files.get(key)])
   }
   return found
 }
@@ -89,7 +105,9 @@ async function okMeansPlayable(r: Run): Promise<Found[]> {
 /**
  * O2: nothing a user can act on is skipped silently (#657). Every entry whose
  * file is on disk is counted ok or gets a line. The one silent skip allowed is
- * #658's: a title the user deleted, whose leftovers have no record.
+ * #658's: a title the user deleted, whose leftovers have no record. Step 5
+ * the same: every item of an available library whose file is on the drive is
+ * counted ok or gets a line.
  */
 async function nothingOnDiskSkipped(r: Run): Promise<Found[]> {
   const found: Found[] = []
@@ -97,6 +115,13 @@ async function nothingOnDiskSkipped(r: Run): Promise<Found[]> {
     if (o.kind !== 'skipped' || !onDisk(r.world, key)) continue
     if (r.world.deleted.has(animeIdOf(key))) continue
     found.push({ entry: key, actual: 'not counted and no line, with its file on disk' })
+  }
+  for (const { key, file, outcome } of r.items) {
+    if (outcome.kind !== 'skipped' || !fs.existsSync(file)) continue
+    found.push({
+      entry: `drive ${key}`,
+      actual: 'not counted and no line, with its file on the drive'
+    })
   }
   return found
 }
@@ -129,13 +154,14 @@ async function deletedStaysGone(r: Run): Promise<Found[]> {
 /**
  * O4: a problem is reported with its real cause. An away root is "unknown",
  * never "missing" (the #421 guard), so a recorded entry on an unplugged cold
- * drive gets a line naming that drive (#664).
+ * drive gets a line naming that drive (#664). An attached library whose drive
+ * is unplugged gets step 5's "not connected" line, and none of its items is
+ * reported missing.
  */
 async function awayRootNamed(r: Run): Promise<Found[]> {
   const found: Found[] = []
-  if (!r.world.spec.coldAway) return found
   const recorded = r.world.store.get('downloadedAnime') as Record<string, unknown>
-  for (const t of r.world.spec.titles) {
+  for (const t of r.world.spec.coldAway ? r.world.spec.titles : []) {
     if (!recorded[t.id]) continue
     for (const e of t.entries) {
       if (e.where !== 'cold') continue
@@ -148,12 +174,29 @@ async function awayRootNamed(r: Run): Promise<Found[]> {
       found.push({ entry: key, actual })
     }
   }
+  for (const lib of r.world.libraries()) {
+    if (lib.available && !r.world.spec.library?.away) continue
+    const entry = `library ${lib.name}`
+    if (!r.attached || 'failed' in r.attached) {
+      found.push({ entry, actual: r.attached ? `failed: ${r.attached.failed}` : 'step 5 not run' })
+      continue
+    }
+    const lines = r.attached.details.map((d) => d.text).filter((t) => t.startsWith(`${lib.name}: `))
+    if (
+      lines.some((t) => t.includes('not connected')) &&
+      !lines.some((t) => t.includes('missing'))
+    ) {
+      continue
+    }
+    found.push({ entry, actual: lines.length > 0 ? lines.join(' | ') : 'no line' })
+  }
   return found
 }
 
 /**
  * O6: report only (`docs/architecture.md`, Prepare for offline: "Reports
- * only"). Step 4 leaves every store key deep-equal and every file as it was.
+ * only"). Steps 4 and 5 leave every store key deep-equal and every file as
+ * it was.
  */
 async function reportOnly(r: Run): Promise<Found[]> {
   const found: Found[] = []

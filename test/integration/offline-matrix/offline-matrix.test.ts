@@ -12,6 +12,7 @@ import {
   buildHooks,
   buildWorld,
   named,
+  type StepRun,
   type World
 } from '../../helpers/offline-world'
 import { check, ORACLE_ROUTERS, type Run } from '../../helpers/offline-oracles'
@@ -24,18 +25,38 @@ afterEach(() => {
   world = null
 })
 
-async function observe(s: Scenario): Promise<Run> {
+/** The row's world, ready, after its actions. */
+async function setUp(s: Scenario): Promise<World> {
   const routers = [
     ...(s.actions ?? []).flatMap((a) => ACTION_ROUTERS[a.do]),
     ...s.oracles.flatMap((o) => ORACLE_ROUTERS[o])
   ]
   const w = (world = buildWorld(s.world, routers))
+  await w.ready()
   for (const a of s.actions ?? []) await w.act(a)
+  return w
+}
+
+async function observe(s: Scenario): Promise<Run> {
+  const w = await setUp(s)
   const before = w.snapshot()
   const out = await w.runStep('local-integrity')
+  const attached = s.world.library ? await w.runStep('attached-integrity') : null
   const after = w.snapshot()
-  return { scenario: s.id, world: w, before, after, out, outcomes: await w.entryOutcomes() }
+  return {
+    scenario: s.id,
+    world: w,
+    before,
+    after,
+    out,
+    outcomes: await w.entryOutcomes(),
+    attached,
+    items: await w.itemOutcomes()
+  }
 }
+
+const shown = (out: StepRun, w: World): unknown =>
+  'failed' in out ? out : { status: out.status, details: out.details.map((d) => w.norm(d.text)) }
 
 // A read-only folder stands in for a file Windows holds open; root ignores it.
 const noLock = process.platform === 'win32' || process.getuid?.() === 0
@@ -88,16 +109,52 @@ describe('one world at a time', () => {
   })
 })
 
+describe('a world with a library', () => {
+  it('keeps the drive under its own root, and runs nothing until ready() has attached it', async () => {
+    world = buildWorld({ titles: [], library: {} })
+    expect(world.drive!.startsWith(world.root + path.sep)).toBe(true)
+    await expect(world.runStep('attached-integrity')).rejects.toThrow(/await ready\(\) first/)
+    await expect(world.runPrepare()).rejects.toThrow(/await ready\(\) first/)
+    await world.ready()
+    expect(await world.runStep('attached-integrity')).toEqual({
+      status: 'ok',
+      details: [{ text: 'Fixture library: 2 items ok', status: 'ok' }]
+    })
+    // So O1 and O2 have items to check: each is counted ok on its own.
+    const items = await world.itemOutcomes()
+    expect(items.map((i) => [i.key, world!.norm(i.file), i.outcome])).toEqual([
+      [
+        '101:1:9001',
+        '<root>/drive/Fixture library/Frieren~3f2a1c/Frieren~3f2a1c - 01 [Crunchyroll].mp4',
+        { kind: 'ok' }
+      ],
+      [
+        '202:1:9101',
+        '<root>/drive/Fixture library/Dungeon Meshi/Dungeon Meshi - 01 [AniLibria].mkv',
+        { kind: 'ok' }
+      ]
+    ])
+  })
+})
+
 for (const s of SCENARIOS) {
   describe.skipIf(s.locked && noLock)(`${s.id}: ${s.title}`, () => {
     if (s.expect) {
       it('step 4 reports exactly this', async () => {
         const { out, world: w } = await observe(s)
-        expect(
-          'failed' in out
-            ? out
-            : { status: out.status, details: out.details.map((d) => w.norm(d.text)) }
-        ).toEqual(s.expect)
+        expect(shown(out, w)).toEqual(s.expect)
+      })
+    }
+    if (s.expectAttached) {
+      it('step 5 reports exactly this', async () => {
+        const { attached, world: w } = await observe(s)
+        expect(attached && shown(attached, w)).toEqual(s.expectAttached)
+      })
+    }
+    if (s.expectRun) {
+      it('Prepare for offline runs exactly this', async () => {
+        const w = await setUp(s)
+        expect(await w.runPrepare()).toEqual(s.expectRun)
       })
     }
     for (const oracle of s.oracles) {

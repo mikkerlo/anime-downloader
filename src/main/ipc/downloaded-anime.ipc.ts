@@ -4,7 +4,12 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
 import { addDownloadedAnime } from '../lib/downloaded-anime'
-import { dropDownloadedEpisodesForAnime } from '../lib/downloaded-episodes'
+import { titleNames } from '../lib/anime-record'
+import { deleteEpisodeFilesUnderOtherNames } from '../lib/other-name-files'
+import {
+  dropDownloadedEpisodesForAnime,
+  type DownloadedEpisodesMap
+} from '../lib/downloaded-episodes'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
@@ -20,6 +25,7 @@ export function register({
 
   ipcMain.handle(CHANNELS.DOWNLOADED_ANIME_DELETE, (_event, animeId: number, animeName: string) => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const names = titleNames(downloaded[String(animeId)] ?? null)
     delete downloaded[String(animeId)]
     store.set('downloadedAnime', downloaded)
 
@@ -38,6 +44,16 @@ export function register({
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') leftOnDisk = true
       }
     }
+    // Episodes under the title's ru or title folder (#663).
+    const leftUnderOtherNames = deleteEpisodeFilesUnderOtherNames({
+      animeId,
+      names,
+      removedName: animeName,
+      dirs: dirsToCheck,
+      episodes: store.get('downloadedEpisodes') as DownloadedEpisodesMap,
+      sanitizeFilename
+    })
+    if (leftUnderOtherNames) leftOnDisk = true
     // A folder a locked file kept on disk keeps its entries, so the export
     // tree still finds those files by name (#655).
     if (!leftOnDisk) dropDownloadedEpisodesForAnime(store, animeId)

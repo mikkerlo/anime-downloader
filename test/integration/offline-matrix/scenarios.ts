@@ -12,7 +12,7 @@
 //   can't outlive the behaviour it excuses.
 // A pin and its fix can land in either order: a bug fixed before its row
 // landed (#660 in S07, S08 and S21, #662 in S31, #664 in S17) is a row with
-// no pin.
+// no pin, and a fix that lands after its pin removes it (#661 in S15/S16).
 
 import { named, type Action, type PreparedStep, type WorldSpec } from '../../helpers/offline-world'
 import type { OracleId, Violation } from '../../helpers/offline-oracles'
@@ -352,43 +352,9 @@ export const SCENARIOS: Scenario[] = [
     },
     actions: [{ do: 'cancel-by-episode', id: 115, ep: '3' }],
     oracles: ['O7', 'O2'],
-    // #661: cancel-by-episode's "no files left" check looks only in the hot
-    // root, so a title whose files are all in cold loses its record and its
-    // cached details, and then has no name to be found under.
-    known: [
-      {
-        issue: 661,
-        oracle: 'O7',
-        violations: [
-          { scenario: 'S15', oracle: 'O7', entry: 'title 115', actual: 'its record is gone' },
-          {
-            scenario: 'S15',
-            oracle: 'O7',
-            entry: 'title 115',
-            actual: 'its cached details are gone'
-          }
-        ]
-      },
-      {
-        issue: 661,
-        oracle: 'O2',
-        violations: [
-          {
-            scenario: 'S15',
-            oracle: 'O2',
-            entry: '115:1:1151',
-            actual: 'not counted and no line, with its file on disk'
-          },
-          {
-            scenario: 'S15',
-            oracle: 'O2',
-            entry: '115:2:1152',
-            actual: 'not counted and no line, with its file on disk'
-          }
-        ]
-      }
-    ],
-    expect: { status: 'ok', details: ['0 of 0 episodes ok'] }
+    // #661: the cancel sweep looks for files in every configured root, so the
+    // title keeps its record and cached details, and both cold files count.
+    expect: { status: 'ok', details: ['2 of 2 episodes ok'] }
   },
   {
     id: 'S16',
@@ -411,23 +377,7 @@ export const SCENARIOS: Scenario[] = [
     },
     actions: [{ do: 'cancel-by-episode', id: 116, ep: '3' }],
     oracles: ['O7', 'O9'],
-    known: [
-      {
-        issue: 661,
-        oracle: 'O7',
-        violations: [
-          { scenario: 'S16', oracle: 'O7', entry: 'title 116', actual: 'its record is gone' },
-          {
-            scenario: 'S16',
-            oracle: 'O7',
-            entry: 'title 116',
-            actual: 'its cached details are gone'
-          }
-        ]
-      }
-    ],
-    // Record-less once #661 dropped its record, so as S11.
-    agreed: [{ source: RECORD_LESS, oracle: 'O9' }],
+    // #661: the title keeps its record and cached details, so its page opens.
     expect: { status: 'ok', details: ['2 of 2 episodes ok'] }
   },
   {

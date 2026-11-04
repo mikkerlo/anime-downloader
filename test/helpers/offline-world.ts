@@ -172,6 +172,8 @@ export interface World {
 
 export const first = (n: Names): string => n.romaji || n.ru || n.title
 export const named = (name: string): Names => ({ romaji: name, title: name })
+export const entryKey = (animeId: number, e: EntrySpec): string =>
+  e.key === 'two' ? `${animeId}:${e.ep}` : `${animeId}:${e.ep}:${e.trId}`
 
 const record = (id: number, n: Names): AnimeSearchResult =>
   ({
@@ -272,7 +274,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     const nameSource = t.downloaded ?? t.recent ?? t.library ?? t.cache
     for (const e of t.entries) {
       const author = e.author ?? 'Author'
-      const key = e.key === 'two' ? `${t.id}:${e.ep}` : `${t.id}:${e.ep}:${e.trId}`
+      const key = entryKey(t.id, e)
       downloadedEpisodes[key] = {
         translationType: 'subRu',
         author,
@@ -280,7 +282,8 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
         translationId: e.trId
       }
       const kind = e.file ?? 'healthy'
-      if (kind === 'none') continue
+      // A file on an unplugged cold drive isn't on this PC's disk.
+      if (kind === 'none' || (e.where === 'cold' && spec.coldAway)) continue
       const under = e.under ?? (nameSource ? first(nameSource) : `#${t.id}`)
       const tag = e.untagged ? null : (e.fileAuthor ?? author)
       const file = writeFile(

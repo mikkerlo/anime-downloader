@@ -1,10 +1,14 @@
 // Step 4 (#592): every `downloadedEpisodes` entry has its video in the hot or
-// cold root (the player's name rule), larger than 0 bytes, with a duration
-// ffprobe can read; and `.part` files no download owns are reported. Reports
-// only: it never deletes, moves or rewrites anything.
+// cold root (the player's name rule, under each of the title's names from its
+// record chain), larger than 0 bytes, with a duration ffprobe can read; and
+// `.part` files no download owns are reported. Only a file under the first
+// name, the one the player looks in, counts as ok. An entry of a title with no
+// `downloadedAnime` record whose file isn't found is stale (#657): skipped and
+// not counted. Reports only: it never deletes, moves or rewrites anything.
 
 import * as fs from 'fs'
 import * as path from 'path'
+import { titleNames } from '../../../lib/anime-record'
 import { episodeVideoCandidates } from '../../../lib/episode-video-path'
 import { type PrepareStep, type PrepareStepResult, worstStatus } from '../index'
 
@@ -12,7 +16,10 @@ type EpisodeMeta = { author?: string; translationId?: number }
 
 export interface LocalIntegrityStepDeps {
   downloadedEpisodes(): Record<string, EpisodeMeta>
+  /** Only whether a title has a record; names come from `animeRecord`. */
   downloadedAnime(): Record<string, AnimeSearchResult>
+  /** The record chain (`lib/anime-record.ts`). */
+  animeRecord(animeId: number): AnimeSearchResult | null
   displayName(anime: AnimeSearchResult): string
   sanitizeFilename(name: string): string
   /** Hot first, then cold. */
@@ -41,6 +48,7 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
       const roots = deps.roots().filter(Boolean)
       const details: PrepareStepResult['details'] = []
       let ok = 0
+      let skipped = 0
       let done = 0
       let noProbe = false
       ctx.progress({ done, total: episodes.length })
@@ -48,32 +56,47 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
       async function one([key, meta]: [string, EpisodeMeta]): Promise<void> {
         const [animeIdStr, episodeInt] = key.split(':')
         const animeId = Number(animeIdStr)
-        const entry = anime[animeIdStr]
+        const hasRecord = !!anime[animeIdStr]
+        const entry = deps.animeRecord(animeId)
         const name = entry ? deps.displayName(entry) : `#${animeIdStr}`
         const label = `${name} episode ${episodeInt}`
         const report = (text: string): void => {
           details.push({ text: `${label}: ${text}`, status: 'warning', animeId })
         }
         try {
-          if (!entry || !episodeInt) return report('no title record on this PC')
-          const file = episodeVideoCandidates({
-            dirs: roots,
-            animeName: name,
-            episodeInt,
-            author: meta.author ?? '',
-            sanitizeFilename: deps.sanitizeFilename
-          }).find((p) => fs.existsSync(p))
+          if (!episodeInt) return report('the entry has no episode number')
+          const names = titleNames(entry)
+          let file: string | undefined
+          let foundUnder: string | undefined
+          for (const animeName of names) {
+            file = episodeVideoCandidates({
+              dirs: roots,
+              animeName,
+              episodeInt,
+              author: meta.author ?? '',
+              sanitizeFilename: deps.sanitizeFilename
+            }).find((p) => fs.existsSync(p))
+            if (file) {
+              foundUnder = animeName
+              break
+            }
+          }
+          if (!file && !hasRecord) {
+            skipped++
+            return
+          }
           if (!file) return report('the video file is missing')
           const size = (await fs.promises.stat(file)).size
           if (size <= 0) return report('the video file is empty (0 bytes)')
           const probe = await deps.probeDuration(file, ctx.signal)
-          if (probe === null) {
-            noProbe = true
-            ok++
-            return
+          if (probe === null) noProbe = true
+          else if ('error' in probe) return report(`ffprobe can't read it (${probe.error})`)
+          else if (!(probe.duration > 0)) return report('ffprobe reads no duration')
+          if (foundUnder !== names[0]) {
+            return report(
+              `the file is in the "${foundUnder}" folder, but the player looks in "${names[0]}"`
+            )
           }
-          if ('error' in probe) return report(`ffprobe can't read it (${probe.error})`)
-          if (!(probe.duration > 0)) return report('ffprobe reads no duration')
           ok++
         } finally {
           done++
@@ -104,9 +127,10 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
           status: 'warning'
         })
       }
+      const checked = episodes.length - skipped
       details.unshift({
-        text: `${ok} of ${episodes.length} ${episodes.length === 1 ? 'episode' : 'episodes'} ok`,
-        status: ok === episodes.length ? 'ok' : 'warning'
+        text: `${ok} of ${checked} ${checked === 1 ? 'episode' : 'episodes'} ok`,
+        status: ok === checked ? 'ok' : 'warning'
       })
       return { status: worstStatus(details.map((d) => d.status)), details }
     }

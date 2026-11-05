@@ -523,11 +523,16 @@ Metadata invariants:
   defaults to `''`, so including it would report a missing root forever on a
   straight-to-advanced profile and disable collection for good. Skipping costs
   stale rows until the root returns, which is recoverable; the wipe was not.
-  The getter deliberately has **no** root-readability branch — that guard existed
-  to protect a `delete`, and the getter no longer has one. With a root away its
-  cold-resident rows are simply missing from the return value until the drive is
-  back (a Play button for an unmounted file would fail anyway), and the store
-  still holds them because neither half writes in that state.
+  The scope is also every name the title has: the reconcile keeps an entry
+  whose file is under the `downloadedAnime` first name, any record's names or
+  the auto-download subscription's, as Prepare for offline and the export
+  search, while the getter's filter stays on the first name because it never
+  writes (#679). The getter deliberately has **no** root-readability branch —
+  that guard existed to protect a `delete`, and the getter no longer has one.
+  With a root away its cold-resident rows are simply missing from the return
+  value until the drive is back (a Play button for an unmounted file would
+  fail anyway), and the store still holds them because neither half writes in
+  that state.
   Two behaviours are shared by the filter and the reconcile. An entry whose
   `animeId` has no `downloadedAnime` record is skipped by both (collecting
   orphans is a separate decision with its own blast radius). And a translation

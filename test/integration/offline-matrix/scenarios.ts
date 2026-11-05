@@ -12,7 +12,8 @@
 //   can't outlive the behaviour it excuses.
 // A pin and its fix can land in either order: a bug fixed before its row
 // landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17,
-// #676 in S37 and S38, which landed with their fix) is a row with no pin, and
+// #676 in S37 and S38, which landed with their fix, #679 in O11 on S09, S38,
+// S40, P02 and P14, which landed with its fix) is a row with no pin, and
 // a fix that lands after its pin removes it (#661 in S15/S16, and #674 in
 // S36, which this matrix found). The pairwise rows
 // P01–P23 and S32's are built in `pairwise.ts`.
@@ -238,7 +239,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1', 'O2'],
+    oracles: ['O1', 'O2', 'O11'],
     expect: {
       status: 'warning',
       details: [
@@ -778,7 +779,37 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1', 'O2', 'O9'],
+    oracles: ['O1', 'O2', 'O9', 'O11'],
+    expect: {
+      status: 'warning',
+      details: [
+        '1 of 2 episodes ok',
+        'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"'
+      ]
+    }
+  },
+  {
+    // #679: the only recorded row whose old name only a later record holds, so
+    // step 4's every-record search (#674) and the restart's reconcile run on
+    // the same world.
+    id: 'S40',
+    title:
+      'recorded under the new name, episode 1 under the old name that only recentAnimeMeta still holds',
+    world: {
+      titles: [
+        {
+          id: 140,
+          downloaded: named('New Name'),
+          cache: named('New Name'),
+          recent: named('Old Name'),
+          entries: [
+            { ep: '1', trId: 1401, under: 'Old Name' },
+            { ep: '2', trId: 1402 }
+          ]
+        }
+      ]
+    },
+    oracles: ['O1', 'O2', 'O11'],
     expect: {
       status: 'warning',
       details: [

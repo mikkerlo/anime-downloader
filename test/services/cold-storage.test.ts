@@ -355,6 +355,116 @@ describe('ColdStorageService write-side disk ops', () => {
       expect(keys(store)).toEqual([KEY_1])
     })
 
+    // #679: step 4 and the export search every name the title has, so the
+    // reconcile must too, or it deletes entries those readers can find.
+    describe('every name the title has (#679)', () => {
+      const rec = (titles: Record<string, string>, title: string) => ({ id: 1, title, titles })
+      const sub = (animeName: string): AutoDownloadSubscription => ({
+        animeId: 1,
+        malId: 10,
+        animeName,
+        subscribedAt: 0,
+        lastEnqueuedEpisodeInt: 0,
+        lastCheckedAt: 0
+      })
+
+      it("keeps an entry whose file is under the record's ru folder", () => {
+        const { svc, store } = svcWithDirs({
+          downloadedAnime: { '1': rec({ romaji: 'Nine', ru: 'Девять' }, 'Nine') },
+          downloadedEpisodes: { [KEY_1]: META }
+        })
+        writeFile(hotDir, 'Девять', 'Девять - 01 [Crunchy].mkv')
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1])
+      })
+
+      it("keeps an entry whose file is under the record's title folder", () => {
+        const { svc, store } = svcWithDirs({
+          downloadedAnime: { '1': rec({ romaji: 'Tee' }, 'Tee Title') },
+          downloadedEpisodes: { [KEY_1]: META }
+        })
+        writeFile(hotDir, 'Tee Title', 'Tee Title - 01 [Crunchy].mkv')
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1])
+      })
+
+      for (const where of ['library', 'animeCache', 'recentAnimeMeta'] as const) {
+        it(`keeps an entry whose file is under the ${where} name, and still drops one with no file`, () => {
+          const old = rec({ romaji: 'Old Name' }, 'Old Name')
+          const { svc, store } = svcWithDirs({
+            downloadedAnime: { '1': rec({ romaji: 'New Name' }, 'New Name') },
+            [where]: { '1': where === 'animeCache' ? { animeDetail: old } : old },
+            downloadedEpisodes: { [KEY_1]: META, [KEY_2]: META }
+          })
+          writeFile(hotDir, 'Old Name', 'Old Name - 01 [Crunchy].mkv')
+
+          expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 1 })
+          expect(keys(store)).toEqual([KEY_1])
+        })
+      }
+
+      it("keeps an entry whose file is under the auto-download subscription's name", () => {
+        const { svc, store } = svcWithDirs({
+          downloadedAnime: { '1': rec({ romaji: 'New Name' }, 'New Name') },
+          autoDownloadSubscriptions: { '1': sub('Old Name') },
+          downloadedEpisodes: { [KEY_1]: META, [KEY_2]: META }
+        })
+        writeFile(hotDir, 'Old Name', 'Old Name - 01 [Crunchy].mkv')
+        writeFile(hotDir, 'New Name', 'New Name - 02 [Crunchy].mkv')
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 2, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1, KEY_2])
+      })
+
+      it('still drops an entry whose file is under no name the title has', () => {
+        const { svc, store } = svcWithDirs({
+          downloadedAnime: { '1': rec({ romaji: 'New Name', ru: 'Новое' }, 'New Title') },
+          recentAnimeMeta: { '1': rec({ romaji: 'Old Name' }, 'Old Name') },
+          autoDownloadSubscriptions: { '1': sub('Sub Name') },
+          downloadedEpisodes: { [KEY_1]: META }
+        })
+        writeFile(hotDir, 'Elsewhere', 'Elsewhere - 01 [Crunchy].mkv')
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 0, dropped: 1 })
+        expect(keys(store)).toEqual([])
+      })
+
+      it("keeps the entry while the cold drive is away, with neither name's folder there", () => {
+        // A second record's name, so the widened search is what runs if the
+        // away-root guard ever moves below it.
+        const away = join(tmpRoot, 'away')
+        const { svc, store } = svcWithDirs({
+          coldStorageDir: away,
+          downloadedAnime: { '1': rec({ romaji: 'New Name' }, 'New Name') },
+          recentAnimeMeta: { '1': rec({ romaji: 'Old Name' }, 'Old Name') },
+          downloadedEpisodes: { [KEY_1]: META }
+        })
+        expect(fs.existsSync(join(hotDir, 'Old Name'))).toBe(false)
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 0, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1])
+      })
+
+      for (const where of ['library', 'animeCache'] as const) {
+        it(`still skips a downloadedAnime record with no name, though its ${where} record has one`, () => {
+          // The "no first name" skip comes before the name search: the entries
+          // are neither counted nor dropped, whatever the later records name.
+          const old = rec({ romaji: 'Old Name' }, 'Old Name')
+          const { svc, store } = svcWithDirs({
+            downloadedAnime: { '1': rec({}, '') },
+            [where]: { '1': where === 'animeCache' ? { animeDetail: old } : old },
+            downloadedEpisodes: { [KEY_1]: META, [KEY_2]: META }
+          })
+          writeFile(hotDir, 'Old Name', 'Old Name - 01 [Crunchy].mkv')
+
+          expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 0, dropped: 0 })
+          expect(keys(store)).toEqual([KEY_1, KEY_2])
+        })
+      }
+    })
+
     // #421's guards have to travel with the deletion, or this issue silently
     // reverts it. Each case names `allConfiguredRoots()` explicitly so a rebase
     // cannot quietly re-point the predicate at the mode-scoped `dirsForScan()`.

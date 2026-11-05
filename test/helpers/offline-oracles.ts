@@ -5,7 +5,9 @@
  *
  * O1–O3 and O7 are invariants agreed on #655 and #657; the others are derived,
  * and each one's comment names its source. O5 (the readers of
- * `downloadedEpisodes` agree) joins with the legacy-key rows.
+ * `downloadedEpisodes` agree) joins with the legacy-key rows. O11 (a
+ * restart's reconcile keeps every entry whose file is on disk under one of the
+ * title's names) is #679's; O10 is #680's.
  */
 import * as fs from 'fs'
 import * as path from 'path'
@@ -21,7 +23,7 @@ import {
   type World
 } from './offline-world'
 
-export type OracleId = 'O1' | 'O2' | 'O3' | 'O4' | 'O6' | 'O7' | 'O8' | 'O9'
+export type OracleId = 'O1' | 'O2' | 'O3' | 'O4' | 'O6' | 'O7' | 'O8' | 'O9' | 'O11'
 
 export interface Violation {
   scenario: string
@@ -330,6 +332,29 @@ async function recordKept(r: Run): Promise<Found[]> {
   return found
 }
 
+/**
+ * O11: a restart keeps what's on disk. The startup reconcile drops only the
+ * entries with no file on disk (#423), and never on an answer it can't trust
+ * (#421). So after `World.restart()`, every entry whose file is on disk under
+ * one of the title's names (`heldFolders`) is still in `downloadedEpisodes`,
+ * apart from a deleted title's (O3).
+ */
+async function restartKeepsOnDisk(r: Run): Promise<Found[]> {
+  const held = Object.keys(episodes(r.world)).filter((key) => {
+    if (!onDisk(r.world, key) || r.world.deleted.has(animeIdOf(key))) return false
+    const folder = path.basename(path.dirname(r.world.files.get(key)!))
+    return heldFolders(r.world, animeIdOf(key)).has(folder)
+  })
+  r.world.restart()
+  const after = episodes(r.world)
+  return held
+    .filter((key) => !(key in after))
+    .map((key) => ({
+      entry: key,
+      actual: `dropped by a restart's reconcile, with its file at ${r.world.norm(r.world.files.get(key)!)}`
+    }))
+}
+
 const ORACLES: Record<OracleId, (r: Run) => Promise<Found[]>> = {
   O1: okMeansPlayable,
   O2: nothingOnDiskSkipped,
@@ -338,7 +363,8 @@ const ORACLES: Record<OracleId, (r: Run) => Promise<Found[]>> = {
   O6: reportOnly,
   O7: recordKept,
   O8: perEntryLines,
-  O9: linksOpenOffline
+  O9: linksOpenOffline,
+  O11: restartKeepsOnDisk
 }
 
 /** The routers each oracle calls, so a world registers only those. */
@@ -350,7 +376,8 @@ export const ORACLE_ROUTERS: Record<OracleId, Router[]> = {
   O6: [],
   O7: [],
   O8: [],
-  O9: ['anime']
+  O9: ['anime'],
+  O11: []
 }
 
 export async function check(oracle: OracleId, r: Run): Promise<Violation[]> {

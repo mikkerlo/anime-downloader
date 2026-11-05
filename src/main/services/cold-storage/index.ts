@@ -6,6 +6,7 @@ import { EPISODE_ARTIFACT_EXTS } from '@shared/episode-files'
 import { ROOT_KEYS } from '@shared/storage-roots'
 import type { StorageService } from '../../store/types'
 import type { AnimeSearchResult } from '../../smotret-api'
+import { animeRecordsFrom, subscriptionNameFrom, titleNames } from '../../lib/anime-record'
 
 export interface UsageEpisodeFiles {
   mkv?: { path: string; size: number }
@@ -198,7 +199,10 @@ export interface ColdStorageService {
   /**
    * Whole-store counterpart to `pruneDownloadedEpisode`: walk every
    * `downloadedEpisodes` entry once and drop the ones with no file on disk.
-   * This is the *only* place that collection happens now —
+   * It looks under every name the title has: the `downloadedAnime` first name,
+   * then every record's names (`animeRecordsFrom`), then the auto-download
+   * subscription's (`subscriptionNameFrom`), so a file under any of them keeps
+   * its entry (#679). This is the *only* place that collection happens now —
    * `downloaded-episodes-get` filters its return value and never writes (#423),
    * so a page open can no longer delete persisted state. Hosted by a delayed
    * startup sweep in `bootstrap`, which is a moment that is allowed to write.
@@ -710,7 +714,13 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
         kept++
         continue
       }
-      if (!episodeFileExists(animeName, episodeInt, entry.author)) {
+      const names = [animeName]
+      for (const r of animeRecordsFrom(store, Number(animeId))) {
+        for (const n of titleNames(r)) if (!names.includes(n)) names.push(n)
+      }
+      const sub = subscriptionNameFrom(store, Number(animeId))
+      if (sub && !names.includes(sub)) names.push(sub)
+      if (!names.some((n) => episodeFileExists(n, episodeInt, entry.author))) {
         delete episodes[key]
         dropped++
         continue

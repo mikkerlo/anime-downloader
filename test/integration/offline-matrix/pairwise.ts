@@ -152,7 +152,7 @@ export function rowScenario(row: Row): Scenario {
       titles: [title]
     },
     ...(actions.length > 0 ? { actions } : {}),
-    oracles: ['O1', 'O2', 'O6', 'O8', 'O9'],
+    oracles: ['O1', 'O2', 'O6', 'O8', 'O9', 'O11'],
     ...(source ? { agreed: [{ source, oracle: 'O9' as const }] } : {})
   }
 }

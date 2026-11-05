@@ -139,11 +139,11 @@ async function okMeansPlayable(r: Run): Promise<Found[]> {
  * O2: nothing a user can act on is skipped silently (#657). Every recorded
  * entry whose file is on disk, and every record-less one whose file is under
  * one of the title's names (any record the store holds for it, or its
- * auto-download subscription), is counted ok
- * or gets a line. The silent skips allowed are #658's: a title with no record
- * whose file isn't under any of its names, and a title the user deleted. Step 5
- * the same: every item of an available library whose file is on the drive is
- * counted ok or gets a line.
+ * auto-download subscription), is counted ok or gets a line. The silent
+ * skips allowed are #658's: a title with no record whose file isn't under
+ * any of its names, and a title the user deleted. Step 5 the same: every
+ * item of an available library whose file is on the drive is counted ok or
+ * gets a line.
  */
 async function nothingOnDiskSkipped(r: Run): Promise<Found[]> {
   const found: Found[] = []

@@ -35,7 +35,8 @@ import { probeDuration } from '../../src/main/lib/probe-duration'
 import {
   animeRecordFrom,
   animeRecordsFrom,
-  playerRecordFrom
+  playerRecordFrom,
+  subscriptionNameFrom
 } from '../../src/main/lib/anime-record'
 import { sanitizeFilename } from '../../src/main/download-manager'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
@@ -431,6 +432,7 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
         id === 10 ? [{ id: 10, title: show, titles: { romaji: show } } as never] : [],
       playerRecord: (id) =>
         id === 10 ? ({ id: 10, title: show, titles: { romaji: show } } as never) : null,
+      subscriptionName: () => null,
       displayName: (a) => a.titles?.romaji || a.title,
       sanitizeFilename,
       roots: () => [hot, cold],
@@ -466,6 +468,7 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
       downloadedAnime: () => (data.downloadedAnime ?? {}) as Record<string, AnimeSearchResult>,
       animeRecords: (id) => animeRecordsFrom(store, id),
       playerRecord: (id) => playerRecordFrom(store, id),
+      subscriptionName: (id) => subscriptionNameFrom(store, id),
       displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
       sanitizeFilename,
       roots: () => [hot],
@@ -570,6 +573,62 @@ describe.skipIf(process.platform === 'win32')('step 4: downloaded episodes (temp
       details: [{ text: '0 of 1 episode ok', status: 'warning' }, renamedLine]
     })
   })
+
+  // #676: an auto-download lands under the subscription's `animeName`, which no
+  // record holds once every record is renamed. It is searched after every
+  // record's names, and never as the first name.
+  const subscribed = (animeName: string): Record<string, AutoDownloadSubscription> => ({
+    11: {
+      animeId: 11,
+      malId: 110,
+      animeName,
+      subscribedAt: 0,
+      lastEnqueuedEpisodeInt: 0,
+      lastCheckedAt: 0,
+      initialEpisodesAired: 0
+    }
+  })
+
+  it('a record-less title auto-downloaded under its subscription name, every record renamed since: the folder line, not skipped', async () => {
+    const hot = tmp('prep-sub-norec-')
+    writeGood(hot, 'Old Name')
+    const out = await driftStep(hot, {
+      recentAnimeMeta: { 11: record('New Name') },
+      animeCache: cached(record('New Name')),
+      autoDownloadSubscriptions: subscribed('Old Name')
+    }).run(ctx())
+
+    expect(out).toEqual({
+      status: 'warning',
+      details: [{ text: '0 of 1 episode ok', status: 'warning' }, renamedLine]
+    })
+  })
+
+  it('a recorded title whose records all moved to the new name: a file under the subscription name is the folder line, not "missing"', async () => {
+    const hot = tmp('prep-sub-rec-')
+    writeGood(hot, 'Old Name')
+    const out = await driftStep(hot, {
+      downloadedAnime: { 11: record('New Name') },
+      recentAnimeMeta: { 11: record('New Name') },
+      animeCache: cached(record('New Name')),
+      autoDownloadSubscriptions: subscribed('Old Name')
+    }).run(ctx())
+
+    expect(out).toEqual({
+      status: 'warning',
+      details: [{ text: '0 of 1 episode ok', status: 'warning' }, renamedLine]
+    })
+  })
+
+  it('the subscription name alone is never the first name: a title with no record name is still skipped', async () => {
+    const hot = tmp('prep-sub-only-')
+    writeGood(hot, 'Old Name')
+    const out = await driftStep(hot, { autoDownloadSubscriptions: subscribed('Old Name') }).run(
+      ctx()
+    )
+
+    expect(out).toEqual({ status: 'ok', details: [{ text: '0 of 0 episodes ok', status: 'ok' }] })
+  })
 })
 
 // #662: no ffprobe here, so this runs on win32 too, where the cold root is a
@@ -601,6 +660,7 @@ describe('step 4: a file that goes away or fails to read while the step runs', (
         opts.raceRecorded === false ? { 31: other } : { 30: race, 31: other },
       animeRecords: (id) => (records[id] ? [records[id]] : []),
       playerRecord: (id) => records[id] ?? null,
+      subscriptionName: () => null,
       displayName: (a) => a.titles?.romaji || a.title,
       sanitizeFilename: opts.sanitize ?? sanitizeFilename,
       roots: () => [hot],
@@ -739,6 +799,7 @@ describe('step 4: the wiring in src/main/index.ts (source pin)', () => {
     const body = src.slice(start, src.indexOf('isActivePart:', start))
     expect(body).toContain('playerRecord: (id) => playerRecordFrom(store, id),')
     expect(body).toContain('animeRecords: (id) => animeRecordsFrom(store, id),')
+    expect(body).toContain('subscriptionName: (id) => subscriptionNameFrom(store, id),')
     expect(body).toContain('missingRoots: () => coldStorageService.missingConfiguredRoots(),')
   })
 })
@@ -765,6 +826,7 @@ const stepOver = (
     downloadedAnime: () => downloadedAnime,
     animeRecords: (id) => [animeRecord(id)].filter((r) => r !== null),
     playerRecord: animeRecord,
+    subscriptionName: () => null,
     displayName: (a) => a.titles?.romaji || a.titles?.ru || a.title,
     sanitizeFilename,
     roots: () => (opts.cold ? [hot, opts.cold] : [hot]),

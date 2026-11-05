@@ -11,9 +11,10 @@
 //   The oracle must still report at least one violation, so the exemption
 //   can't outlive the behaviour it excuses.
 // A pin and its fix can land in either order: a bug fixed before its row
-// landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17) is
-// a row with no pin, and a fix that lands after its pin removes it (#661 in
-// S15/S16, and #674 in S36, which this matrix found). The pairwise rows
+// landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17,
+// #676 in S37 and S38, which landed with their fix) is a row with no pin, and
+// a fix that lands after its pin removes it (#661 in S15/S16, and #674 in
+// S36, which this matrix found). The pairwise rows
 // P01–P23 and S32's are built in `pairwise.ts`.
 
 import { named, type Action, type PreparedStep, type WorldSpec } from '../../helpers/offline-world'
@@ -725,6 +726,63 @@ export const SCENARIOS: Scenario[] = [
       status: 'warning',
       details: [
         '0 of 1 episode ok',
+        'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"'
+      ]
+    }
+  },
+  {
+    // #676: the tick downloads under the subscription's `animeName`, which no
+    // record holds once the page is opened after a rename. Step 4 tries it
+    // after every record's names, so the file is the folder line, not skipped
+    // (S37) or "missing" (S38).
+    id: 'S37',
+    title:
+      'no downloadedAnime record, auto-downloaded under the subscription name, every record renamed since',
+    world: {
+      titles: [
+        {
+          id: 137,
+          recent: named('New Name'),
+          cache: named('New Name'),
+          subscribed: 'Old Name',
+          watchedDaysAgo: 5,
+          entries: [{ ep: '1', trId: 1371, under: 'Old Name' }]
+        }
+      ]
+    },
+    oracles: ['O1', 'O2', 'O9'],
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 1 episode ok',
+        'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"'
+      ]
+    }
+  },
+  {
+    id: 'S38',
+    title:
+      'recorded under the new name, episode 1 auto-downloaded under the subscription name before the rename',
+    world: {
+      titles: [
+        {
+          id: 138,
+          downloaded: named('New Name'),
+          recent: named('New Name'),
+          cache: named('New Name'),
+          subscribed: 'Old Name',
+          entries: [
+            { ep: '1', trId: 1381, under: 'Old Name' },
+            { ep: '2', trId: 1382 }
+          ]
+        }
+      ]
+    },
+    oracles: ['O1', 'O2', 'O9'],
+    expect: {
+      status: 'warning',
+      details: [
+        '1 of 2 episodes ok',
         'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"'
       ]
     }

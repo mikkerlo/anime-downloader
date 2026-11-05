@@ -7,6 +7,9 @@
 // plan and Prepare for offline's integrity step search all their names, so a
 // folder only a later record names (a title renamed since it was cached) is
 // still found (#674). `animeRecordFrom` is the first of them.
+// After all of those names, both also try `autoDownloadSubscriptions[id].animeName`
+// (`subscriptionNameFrom`, #676), the folder an auto-download lands in. It is
+// not part of the chain: a subscription isn't an `AnimeSearchResult`.
 //
 // `playerRecordFrom` (#660) is the record the player takes its name from: the
 // cached details (what offline `GET_ANIME` returns), then the chain. Used by
@@ -41,6 +44,16 @@ export function playerRecordFrom(
     | Record<string, { animeDetail?: AnimeSearchResult | null }>
     | undefined
   return cache?.[id]?.animeDetail ?? animeRecordFrom(store, id)
+}
+
+export function subscriptionNameFrom(
+  store: { get(key: string): unknown },
+  id: number
+): string | null {
+  const subs = store.get('autoDownloadSubscriptions') as
+    | Record<string, AutoDownloadSubscription>
+    | undefined
+  return subs?.[id]?.animeName || null
 }
 
 /** The names a title's folder can have: `getAnimeName`'s order (romaji, ru, title). */

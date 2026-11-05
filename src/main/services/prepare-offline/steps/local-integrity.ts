@@ -1,7 +1,8 @@
 // Step 4 (#592): every `downloadedEpisodes` entry has its video in the hot or
 // cold root (the player's name rule, under each of the title's names: the
 // player's record's (#660), then every record's the store holds, in the
-// chain's order (#674)), larger than 0 bytes, with a duration ffprobe can
+// chain's order (#674), then the auto-download subscription's, never the
+// first (#676)), larger than 0 bytes, with a duration ffprobe can
 // read; and `.part` files no download owns are
 // reported. Only a file under the first name, the one the player looks in,
 // counts as ok. An entry of a title with no `downloadedAnime` record whose file
@@ -21,10 +22,12 @@ type EpisodeMeta = { author?: string; translationId?: number }
 
 export interface LocalIntegrityStepDeps {
   downloadedEpisodes(): Record<string, EpisodeMeta>
-  /** Only whether a title has a record; names come from `playerRecord`, then `animeRecords`. */
+  /** Only whether a title has a record; names come from `playerRecord`, then `animeRecords`, then `subscriptionName`. */
   downloadedAnime(): Record<string, AnimeSearchResult>
   /** Every record the store holds (`animeRecordsFrom`): their names after the player's, e.g. a pre-rename folder. */
   animeRecords(animeId: number): AnimeSearchResult[]
+  /** The auto-download subscription's folder name (`subscriptionNameFrom`), after every record's; never the first name. */
+  subscriptionName(animeId: number): string | null
   /** The record the player takes its name from (`playerRecordFrom`): the first name, and the label. */
   playerRecord(animeId: number): AnimeSearchResult | null
   displayName(anime: AnimeSearchResult): string
@@ -82,6 +85,8 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
         for (const r of records) {
           for (const n of titleNames(r)) if (!names.includes(n)) names.push(n)
         }
+        const sub = deps.subscriptionName(animeId)
+        if (sub && names.length > 0 && !names.includes(sub)) names.push(sub)
         const named = player ?? records[0] ?? null
         const name = named ? deps.displayName(named) : `#${animeIdStr}`
         const label = `${name} episode ${episodeInt}`

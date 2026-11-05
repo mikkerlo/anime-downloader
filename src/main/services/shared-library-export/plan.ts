@@ -28,6 +28,12 @@ export interface PlanSource {
    */
   records: (animeId: number) => AnimeSearchResult[]
   /**
+   * The title's auto-download subscription name (`subscriptionNameFrom`), the
+   * folder its auto-downloads land in: tried after every record's names, and
+   * only when they give at least one (#676).
+   */
+  subscriptionName: (animeId: number) => string | null
+  /**
    * Whether `downloadedAnime` has the title. A missing entry of a title
    * without one is stale and left out of the tree (#655).
    */
@@ -122,6 +128,8 @@ export function createResolver(
     for (const r of src.records(sel.animeId)) {
       for (const n of titleNames(r)) if (!names.includes(n)) names.push(n)
     }
+    const sub = src.subscriptionName(sel.animeId)
+    if (sub && names.length > 0 && !names.includes(sub)) names.push(sub)
     const label = episodeLabel(src.detail(sel.animeId), sel.episodeInt)
     const author = src.sanitizeFilename(entry.author)
     for (const name of names) {

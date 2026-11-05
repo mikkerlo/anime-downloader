@@ -1,7 +1,8 @@
 // Step 4 (#592): every `downloadedEpisodes` entry has its video in the hot or
 // cold root (the player's name rule, under each of the title's names: the
-// player's record's (#660), then its record chain's), larger than 0 bytes, with
-// a duration ffprobe can read; and `.part` files no download owns are
+// player's record's (#660), then every record's the store holds, in the
+// chain's order (#674)), larger than 0 bytes, with a duration ffprobe can
+// read; and `.part` files no download owns are
 // reported. Only a file under the first name, the one the player looks in,
 // counts as ok. An entry of a title with no `downloadedAnime` record whose file
 // isn't found is stale (#657): skipped and not counted. A file that goes away
@@ -20,10 +21,10 @@ type EpisodeMeta = { author?: string; translationId?: number }
 
 export interface LocalIntegrityStepDeps {
   downloadedEpisodes(): Record<string, EpisodeMeta>
-  /** Only whether a title has a record; names come from `playerRecord`, then `animeRecord`. */
+  /** Only whether a title has a record; names come from `playerRecord`, then `animeRecords`. */
   downloadedAnime(): Record<string, AnimeSearchResult>
-  /** The record chain (`lib/anime-record.ts`): its names after the player's, e.g. a pre-rename folder. */
-  animeRecord(animeId: number): AnimeSearchResult | null
+  /** Every record the store holds (`animeRecordsFrom`): their names after the player's, e.g. a pre-rename folder. */
+  animeRecords(animeId: number): AnimeSearchResult[]
   /** The record the player takes its name from (`playerRecordFrom`): the first name, and the label. */
   playerRecord(animeId: number): AnimeSearchResult | null
   displayName(anime: AnimeSearchResult): string
@@ -76,10 +77,12 @@ export function createLocalIntegrityStep(deps: LocalIntegrityStepDeps): PrepareS
         const animeId = Number(animeIdStr)
         const hasRecord = !!anime[animeIdStr]
         const player = deps.playerRecord(animeId)
-        const entry = deps.animeRecord(animeId)
+        const records = deps.animeRecords(animeId)
         const names = titleNames(player)
-        for (const n of titleNames(entry)) if (!names.includes(n)) names.push(n)
-        const named = player ?? entry
+        for (const r of records) {
+          for (const n of titleNames(r)) if (!names.includes(n)) names.push(n)
+        }
+        const named = player ?? records[0] ?? null
         const name = named ? deps.displayName(named) : `#${animeIdStr}`
         const label = `${name} episode ${episodeInt}`
         const report = (text: string): void => {

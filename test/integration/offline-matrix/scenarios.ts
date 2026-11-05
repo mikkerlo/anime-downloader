@@ -13,7 +13,7 @@
 // A pin and its fix can land in either order: a bug fixed before its row
 // landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17) is
 // a row with no pin, and a fix that lands after its pin removes it (#661 in
-// S15/S16). S36 is pinned on #674, which this matrix found. The pairwise rows
+// S15/S16, and #674 in S36, which this matrix found). The pairwise rows
 // P01–P23 and S32's are built in `pairwise.ts`.
 
 import { named, type Action, type PreparedStep, type WorldSpec } from '../../helpers/offline-world'
@@ -700,10 +700,10 @@ export const SCENARIOS: Scenario[] = [
     expect: { status: 'ok', details: ['1 of 1 episode ok'] }
   },
   {
-    // #674: step 4 searches the cached details' names and stops there
-    // (`animeRecordFrom` returns the cache before `recentAnimeMeta`), so the
-    // folder under the name the title was watched and downloaded under is
-    // never searched, and #658's rule skips the entry.
+    // #674: step 3 refreshes the cache to the new name and leaves
+    // `recentAnimeMeta` on the old one. Step 4 searches every record's names
+    // (`animeRecordsFrom`), so the folder under the name the title was watched
+    // and downloaded under is found, and is the folder line, not skipped.
     id: 'S36',
     title:
       'no downloadedAnime record, watched online under the old name, renamed upstream; an online step 3 first',
@@ -721,21 +721,13 @@ export const SCENARIOS: Scenario[] = [
     },
     actions: [{ do: 'metadata' }],
     oracles: ['O1', 'O2', 'O9'],
-    expect: { status: 'ok', details: ['0 of 0 episodes ok'] },
-    known: [
-      {
-        issue: 674,
-        oracle: 'O2',
-        violations: [
-          {
-            scenario: 'S36',
-            entry: '136:1:1361',
-            oracle: 'O2',
-            actual: 'not counted and no line, with its file on disk'
-          }
-        ]
-      }
-    ]
+    expect: {
+      status: 'warning',
+      details: [
+        '0 of 1 episode ok',
+        'New Name episode 1: the file is in the "Old Name" folder, but the player looks in "New Name"'
+      ]
+    }
   },
   ...PAIRWISE
 ]

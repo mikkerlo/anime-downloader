@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { animeRecordFrom, playerRecordFrom, titleNames } from '../../src/main/lib/anime-record'
+import {
+  animeRecordFrom,
+  animeRecordsFrom,
+  playerRecordFrom,
+  titleNames
+} from '../../src/main/lib/anime-record'
 
 const rec = (romaji: string): AnimeSearchResult =>
   ({ id: 7, title: romaji, titles: { romaji } }) as AnimeSearchResult
@@ -43,6 +48,47 @@ describe('animeRecordFrom', () => {
   it("doesn't take another id's record", () => {
     const store = storeOf({ downloadedAnime: { 8: rec('Other') }, recentAnimeMeta: {} })
     expect(animeRecordFrom(store, 7)).toBeNull()
+  })
+})
+
+describe('animeRecordsFrom (#674)', () => {
+  it("returns every record the store holds in the chain's order; animeRecordFrom is its first", () => {
+    const data: Record<string, unknown> = {
+      downloadedAnime: { 7: rec('Downloaded') },
+      library: { 7: rec('Library') },
+      animeCache: { 7: { animeDetail: rec('Cached'), episodes: {} } },
+      recentAnimeMeta: { 7: rec('Recent') }
+    }
+    const store = storeOf(data)
+    const romaji = (): (string | undefined)[] =>
+      animeRecordsFrom(store, 7).map((r) => r.titles?.romaji)
+    const first = (): AnimeSearchResult | null => animeRecordsFrom(store, 7)[0] ?? null
+
+    expect(romaji()).toEqual(['Downloaded', 'Library', 'Cached', 'Recent'])
+    expect(animeRecordFrom(store, 7)).toBe(first())
+    delete data.downloadedAnime
+    expect(romaji()).toEqual(['Library', 'Cached', 'Recent'])
+    expect(animeRecordFrom(store, 7)).toBe(first())
+    delete data.library
+    expect(romaji()).toEqual(['Cached', 'Recent'])
+    expect(animeRecordFrom(store, 7)).toBe(first())
+    delete data.animeCache
+    expect(romaji()).toEqual(['Recent'])
+    expect(animeRecordFrom(store, 7)).toBe(first())
+    delete data.recentAnimeMeta
+    expect(animeRecordsFrom(store, 7)).toEqual([])
+    expect(animeRecordFrom(store, 7)).toBeNull()
+  })
+
+  it("skips a cached entry whose animeDetail is null, and doesn't take another id's records", () => {
+    const store = storeOf({
+      downloadedAnime: { 8: rec('Other') },
+      library: { 7: rec('Library') },
+      animeCache: { 7: { animeDetail: null, episodes: {} } },
+      recentAnimeMeta: { 7: rec('Recent') }
+    })
+    expect(animeRecordsFrom(store, 7).map((r) => r.titles?.romaji)).toEqual(['Library', 'Recent'])
+    expect(animeRecordsFrom(store, 9)).toEqual([])
   })
 })
 

@@ -222,6 +222,45 @@ describe('titles with no downloadedAnime record (#655)', () => {
     expect(plan.titles[0]).toMatchObject({ animeId: 6, name: 'Starred', translations: [] })
     expect(plan.titles[0].notDownloaded.map((e) => e.episodeInt)).toEqual(['1', '2'])
   })
+
+  it('a record-less title renamed since it was cached (#674): its file under the recentAnimeMeta name is ready, and exported under that folder', async () => {
+    env = makeExportEnv()
+    const old = env.addEpisode({
+      animeId: 9,
+      title: 'Old Name',
+      episodeInt: '1',
+      translationId: 91
+    })
+    dropRecord(9)
+    env.store.set('recentAnimeMeta', { 9: record(9, 'Old Name') })
+    env.store.set('animeCache', {
+      9: {
+        animeDetail: {
+          ...record(9, 'New Name'),
+          episodes: [
+            { id: 901, episodeInt: '1', episodeFull: '1 серия', episodeType: 'tv', isActive: 1 }
+          ]
+        }
+      }
+    })
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles).toHaveLength(1)
+    expect(plan.titles[0]).toMatchObject({ animeId: 9, name: 'New Name', notDownloaded: [] })
+    expect(plan.titles[0].translations.flatMap((t) => t.episodes)).toEqual([
+      expect.objectContaining({ key: old.key, state: 'ready', size: fs.statSync(old.video).size })
+    ])
+
+    const r = await env.svc.start({ selection: sel(old.key), target: env.drive, name: 'Lib' })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.job.missing).toBe(0)
+    await env.svc.settled(r.job.jobId)
+    const copied = Object.keys(scan(path.join(env.drive, 'Lib'))).filter(
+      (p) => !p.startsWith(LIBRARY_DIR)
+    )
+    expect(copied).toHaveLength(1)
+    expect(copied[0].split(path.sep)[0]).toBe('Old Name')
+  })
 })
 
 describe('the target table', () => {

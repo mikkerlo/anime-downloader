@@ -3,11 +3,11 @@
  * over one observed run of a world. Each returns a list of violations, so a
  * failure names the entry and what it got; `[]` means the oracle holds.
  *
- * O1–O3 and O7 are invariants agreed on #655 and #657; the others are derived,
- * and each one's comment names its source. O5 (the readers of
- * `downloadedEpisodes` agree) joins with the legacy-key rows. O11 (a
- * restart's reconcile keeps every entry whose file is on disk under one of the
- * title's names) is #679's; O10 is #680's.
+ * O1–O3, O7 and O10 are invariants agreed on #655 and #657 (O10 with the scope
+ * set on #680); the others are derived, and each one's comment names its
+ * source. O5 (the readers of `downloadedEpisodes` agree) joins with the
+ * legacy-key rows. O11 (a restart's reconcile keeps every entry whose file is
+ * on disk under one of the title's names) is #679's.
  */
 import * as fs from 'fs'
 import * as path from 'path'
@@ -23,7 +23,7 @@ import {
   type World
 } from './offline-world'
 
-export type OracleId = 'O1' | 'O2' | 'O3' | 'O4' | 'O6' | 'O7' | 'O8' | 'O9' | 'O11'
+export type OracleId = 'O1' | 'O2' | 'O3' | 'O4' | 'O6' | 'O7' | 'O8' | 'O9' | 'O10' | 'O11'
 
 export interface Violation {
   scenario: string
@@ -138,11 +138,12 @@ async function okMeansPlayable(r: Run): Promise<Found[]> {
 /**
  * O2: nothing a user can act on is skipped silently (#657). Every recorded
  * entry whose file is on disk, and every record-less one whose file is under
- * one of the title's names (any record the store holds for it), is counted ok
- * or gets a line. The silent skips allowed are #658's: a title with no record
- * whose file isn't under any of its names, and a title the user deleted. Step 5
- * the same: every item of an available library whose file is on the drive is
- * counted ok or gets a line.
+ * one of the title's names (any record the store holds for it, or its
+ * auto-download subscription), is counted ok or gets a line. The silent
+ * skips allowed are #658's: a title with no record whose file isn't under
+ * any of its names, and a title the user deleted. Step 5 the same: every
+ * item of an available library whose file is on the drive is counted ok or
+ * gets a line.
  */
 async function nothingOnDiskSkipped(r: Run): Promise<Found[]> {
   const found: Found[] = []
@@ -333,6 +334,30 @@ async function recordKept(r: Run): Promise<Found[]> {
 }
 
 /**
+ * O10: a "missing" line means the file isn't there (mikkerlo, #657: "a
+ * recorded title never gets told a file is missing when it's on disk"). No
+ * entry that step 4 reports as "the video file is missing" has its file on
+ * disk under one of the title's names (`heldFolders`). The narrowing to those
+ * names is mikkerlo's (#680,
+ * https://github.com/mikkerlo/anime-downloader/issues/680#issuecomment-6646389720):
+ * a folder no record or subscription names is one no reader can find, so
+ * "missing" is the true answer there. The away-root lines (#664: "cold
+ * storage isn't connected", "the download folder isn't there") say the
+ * episode wasn't checked, not that it's missing; O4 checks them.
+ */
+async function missingMeansGone(r: Run): Promise<Found[]> {
+  const found: Found[] = []
+  for (const [key, o] of r.outcomes) {
+    if (o.kind !== 'line' || !o.text.endsWith(': the video file is missing')) continue
+    if (!onDisk(r.world, key)) continue
+    const file = r.world.files.get(key)!
+    if (!heldFolders(r.world, animeIdOf(key)).has(path.basename(path.dirname(file)))) continue
+    found.push({ entry: key, actual: `reported missing, with its file at ${r.world.norm(file)}` })
+  }
+  return found
+}
+
+/**
  * O11: a restart keeps what's on disk. The startup reconcile drops only the
  * entries with no file on disk (#423), and never on an answer it can't trust
  * (#421). So after `World.restart()`, every entry whose file is on disk under
@@ -364,6 +389,7 @@ const ORACLES: Record<OracleId, (r: Run) => Promise<Found[]>> = {
   O7: recordKept,
   O8: perEntryLines,
   O9: linksOpenOffline,
+  O10: missingMeansGone,
   O11: restartKeepsOnDisk
 }
 
@@ -377,6 +403,7 @@ export const ORACLE_ROUTERS: Record<OracleId, Router[]> = {
   O7: [],
   O8: [],
   O9: ['anime'],
+  O10: [],
   O11: []
 }
 

@@ -356,6 +356,18 @@ describe('titles with no downloadedAnime record (#655)', () => {
 
     expect(await copiedTops([old.key, now.key])).toEqual(['New Name', 'Old Name'])
   })
+
+  it('the subscription name alone is never the first name: a title with no record name stays out of the tree (#676)', async () => {
+    env = makeExportEnv()
+    env.addEpisode({ animeId: 9, title: 'Old Name', episodeInt: '1', translationId: 91 })
+    dropRecord(9)
+    env.store.set('recentAnimeMeta', {})
+    env.store.set('animeCache', {})
+    subscribe(9, 'Old Name')
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles).toEqual([])
+  })
 })
 
 describe('the target table', () => {

@@ -12,8 +12,9 @@
 //   can't outlive the behaviour it excuses.
 // A pin and its fix can land in either order: a bug fixed before its row
 // landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17,
-// #676 in S37 and S38, which landed with their fix) is a row with no pin, and a fix that lands after its pin removes it (#661 in
-// S15/S16, and #674 in S36, which this matrix found). The pairwise rows
+// #676 in S37 and S38, which landed with their fix) is a row with no pin, and
+// a fix that lands after its pin removes it (#661 in S15/S16, and #674 in
+// S36, which this matrix found). The pairwise rows
 // P01–P23 and S32's are built in `pairwise.ts`.
 
 import { named, type Action, type PreparedStep, type WorldSpec } from '../../helpers/offline-world'

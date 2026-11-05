@@ -22,6 +22,12 @@ export interface PlanSource {
    */
   anime: (animeId: number) => AnimeSearchResult | null
   /**
+   * Every record the store holds for the title, in the same order, so
+   * `anime`'s is first (`animeRecordsFrom`). The resolver searches all their
+   * names (#674).
+   */
+  records: (animeId: number) => AnimeSearchResult[]
+  /**
    * Whether `downloadedAnime` has the title. A missing entry of a title
    * without one is stale and left out of the tree (#655).
    */
@@ -112,10 +118,13 @@ export function createResolver(
     const entry = src.downloadedEpisodes()[key]
     if (!entry) return 'missing'
     if (BUSY.has(src.mergeStatus(sel.translationId) ?? '')) return 'busy'
-    const anime = src.anime(sel.animeId)
+    const names: string[] = []
+    for (const r of src.records(sel.animeId)) {
+      for (const n of titleNames(r)) if (!names.includes(n)) names.push(n)
+    }
     const label = episodeLabel(src.detail(sel.animeId), sel.episodeInt)
     const author = src.sanitizeFilename(entry.author)
-    for (const name of titleNames(anime)) {
+    for (const name of names) {
       const base = src.sanitizeFilename(`${name} - ${sel.episodeInt.padStart(2, '0')}`)
       const files = (await scan(name))[base] ?? []
       const hit = files.find((f) => f.author === author) ?? files.find((f) => !f.author)

@@ -1,27 +1,36 @@
-// A title's record for naming it and finding its folder, even when its
+// A title's records for naming it and finding its folder, even when its
 // `downloadedAnime` record is gone (#655, #657): `downloadedAnime`, then
-// `library`, then the cached details, then `recentAnimeMeta`. Shared by the
-// export plan and Prepare for offline's integrity step. The chain doesn't put
-// the cache first on purpose: the export looks for a title's files under the
-// name they were downloaded with, which is `downloadedAnime`'s.
+// `library`, then the cached details, then `recentAnimeMeta`. The chain doesn't
+// put the cache first on purpose: the export looks for a title's files under
+// the name they were downloaded with, which is `downloadedAnime`'s.
+// `animeRecordsFrom` is every record the store holds, in that order: the export
+// plan and Prepare for offline's integrity step search all their names, so a
+// folder only a later record names (a title renamed since it was cached) is
+// still found (#674). `animeRecordFrom` is the first of them.
 //
 // `playerRecordFrom` (#660) is the record the player takes its name from: the
 // cached details (what offline `GET_ANIME` returns), then the chain. Used by
 // the integrity step and Copy to this PC, which check and file under that name.
 
+export function animeRecordsFrom(
+  store: { get(key: string): unknown },
+  id: number
+): AnimeSearchResult[] {
+  const map = <T>(key: string): Record<string, T> | undefined =>
+    store.get(key) as Record<string, T> | undefined
+  return [
+    map<AnimeSearchResult>('downloadedAnime')?.[id],
+    map<AnimeSearchResult>('library')?.[id],
+    map<{ animeDetail?: AnimeSearchResult | null }>('animeCache')?.[id]?.animeDetail,
+    map<AnimeSearchResult>('recentAnimeMeta')?.[id]
+  ].filter((r): r is AnimeSearchResult => r != null)
+}
+
 export function animeRecordFrom(
   store: { get(key: string): unknown },
   id: number
 ): AnimeSearchResult | null {
-  const map = <T>(key: string): Record<string, T> | undefined =>
-    store.get(key) as Record<string, T> | undefined
-  return (
-    map<AnimeSearchResult>('downloadedAnime')?.[id] ??
-    map<AnimeSearchResult>('library')?.[id] ??
-    map<{ animeDetail?: AnimeSearchResult | null }>('animeCache')?.[id]?.animeDetail ??
-    map<AnimeSearchResult>('recentAnimeMeta')?.[id] ??
-    null
-  )
+  return animeRecordsFrom(store, id)[0] ?? null
 }
 
 export function playerRecordFrom(

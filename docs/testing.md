@@ -1555,12 +1555,16 @@ test's author had in mind. #655 and #657 were both states no test built.
   that leaves some of a title's files on disk, never drops the title's record
   or cached details while its files remain. O8: an entry's problem is a line,
   never a failed step, and the summary adds up. O9: every title on a line or
-  counted ok opens offline. O11: a restart's reconcile keeps every entry
-  whose file is on disk under one of the title's names, apart from a deleted
-  title's (#679; O10 is #680's). To tie a count to its entry or item, steps
-  4 and 5 are also run over each entry and item alone. O5 (the readers of
-  `downloadedEpisodes` agree on every key shape) and the legacy-key rows S19
-  and S20 join once mikkerlo's export issue for two-part keys is filed.
+  counted ok opens offline. O10: no entry step 4 reports as "the video file
+  is missing" has its file on disk under one of the title's names (a folder
+  no record or subscription names counts as missing, mikkerlo's scope on
+  #680); the away-root lines (#664) aren't "missing" lines. O11: a restart's
+  reconcile keeps every entry whose file is on disk under one of the title's
+  names, apart from a deleted title's (#679). To tie a count to its entry or
+  item, steps 4 and 5 are also run over each entry and item alone. O5 (the
+  readers of `downloadedEpisodes` agree on every key shape) and the legacy-key
+  rows S19 and S20 join once mikkerlo's export issue for two-part keys is
+  filed.
 - **The pairwise sweep** (`pairwise.ts`): 23 worlds, P01–P23, of one title
   with one entry, which together hold every pair of values of 15 factors
   (record, starred, cache, `recentAnimeMeta`, watched recently, key shape,
@@ -1568,7 +1572,7 @@ test's author had in mind. #655 and #657 were both states no test built.
   offline). Cold storage needs advanced mode, and a row with no file on this
   PC (nowhere, or on an unplugged cold drive) has no folder, file state, tag
   or container, so those pairs count only in a row whose file is there. An
-  online row runs step 3 first. Each row runs O1, O2, O6, O8, O9 and O11; a row
+  online row runs step 3 first. Each row runs O1, O2, O6, O8, O9, O10 and O11; a row
   whose O9 fires cites S11's acceptance (no record, outside the Library and
   the cache scope) or S12's (a title in the cache scope whose details aren't
   cached, in an offline run). The rows are a committed literal table.

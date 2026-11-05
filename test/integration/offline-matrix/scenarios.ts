@@ -13,7 +13,8 @@
 // A pin and its fix can land in either order: a bug fixed before its row
 // landed (#660 in S07, S08 and S21, #662 in S31, #663 in S33, #664 in S17,
 // #676 in S37 and S38, which landed with their fix, #679 in O11 on S09, S38,
-// S40, P02 and P14, which landed with its fix) is a row with no pin, and
+// S40, P02 and P14, which landed with its fix, #674 and #676 in O10 on S40
+// and S38) is a row with no pin, and
 // a fix that lands after its pin removes it (#661 in S15/S16, and #674 in
 // S36, which this matrix found). The pairwise rows
 // P01–P23 and S32's are built in `pairwise.ts`.
@@ -110,7 +111,7 @@ export const SCENARIOS: Scenario[] = [
       ],
       parts: [{ under: 'Broken', ep: '4', status: null }]
     },
-    oracles: ['O2', 'O6', 'O8'],
+    oracles: ['O2', 'O6', 'O8', 'O10'],
     expect: {
       status: 'warning',
       details: [
@@ -151,7 +152,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1', 'O2'],
+    oracles: ['O1', 'O2', 'O10'],
     expect: {
       status: 'warning',
       details: ['0 of 1 episode ok', 'Wrong Tag episode 1: the video file is missing']
@@ -173,7 +174,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O2', 'O8'],
+    oracles: ['O2', 'O8', 'O10'],
     expect: {
       status: 'warning',
       details: ['1 of 2 episodes ok', 'Two Tr episode 1: the video file is missing']
@@ -194,7 +195,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1'],
+    oracles: ['O1', 'O10'],
     expect: {
       status: 'warning',
       details: [
@@ -217,7 +218,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1'],
+    oracles: ['O1', 'O10'],
     expect: {
       status: 'warning',
       details: [
@@ -239,7 +240,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1', 'O2', 'O11'],
+    oracles: ['O1', 'O2', 'O10', 'O11'],
     expect: {
       status: 'warning',
       details: [
@@ -626,7 +627,7 @@ export const SCENARIOS: Scenario[] = [
       ]
     },
     actions: [{ do: 'unlink-before-stat', match: 'Race - 01' }],
-    oracles: ['O8', 'O2'],
+    oracles: ['O8', 'O2', 'O10'],
     expect: {
       status: 'warning',
       details: ['1 of 2 episodes ok', 'Race episode 1: the video file is missing']
@@ -706,6 +707,7 @@ export const SCENARIOS: Scenario[] = [
     // `recentAnimeMeta` on the old one. Step 4 searches every record's names
     // (`animeRecordsFrom`), so the folder under the name the title was watched
     // and downloaded under is found, and is the folder line, not skipped.
+    // No O10: a title with no record never gets a "missing" line; O2 catches a lost name.
     id: 'S36',
     title:
       'no downloadedAnime record, watched online under the old name, renamed upstream; an online step 3 first',
@@ -779,7 +781,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1', 'O2', 'O9', 'O11'],
+    oracles: ['O1', 'O2', 'O9', 'O10', 'O11'],
     expect: {
       status: 'warning',
       details: [
@@ -809,7 +811,7 @@ export const SCENARIOS: Scenario[] = [
         }
       ]
     },
-    oracles: ['O1', 'O2', 'O11'],
+    oracles: ['O1', 'O2', 'O10', 'O11'],
     expect: {
       status: 'warning',
       details: [

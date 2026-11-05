@@ -209,12 +209,11 @@ test("Prepare for offline's real six steps, in index.ts's order, over S01, S10 a
   })
 })
 
-// One run per launch, because of a production bug, #675: the panel's store
-// drops every event of a run whose wall-clock `startedAt` is earlier than the
-// run it holds, so a clock that steps back between two runs (an NTP
-// correction, or this WSL box's ~1 s step every half minute) leaves the panel
-// stuck on Cancel. Once #675 is fixed, case 2 can go back to two runs in one
-// launch.
+// One run per launch, written that way for #675: the panel's store dropped
+// every event of a run whose wall-clock `startedAt` was earlier than the run it
+// held, so a clock that stepped back between two runs (an NTP correction, or
+// this WSL box's ~1 s step every half minute) left the panel stuck on Cancel.
+// Case 2 can go back to two runs in one launch now that #675 is fixed.
 for (const { id, opens, link } of [
   { id: 'S07', opens: 'New Name', link: /^New Name episode 1:/ },
   { id: 'S17', opens: 'Away', link: /^Away episode 2:/ }

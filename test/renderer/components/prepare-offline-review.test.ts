@@ -42,6 +42,7 @@ function item(id: string, fieldPath: SyncConflictFieldPath): SyncConflictItem {
 function run(): PrepareOfflineRun {
   return {
     runId: 'p1',
+    runSeq: 1,
     startedAt: 1,
     finishedAt: 2,
     cancelled: false,

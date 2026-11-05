@@ -23,8 +23,9 @@ export const usePrepareOfflineStore = defineStore('prepare-offline', () => {
   const panelOpen = ref(false)
 
   function apply(next: PrepareOfflineRun): void {
-    // An older run's late event never replaces a newer one.
-    if (run.value && next.runId !== run.value.runId && next.startedAt < run.value.startedAt) return
+    // An older run's late event never replaces a newer one. Ordered by main's
+    // run counter, not `startedAt`: the wall clock can step back between runs.
+    if (run.value && next.runSeq < run.value.runSeq) return
     run.value = next
     running.value = next.finishedAt === null
     if (next.finishedAt !== null) {

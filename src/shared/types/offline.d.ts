@@ -44,6 +44,8 @@ interface PrepareOfflineStepState {
 /** The run in flight or the last one this session; the progress event's payload. */
 interface PrepareOfflineRun {
   runId: string
+  /** 1, 2, 3… per main-process session: orders runs, unlike the wall clock. */
+  runSeq: number
   startedAt: number
   finishedAt: number | null
   cancelled: boolean

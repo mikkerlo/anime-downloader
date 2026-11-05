@@ -1612,7 +1612,8 @@ download or Delete runs there).
   `PATH`), so each file it expects ok is a copy of `e2e/fixtures/test-pattern.mp4`.
 - **Case 2 (O9)** seeds S07 (#660) and S17 (#664), checks their lines, and
   follows a line's link to its title's page offline, once per title, each on
-  its own launch with a single run until #675 is fixed (the spec says why).
+  its own launch with a single run, written that way for #675 (the spec says
+  why); it can go back to two runs in one launch now that #675 is fixed.
   The page paints from `GET_ANIME_CACHE` and falls back to offline
   `GET_ANIME`, so the case stays green while either route still answers from
   the title's cache entry.

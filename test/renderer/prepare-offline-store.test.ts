@@ -31,7 +31,29 @@ function step(over: Partial<PrepareOfflineStepState>): PrepareOfflineStepState {
 }
 
 function run(over: Partial<PrepareOfflineRun> = {}): PrepareOfflineRun {
-  return { runId: 'r1', startedAt: 10, finishedAt: null, cancelled: false, steps: [], ...over }
+  return {
+    runId: 'r1',
+    runSeq: 1,
+    startedAt: 10,
+    finishedAt: null,
+    cancelled: false,
+    steps: [],
+    ...over
+  }
+}
+
+// r1 finishes, then the wall clock steps back before Start begins r2, and r2 finishes.
+async function runAfterClockStepBack(
+  store: Awaited<ReturnType<typeof load>>,
+  checkMidRun: () => void = () => {}
+): Promise<void> {
+  emit(run({ runId: 'r1', runSeq: 1, startedAt: 10_000 }))
+  emit(run({ runId: 'r1', runSeq: 1, startedAt: 10_000, finishedAt: 10_500 }))
+  api.prepareOfflineStart.mockResolvedValueOnce({ runId: 'r2' })
+  await store.start()
+  emit(run({ runId: 'r2', runSeq: 2, startedAt: 9_800 }))
+  checkMidRun()
+  emit(run({ runId: 'r2', runSeq: 2, startedAt: 9_800, finishedAt: 9_900 }))
 }
 
 function emit(next: PrepareOfflineRun): void {
@@ -133,9 +155,25 @@ describe('usePrepareOfflineStore', () => {
 
   it('a late event from an older run does not replace the newer one', async () => {
     const store = await load()
-    emit(run({ runId: 'r2', startedAt: 20 }))
-    emit(run({ runId: 'r1', startedAt: 10 }))
+    emit(run({ runId: 'r2', runSeq: 2, startedAt: 20 }))
+    emit(run({ runId: 'r1', runSeq: 1, startedAt: 10 }))
     expect(store.run?.runId).toBe('r2')
+  })
+
+  it('a late event from an older run is still dropped when its wall clock reads later', async () => {
+    const store = await load()
+    emit(run({ runId: 'r2', runSeq: 2, startedAt: 9_800 }))
+    emit(run({ runId: 'r1', runSeq: 1, startedAt: 10_000, finishedAt: 10_500 }))
+    expect(store.run?.runId).toBe('r2')
+    expect(store.running).toBe(true)
+    expect(store.lastRun).toBeNull()
+  })
+
+  it('a newer run is followed when the wall clock stepped back between the runs', async () => {
+    const store = await load()
+    await runAfterClockStepBack(store, () => expect(store.run?.runId).toBe('r2'))
+    expect(store.running).toBe(false)
+    expect(store.lastRun?.finishedAt).toBe(9_900)
   })
 
   it('a failed start clears running and rethrows', async () => {
@@ -214,5 +252,16 @@ describe('PrepareOfflinePanel', () => {
     await w.find('[data-testid="prepare-offline-cancel"]').trigger('click')
     expect(api.prepareOfflineCancel).toHaveBeenCalledTimes(1)
     expect(store.running).toBe(true)
+  })
+
+  it('offers Run again, not Cancel, after a newer run that the wall clock dated earlier', async () => {
+    const store = await load()
+    const { default: Panel } =
+      await import('../../src/renderer/src/components/settings/PrepareOfflinePanel.vue')
+    await runAfterClockStepBack(store)
+    const w = mount(Panel)
+    await flushPromises()
+    expect(w.find('[data-testid="prepare-offline-cancel"]').exists()).toBe(false)
+    expect(w.find('[data-testid="prepare-offline-run"]').text()).toBe('Run again')
   })
 })

@@ -3,6 +3,7 @@ import {
   animeRecordFrom,
   animeRecordsFrom,
   playerRecordFrom,
+  subscriptionNameFrom,
   titleNames
 } from '../../src/main/lib/anime-record'
 
@@ -146,5 +147,26 @@ describe('titleNames', () => {
       } as AnimeSearchResult)
     ).toEqual(['Show', 'Шоу'])
     expect(titleNames(null)).toEqual([])
+  })
+})
+
+describe('subscriptionNameFrom', () => {
+  const subs = (animeName: string): Record<string, AutoDownloadSubscription> => ({
+    7: {
+      animeId: 7,
+      malId: 70,
+      animeName,
+      subscribedAt: 0,
+      lastEnqueuedEpisodeInt: 0,
+      lastCheckedAt: 0
+    }
+  })
+
+  it('reads autoDownloadSubscriptions[id].animeName, and null for another id, an empty name or no key', () => {
+    const store = storeOf({ autoDownloadSubscriptions: subs('Old Name') })
+    expect(subscriptionNameFrom(store, 7)).toBe('Old Name')
+    expect(subscriptionNameFrom(store, 8)).toBeNull()
+    expect(subscriptionNameFrom(storeOf({ autoDownloadSubscriptions: subs('') }), 7)).toBeNull()
+    expect(subscriptionNameFrom(storeOf({}), 7)).toBeNull()
   })
 })

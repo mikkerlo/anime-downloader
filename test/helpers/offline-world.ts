@@ -99,6 +99,8 @@ export interface TitleSpec {
   cache?: Names | null
   /** `recentAnimeMeta[id]`. */
   recent?: Names
+  /** `autoDownloadSubscriptions[id]` with this `animeName`: the folder its auto-downloads land in. */
+  subscribed?: string
   watchedDaysAgo?: number
   /** What the stub smotret server answers for step 3 (default the download-time names). */
   remote?: Names
@@ -314,6 +316,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
   const library: Record<string, unknown> = {}
   const animeCache: Record<string, unknown> = {}
   const recentAnimeMeta: Record<string, unknown> = {}
+  const autoDownloadSubscriptions: Record<string, AutoDownloadSubscription> = {}
   const watchProgress: Record<string, unknown> = {}
   const files = new Map<string, string>()
 
@@ -339,6 +342,17 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     if (t.downloaded) downloadedAnime[t.id] = record(t.id, t.downloaded)
     if (t.library) library[t.id] = record(t.id, t.library)
     if (t.recent) recentAnimeMeta[t.id] = record(t.id, t.recent)
+    if (t.subscribed !== undefined) {
+      autoDownloadSubscriptions[t.id] = {
+        animeId: t.id,
+        malId: t.id * 10,
+        animeName: t.subscribed,
+        subscribedAt: 0,
+        lastEnqueuedEpisodeInt: 0,
+        lastCheckedAt: 0,
+        initialEpisodesAired: 0
+      }
+    }
     if (t.cache !== undefined) {
       animeCache[t.id] = {
         animeDetail:
@@ -456,6 +470,7 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
     library,
     animeCache,
     recentAnimeMeta,
+    autoDownloadSubscriptions,
     watchProgress,
     priorityAnimeIds: [],
     autoCleanupSnoozedAnimeIds: {},

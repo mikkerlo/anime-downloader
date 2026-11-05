@@ -261,6 +261,101 @@ describe('titles with no downloadedAnime record (#655)', () => {
     expect(copied).toHaveLength(1)
     expect(copied[0].split(path.sep)[0]).toBe('Old Name')
   })
+
+  // #676: auto-downloads land under the subscription's `animeName`, which no
+  // record holds once every record is renamed.
+  const subscribe = (id: number, animeName: string): void => {
+    env.store.set('autoDownloadSubscriptions', {
+      [id]: {
+        animeId: id,
+        malId: id * 10,
+        animeName,
+        subscribedAt: 0,
+        lastEnqueuedEpisodeInt: 0,
+        lastCheckedAt: 0,
+        initialEpisodesAired: 0
+      } satisfies AutoDownloadSubscription
+    })
+  }
+  const cachedAs = (id: number, romaji: string, eps: string[]): void => {
+    env.store.set('animeCache', {
+      [id]: {
+        animeDetail: {
+          ...record(id, romaji),
+          episodes: eps.map((n) => ({
+            id: id * 100 + Number(n),
+            episodeInt: n,
+            episodeFull: `${n} серия`,
+            episodeType: 'tv',
+            isActive: 1
+          }))
+        }
+      }
+    })
+  }
+  const copiedTops = async (keys: string[]): Promise<string[]> => {
+    const r = await env.svc.start({ selection: sel(...keys), target: env.drive, name: 'Lib' })
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.job.missing).toBe(0)
+    await env.svc.settled(r.job.jobId)
+    return Object.keys(scan(path.join(env.drive, 'Lib')))
+      .filter((p) => !p.startsWith(LIBRARY_DIR))
+      .map((p) => p.split(path.sep)[0])
+      .sort()
+  }
+
+  it('a record-less title auto-downloaded under its subscription name, every record renamed since (#676): ready, and exported under the subscription folder', async () => {
+    env = makeExportEnv()
+    const old = env.addEpisode({
+      animeId: 9,
+      title: 'Old Name',
+      episodeInt: '1',
+      translationId: 91
+    })
+    dropRecord(9)
+    env.store.set('recentAnimeMeta', { 9: record(9, 'New Name') })
+    cachedAs(9, 'New Name', ['1'])
+    subscribe(9, 'Old Name')
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles).toHaveLength(1)
+    expect(plan.titles[0]).toMatchObject({ animeId: 9, name: 'New Name', notDownloaded: [] })
+    expect(plan.titles[0].translations.flatMap((t) => t.episodes)).toEqual([
+      expect.objectContaining({ key: old.key, state: 'ready', size: fs.statSync(old.video).size })
+    ])
+
+    expect(await copiedTops([old.key])).toEqual(['Old Name'])
+  })
+
+  it('a recorded title renamed since: an episode under the subscription name and one under the record name are both ready, each exported under its own folder (#676)', async () => {
+    env = makeExportEnv()
+    const old = env.addEpisode({
+      animeId: 9,
+      title: 'Old Name',
+      episodeInt: '1',
+      translationId: 91
+    })
+    const now = env.addEpisode({
+      animeId: 9,
+      title: 'New Name',
+      episodeInt: '2',
+      translationId: 91
+    })
+    env.store.set('downloadedAnime', { 9: record(9, 'New Name') })
+    env.store.set('recentAnimeMeta', { 9: record(9, 'New Name') })
+    cachedAs(9, 'New Name', ['1', '2'])
+    subscribe(9, 'Old Name')
+
+    const plan = await env.svc.plan({ animeIds: null, target: null, name: '' })
+    expect(plan.titles).toHaveLength(1)
+    expect(plan.titles[0]).toMatchObject({ animeId: 9, name: 'New Name', notDownloaded: [] })
+    expect(plan.titles[0].translations.flatMap((t) => t.episodes)).toEqual([
+      expect.objectContaining({ key: old.key, state: 'ready', size: fs.statSync(old.video).size }),
+      expect.objectContaining({ key: now.key, state: 'ready', size: fs.statSync(now.video).size })
+    ])
+
+    expect(await copiedTops([old.key, now.key])).toEqual(['New Name', 'Old Name'])
+  })
 })
 
 describe('the target table', () => {

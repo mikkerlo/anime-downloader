@@ -1496,7 +1496,8 @@ test's author had in mind. #655 and #657 were both states no test built.
 - **A world is one PC.** `buildWorld(spec)` in `test/helpers/offline-world.ts`
   writes temp hot and cold roots with the episode files the spec declares, and
   a `makeHarness` / `InMemoryStorage` store with `downloadedEpisodes`,
-  `downloadedAnime`, `library`, `animeCache`, `recentAnimeMeta` and
+  `downloadedAnime`, `library`, `animeCache`, `recentAnimeMeta`,
+  `autoDownloadSubscriptions` (a title's `subscribed`, as a full entry) and
   `watchProgress`. Over it run the real cold-storage, anime-cache and
   attached-library services and the cache scope. A spec with a `library`
   copies the checked-in fixture library into the world's root, and `ready()`
@@ -1541,7 +1542,8 @@ test's author had in mind. #655 and #657 were both states no test built.
   `getAnimeName`) finds that entry's file; for an attached library's item that
   step 5 counts ok, the drive's file or this PC's copy of it. O2: no recorded
   entry with its file on disk, no record-less entry whose file is on disk
-  under one of the title's names (from any record the store holds for it),
+  under one of the title's names (from any record the store holds for it,
+  or its auto-download subscription name, the folder it lands in; #676),
   and no item with its file on the drive, is skipped silently, except a
   deleted title's leftovers. O3: a deleted title's entries get no line, no
   count and no export row, before and after a restart's reconcile. O4: an

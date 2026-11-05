@@ -65,7 +65,10 @@ function onDisk(w: World, key: string): boolean {
   return file !== undefined && fs.existsSync(file)
 }
 
-/** The folders the title's names give, from every record the store holds for it. */
+/**
+ * The folders the title's names give, from every record the store holds for
+ * it, and its auto-download subscription's `animeName` (#676).
+ */
 function heldFolders(w: World, id: number): Set<string> {
   const of = (key: string): unknown =>
     (w.store.get(key) as Record<string, unknown> | undefined)?.[id]
@@ -82,6 +85,8 @@ function heldFolders(w: World, id: number): Set<string> {
       if (n) out.add(sanitizeFilename(n))
     }
   }
+  const sub = of('autoDownloadSubscriptions') as AutoDownloadSubscription | undefined
+  if (sub?.animeName) out.add(sanitizeFilename(sub.animeName))
   return out
 }
 

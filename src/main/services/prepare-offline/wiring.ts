@@ -11,7 +11,7 @@ import type { DownloadManager } from '../../download-manager'
 import type { SmotretApi } from '../../smotret-api'
 import type { AnimeCacheService } from '../anime-cache'
 import type { ColdStorageService } from '../cold-storage'
-import { animeRecordsFrom, playerRecordFrom } from '../../lib/anime-record'
+import { animeRecordsFrom, playerRecordFrom, subscriptionNameFrom } from '../../lib/anime-record'
 import type { probeDuration as probeDurationFn } from '../../lib/probe-duration'
 import { cachableIdsFrom, type MetadataStepDeps } from './steps/metadata'
 import type { LocalIntegrityStepDeps } from './steps/local-integrity'
@@ -39,6 +39,7 @@ export function localIntegrityDeps(w: LocalIntegrityWiring): LocalIntegrityStepD
     downloadedAnime: () => store.get('downloadedAnime') as Record<string, AnimeSearchResult>,
     animeRecords: (id) => animeRecordsFrom(store, id),
     playerRecord: (id) => playerRecordFrom(store, id),
+    subscriptionName: (id) => subscriptionNameFrom(store, id),
     displayName: w.getDisplayName,
     sanitizeFilename: w.sanitizeFilename,
     roots: () => {

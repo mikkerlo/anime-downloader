@@ -16,7 +16,7 @@ import {
   type ExportMergeChoice
 } from '@shared/shared-library-export'
 import type { MergeStatus } from '../../download-manager'
-import { animeRecordsFrom } from '../../lib/anime-record'
+import { animeRecordsFrom, subscriptionNameFrom } from '../../lib/anime-record'
 import type { FileCheckResult } from '../../lib/episode-file-scan'
 import type { DownloadedEpisodesMap } from '../../lib/downloaded-episodes'
 import { CAPS, itemKey } from '../../lib/shared-library/format'
@@ -186,6 +186,7 @@ export function createSharedLibraryExportService(
     downloadedEpisodes: () => get<DownloadedEpisodesMap>('downloadedEpisodes') ?? {},
     anime: animeRecord,
     records: animeRecords,
+    subscriptionName: (id) => subscriptionNameFrom(deps.store, id),
     hasDownloadedRecord: (id) => !!get<Record<string, unknown>>('downloadedAnime')?.[id],
     detail,
     scanEpisodeFiles: deps.scanEpisodeFiles,

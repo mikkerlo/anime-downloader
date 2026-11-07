@@ -84,6 +84,7 @@ import { createMountCandidates, mountParents } from './lib/shared-library/mount-
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
+import { windowIconPath } from './window-icon'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -908,10 +909,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    icon: join(
-      __dirname,
-      process.platform === 'win32' ? '../../resources/icon.ico' : '../../resources/icon.png'
-    ),
+    icon: windowIconPath(__dirname, process.platform),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

@@ -13,6 +13,7 @@ import { fitsFreeSpace, requiredBytes } from '@shared/shared-library-export'
 import { playerRecordFrom } from '../../lib/anime-record'
 import { persistDownloadedEpisode } from '../../lib/downloaded-episodes'
 import { parseEpisodeFromFilename } from '../../lib/filename'
+import { isImageBytes } from '../../lib/image-signature'
 import { nodeFs, writeSmallFile, type ExportFs } from '../../lib/shared-library/copy'
 import { itemKey } from '../../lib/shared-library/format'
 import {
@@ -408,7 +409,11 @@ export function createSharedLibraryImportService(
     deps.store.set('animeCache', { ...cache, [id]: entry })
   }
 
-  /** The drive's `posters/<animeId>.jpg` into the poster cache, `realpath`- and size-checked. */
+  /**
+   * The drive's `posters/<animeId>.jpg` into the poster cache, `realpath`- and
+   * size-checked; not an image (a pre-#684 export can carry a "site moved"
+   * page) means no copy.
+   */
   async function copyPoster(root: string, animeId: number, dest: string): Promise<boolean> {
     const rel = posterPath(animeId)
     if (!rel) return false
@@ -418,7 +423,7 @@ export function createSharedLibraryImportService(
       const st = await fsp.stat(r.path)
       if (!st.isFile() || st.size > ATTACHED_POSTER_MAX_BYTES) return false
       const bytes = await fsp.readFile(r.path)
-      if (bytes.length > ATTACHED_POSTER_MAX_BYTES) return false
+      if (bytes.length > ATTACHED_POSTER_MAX_BYTES || !isImageBytes(bytes)) return false
       await fsp.mkdir(posterDir, { recursive: true })
       await writeSmallFile(xfs, dest, bytes)
       return true

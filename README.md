@@ -4,7 +4,7 @@
 
 # Anime DL
 
-**A modern desktop app to download, organize, and watch anime from [smotret-anime.ru](https://smotret-anime.ru) (anime365).**
+**A modern desktop app to download, organize, and watch anime from [smotret-anime.app](https://smotret-anime.app) (anime365).**
 
 <p>
   <a href="https://github.com/mikkerlo/anime-downloader/releases/latest"><img src="https://img.shields.io/github/v/release/mikkerlo/anime-downloader?style=flat-square" alt="Latest release" /></a>
@@ -124,7 +124,7 @@ Builds are produced automatically by CI for every release.
 ## Quick Start
 
 1. Install and launch the app.
-2. Open **Settings › General** and paste your **smotret-anime.ru API token** (required to download and stream episodes).
+2. Open **Settings › General** and paste your **Anime 365 (smotret-anime.app) API token** (required to download and stream episodes).
 3. On first run, ffmpeg/ffprobe are downloaded automatically to the app-data directory — nothing to install.
 4. Search for an anime, choose episodes and a translation, then download or play directly.
 
@@ -177,7 +177,7 @@ Issues and pull requests are welcome. The [issues labelled **Ready for Implement
 
 ## Acknowledgements
 
-- [smotret-anime.ru / anime365](https://smotret-anime.ru) — catalog and streaming source
+- [smotret-anime.app / anime365](https://smotret-anime.app) — catalog and streaming source
 - [Shikimori](https://shikimori.one) — watchlist sync
 - [Anime4K](https://github.com/bloc97/Anime4K) — real-time upscaling shaders
 - [SubtitlesOctopus](https://github.com/libass/JavascriptSubtitlesOctopus) (`libass-wasm`) / [libass](https://github.com/libass/libass) — subtitle rendering

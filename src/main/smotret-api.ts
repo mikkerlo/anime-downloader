@@ -1,4 +1,5 @@
-import { smotretApiBase } from './lib/api-bases'
+import { rewriteLegacySmotretUrl, smotretApiBase, smotretOrigin } from './lib/api-bases'
+import { isImageBytes } from './lib/image-signature'
 import { fetchWithTimeout } from './lib/net'
 
 const USER_AGENT = 'smotret-anime-dl'
@@ -195,7 +196,7 @@ export class SmotretApi {
   getSubtitlesUrl(translationId: number): string {
     const token = this.getToken()
     return (
-      `https://smotret-anime.ru/translations/ass/${translationId}?download=1` +
+      `${smotretOrigin()}/translations/ass/${translationId}?download=1` +
       (token ? `&access_token=${token}` : '')
     )
   }
@@ -203,7 +204,7 @@ export class SmotretApi {
   getFallbackVideoUrl(translationId: number, height: number): string {
     const token = this.getToken()
     return (
-      `https://smotret-anime.ru/translations/mp4/${translationId}?format=mp4&height=${height}` +
+      `${smotretOrigin()}/translations/mp4/${translationId}?format=mp4&height=${height}` +
       (token ? `&access_token=${token}` : '')
     )
   }
@@ -219,14 +220,20 @@ export class SmotretApi {
     }
   }
 
+  /** The image bytes, or `null` for anything that is not an image (#684). */
   async fetchPoster(posterUrl: string): Promise<Buffer | null> {
     if (!posterUrl) return null
     try {
-      const response = await fetchWithTimeout(posterUrl, {
+      const response = await fetchWithTimeout(rewriteLegacySmotretUrl(posterUrl) ?? posterUrl, {
         headers: { 'User-Agent': USER_AGENT }
       })
       if (!response.ok || !response.body) return null
-      return Buffer.from(await response.arrayBuffer())
+      if (!response.headers.get('content-type')?.toLowerCase().startsWith('image/')) {
+        await response.body.cancel().catch(() => {})
+        return null
+      }
+      const bytes = Buffer.from(await response.arrayBuffer())
+      return isImageBytes(bytes) ? bytes : null
     } catch {
       return null
     }

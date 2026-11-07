@@ -659,6 +659,8 @@ describe('SearchView — a title on this PC and on a drive asks for the bare pos
     expect(src()).toBe('anime-poster://7')
   })
 
+  // A second error, on the remote URL, ends on the placeholder (#684), never
+  // back on the bare form.
   it('an error on the bare form falls back to the remote URL once, and stays there', async () => {
     const { wrapper, src } = await posterOf([local(7, ['starred', stick])])
     const img = (): ReturnType<VueWrapper['find']> =>
@@ -667,6 +669,9 @@ describe('SearchView — a title on this PC and on a drive asks for the bare pos
     await img().trigger('error')
     expect(src()).toBe(REMOTE)
     await img().trigger('error')
-    expect(src()).toBe(REMOTE)
+    expect(img().exists()).toBe(false)
+    expect(
+      wrapper.find('[data-testid="local-card"] [data-testid="poster-fallback"]').exists()
+    ).toBe(true)
   })
 })

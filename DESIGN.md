@@ -1,6 +1,6 @@
 # Anime DL App — Design Document
 
-Electron + Vue 3 + TypeScript desktop app for downloading anime from smotret-anime.ru.
+Electron + Vue 3 + TypeScript desktop app for downloading anime from smotret-anime.app (Anime 365; formerly smotret-anime.ru).
 
 This document is an index. Each subsystem lives in its own page under [`docs/`](./docs/) so it can be read and updated independently.
 
@@ -22,7 +22,7 @@ This document is an index. Each subsystem lives in its own page under [`docs/`](
 | Watch Together (Syncplay) | [docs/syncplay.md](./docs/syncplay.md) |
 | FFmpeg merge codecs and progress | [docs/ffmpeg.md](./docs/ffmpeg.md) |
 | Local OP/ED skip detection (Chromaprint) | [docs/skip-detection.md](./docs/skip-detection.md) |
-| smotret-anime.ru API endpoints | [docs/smotret-api.md](./docs/smotret-api.md) |
+| smotret-anime.app API endpoints, the host and the legacy `.ru` redirect | [docs/smotret-api.md](./docs/smotret-api.md) |
 | Build + packaging | [docs/build.md](./docs/build.md) |
 | Testing: runners, layers, structural source-scanning tests, IPC contract guard, coverage thresholds | [docs/testing.md](./docs/testing.md) |
 | Renderer architecture — component layout, Pinia stores, composables, path aliases | [docs/renderer.md](./docs/renderer.md) |

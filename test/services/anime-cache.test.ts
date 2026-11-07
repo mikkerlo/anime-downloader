@@ -8,7 +8,7 @@ import {
   type AnimeCacheService
 } from '../../src/main/services/anime-cache'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
-import type { AnimeDetail, EpisodeDetail } from '../../src/main/smotret-api'
+import { SmotretApi, type AnimeDetail, type EpisodeDetail } from '../../src/main/smotret-api'
 
 function mkDetail(): AnimeDetail {
   return { posterUrl: 'https://example/a.jpg', posterUrlSmall: '' } as unknown as AnimeDetail
@@ -264,5 +264,58 @@ describe('AnimeCacheService', () => {
   it('isCachable is the injected predicate', () => {
     expect(svc.isCachable(1)).toBe(true)
     expect(svc.isCachable(99)).toBe(false)
+  })
+
+  // #684: smotret's `.ru` hosts answered poster URLs with a 200 HTML page, which
+  // the old fetchPoster cached as `<id>.jpg`, and nothing ever fetched it again.
+  describe('a "site moved" page in place of a poster (#684)', () => {
+    const HTML = '<!DOCTYPE html><html><head><title>Адрес сайта изменился! - Anime 365'
+    const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])
+
+    it('purgeNonImagePosters deletes it and clears posterCached, per entry', () => {
+      const cached = (): AnimeCacheEntry => ({ ...emptyEntry(), posterCached: true })
+      store.set('animeCache', { '7': cached(), '8': cached() })
+      fs.mkdirSync(svc.getPosterCacheDir(), { recursive: true })
+      fs.writeFileSync(svc.getPosterCachePath(7), HTML)
+      fs.writeFileSync(svc.getPosterCachePath(8), JPEG)
+      // Unreadable as a file: kept, and the sweep does not throw.
+      fs.mkdirSync(path.join(svc.getPosterCacheDir(), '9.jpg'))
+      const entry8 = structuredClone(svc.getEntry(8))
+      const setSpy = vi.spyOn(store, 'set')
+
+      svc.purgeNonImagePosters()
+
+      expect(svc.getCachedPosterIds().sort((a, b) => a - b)).toEqual([8, 9])
+      expect(svc.getEntry(7)?.posterCached).toBe(false)
+      expect(svc.getEntry(8)).toEqual(entry8)
+      expect(fs.readFileSync(svc.getPosterCachePath(8))).toEqual(JPEG)
+      // Through `setPosterCached`'s sub-key write, never the whole map.
+      expect(setSpy.mock.calls.map((c) => c[0])).toEqual(['animeCache.7'])
+    })
+
+    it('cachePosterImage through the real fetchPoster caches nothing for it', async () => {
+      const realFetch = globalThis.fetch
+      const requested: string[] = []
+      globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+        requested.push(String(url))
+        return new Response(HTML, { headers: { 'content-type': 'text/html; charset=UTF-8' } })
+      })
+      try {
+        const api = new SmotretApi(() => '')
+        const real = createAnimeCacheService({
+          store,
+          userDataDir: tmpDir,
+          fetchPoster: (u) => api.fetchPoster(u),
+          isCachable: () => true
+        })
+        await expect(
+          real.cachePosterImage(7, 'https://smotret-anime.ru/posters/7.1234.200x600.0.jpg')
+        ).resolves.toBe(false)
+        expect(fs.existsSync(real.getPosterCachePath(7))).toBe(false)
+        expect(requested).toEqual(['https://smotret-anime.app/posters/7.1234.200x600.0.jpg'])
+      } finally {
+        globalThis.fetch = realFetch
+      }
+    })
   })
 })

@@ -741,6 +741,20 @@ describe('the meta snapshot on re-export', () => {
     expect(fs.existsSync(path.join(root, LIBRARY_DIR, 'posters', '8.jpg'))).toBe(false)
   })
 
+  // #684: a poster cached before the fix can be smotret's "site moved" page.
+  it('skips a cached poster that is not an image, and still writes the meta', async () => {
+    env = makeExportEnv()
+    const root = path.join(env.drive, 'Lib')
+    await seedLibrary(root, { libraryId: OTHER_LIB, name: 'Lib' })
+    const poster = path.join(env.userData, 'poster.jpg')
+    fs.writeFileSync(poster, '<!DOCTYPE html><html><head><title>Адрес сайта изменился! - Anime 365')
+    expect(await writeTitleSnapshot(nodeFs, root, buildMeta(7, detail, null), poster)).toBe(
+      'written'
+    )
+    expect(fs.existsSync(path.join(root, LIBRARY_DIR, 'posters', '7.jpg'))).toBe(false)
+    expect((await readMeta(root, 7)).status).toBe('ok')
+  })
+
   it('leaves a meta file over its 1 MB cap alone', async () => {
     env = makeExportEnv()
     const root = path.join(env.drive, 'Lib')

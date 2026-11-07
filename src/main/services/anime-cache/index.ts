@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { IMAGE_SIGNATURE_BYTES, isImageBytes } from '../../lib/image-signature'
 import type { StorageService } from '../../store/types'
 import type { AnimeDetail, EpisodeDetail } from '../../smotret-api'
 
@@ -43,6 +44,7 @@ export interface AnimeCacheService {
   getCachedPosterIds(): number[]
   isCachable(animeId: number): boolean
   cleanupStale(): void
+  purgeNonImagePosters(): void
 }
 
 export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCacheService {
@@ -184,6 +186,38 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     return ids
   }
 
+  function readHead(file: string): Buffer | null {
+    let fd: number | undefined
+    try {
+      fd = fs.openSync(file, 'r')
+      const head = Buffer.alloc(IMAGE_SIGNATURE_BYTES)
+      return head.subarray(0, fs.readSync(fd, head, 0, head.length, 0))
+    } catch {
+      return null
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd)
+    }
+  }
+
+  /**
+   * Deletes the cached posters that are not images — the "site moved" page a
+   * legacy host served as a poster (#684) — so the next detail load fetches
+   * them again. A file that cannot be read is kept.
+   */
+  function purgeNonImagePosters(): void {
+    for (const animeId of getCachedPosterIds()) {
+      const file = getPosterCachePath(animeId)
+      const head = readHead(file)
+      if (!head || isImageBytes(head)) continue
+      try {
+        fs.unlinkSync(file)
+      } catch {
+        continue
+      }
+      setPosterCached(animeId, false)
+    }
+  }
+
   function cleanupStale(): void {
     const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
     let changed = false
@@ -217,6 +251,7 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     getPosterCachePath,
     getCachedPosterIds,
     isCachable,
-    cleanupStale
+    cleanupStale,
+    purgeNonImagePosters
   }
 }

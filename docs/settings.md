@@ -2,7 +2,7 @@
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `token` | string | `''` | smotret-anime.ru API token |
+| `token` | string | `''` | Anime 365 (smotret-anime.app) API token |
 | `translationType` | string | `'subRu'` | Default translation filter |
 | `downloadDir` | string | `''` | Custom download path (falls back to Downloads/anime-dl). `''` means unset on every read path, which is also what `storage:clear-root` writes to retire a root that is gone (#440) — note `get-setting` *resolves* this key through `getDownloadDir()` and so never answers `''`; read `storage:get-missing-root` for the raw value. Written by `download:pick-dir`, which re-syncs `DownloadManager` through `getDownloadDir()` rather than with the picked path (#443) and **refuses to write at all** while the manager has root-bound work and the pick would move the effective root (#447) — so the renderer no longer echoes this key back through `set-setting` after a pick. **Not written through `set-setting`** (#450): that channel now throws for this key, naming `download:pick-dir`, because the re-sync and the guard are the half a bare store write skips. Still *read* with `get-setting` (resolved, as above) |
 | `library` | object | `{}` | Map of starred anime by ID |

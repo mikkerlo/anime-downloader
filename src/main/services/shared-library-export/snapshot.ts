@@ -9,6 +9,7 @@
 // 1 MB cap is left alone.
 
 import * as path from 'path'
+import { isImageBytes } from '../../lib/image-signature'
 import { META_SCHEMA, carryUnknown, serializeMeta } from '../../lib/shared-library/format'
 import { posterPath } from '../../lib/shared-library/paths'
 import { LIBRARY_DIR, check, readMeta } from '../../lib/shared-library/read'
@@ -134,7 +135,8 @@ export async function writeTitleSnapshot(
     } catch (err) {
       if (errnoOf(err) !== 'ENOENT') throw err
     }
-    if (bytes) {
+    // A cached "site moved" page (#684) is not a poster: the title goes without one.
+    if (bytes && isImageBytes(bytes)) {
       await mkdirQuiet(xfs, path.join(lib, 'posters'))
       await writeSmallFile(xfs, path.join(lib, ...rel.split('/')), bytes)
     }

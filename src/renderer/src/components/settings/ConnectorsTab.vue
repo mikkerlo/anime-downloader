@@ -190,8 +190,8 @@ watch(token, (val) => {
 <template>
   <div>
     <SettingsGroup
-      title="smotret-anime.ru"
-      desc="API token for smotret-anime.ru. Required for downloading episodes."
+      title="Anime 365 (smotret-anime.app)"
+      desc="API token for Anime 365 (smotret-anime.app). Required for downloading episodes."
     >
       <SettingsRow stack>
         <div class="token-row">

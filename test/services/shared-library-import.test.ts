@@ -239,6 +239,28 @@ describe('copying', () => {
     expect(writes()).toEqual([])
     expect(mtimeSnapshot(env.drive)).toEqual(before)
   })
+
+  // #684: a library exported before the fix can carry smotret's "site moved"
+  // page as `posters/<id>.jpg`; it must not land in this PC's poster cache.
+  it('a drive poster that is not an image is not copied', async () => {
+    env = makeImportEnv(
+      {},
+      {
+        editDrive: (d) =>
+          fs.writeFileSync(
+            path.join(d, '.anime-dl', 'posters', '101.jpg'),
+            '<!DOCTYPE html><html><head><title>Адрес сайта изменился! - Anime 365'
+          )
+      }
+    )
+    const j = await startOk(env, [FRIEREN])
+    await env.svc.settled(j.jobId)
+    expect(job(env).status).toBe('completed')
+    expect(fs.existsSync(path.join(env.userData, 'poster-cache', '101.jpg'))).toBe(false)
+    expect(read<Record<string, { posterCached: boolean }>>('animeCache')['101'].posterCached).toBe(
+      false
+    )
+  })
 })
 
 type DownloadedEpisodeLike = {

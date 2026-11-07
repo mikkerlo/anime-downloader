@@ -216,18 +216,20 @@ describe('SmotretApi — fixture replay', () => {
   describe('URL builders', () => {
     it('getSubtitlesUrl appends ?download=1 and the token', () => {
       const url = makeApi('abc').getSubtitlesUrl(1001)
-      expect(url).toBe('https://smotret-anime.ru/translations/ass/1001?download=1&access_token=abc')
+      expect(url).toBe(
+        'https://smotret-anime.app/translations/ass/1001?download=1&access_token=abc'
+      )
     })
 
     it('getSubtitlesUrl omits the token when empty', () => {
       const url = makeApi('').getSubtitlesUrl(1001)
-      expect(url).toBe('https://smotret-anime.ru/translations/ass/1001?download=1')
+      expect(url).toBe('https://smotret-anime.app/translations/ass/1001?download=1')
     })
 
     it('getFallbackVideoUrl encodes the height and token', () => {
       const url = makeApi('xyz').getFallbackVideoUrl(2002, 720)
       expect(url).toBe(
-        'https://smotret-anime.ru/translations/mp4/2002?format=mp4&height=720&access_token=xyz'
+        'https://smotret-anime.app/translations/mp4/2002?format=mp4&height=720&access_token=xyz'
       )
     })
   })
@@ -364,6 +366,50 @@ describe('SmotretApi — fixture replay', () => {
     it('returns the body when it arrives', async () => {
       global.fetch = vi.fn(async () => new Response('[Script Info]\n'))
       expect(await makeApi().fetchSubtitleContent(1)).toBe('[Script Info]\n')
+    })
+  })
+
+  // smotret's `.ru` hosts answer a poster URL with a 200 `text/html` "site
+  // moved" page; it must never reach the poster cache.
+  describe('fetchPoster (#684)', () => {
+    const RU_POSTER = 'https://smotret-anime.ru/posters/1234.5678.200x600.0.jpg'
+    const APP_POSTER = 'https://smotret-anime.app/posters/1234.5678.200x600.0.jpg'
+    const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])
+    const INTERSTITIAL = '<!DOCTYPE html><html><head><title>Адрес сайта изменился! - Anime 365'
+
+    function serve(body: BodyInit, contentType: string): ReturnType<typeof vi.fn> {
+      const stub = vi.fn(
+        async () => new Response(body, { status: 200, headers: { 'content-type': contentType } })
+      )
+      global.fetch = stub
+      return stub
+    }
+
+    it('(a) a 200 text/html page is not a poster', async () => {
+      serve(INTERSTITIAL, 'text/html; charset=UTF-8')
+      expect(await makeApi().fetchPoster(APP_POSTER)).toBeNull()
+    })
+
+    it('(b) a 200 image/jpeg whose bytes are not an image is not a poster', async () => {
+      serve(INTERSTITIAL, 'image/jpeg')
+      expect(await makeApi().fetchPoster(APP_POSTER)).toBeNull()
+    })
+
+    it('(b2) a non-image Content-Type is refused even when the bytes look like a JPEG', async () => {
+      serve(new Uint8Array(JPEG), 'text/html')
+      expect(await makeApi().fetchPoster(APP_POSTER)).toBeNull()
+    })
+
+    it('(c) a stored .ru poster URL is fetched on smotret-anime.app', async () => {
+      const stub = serve(new Uint8Array(JPEG), 'image/jpeg')
+      await makeApi().fetchPoster(RU_POSTER)
+      expect(stub).toHaveBeenCalledTimes(1)
+      expect(String(stub.mock.calls[0][0])).toBe(APP_POSTER)
+    })
+
+    it('(d) a 200 image/jpeg with JPEG bytes is returned as is', async () => {
+      serve(new Uint8Array(JPEG), 'image/jpeg')
+      expect(await makeApi().fetchPoster(APP_POSTER)).toEqual(JPEG)
     })
   })
 })

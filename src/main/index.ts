@@ -30,7 +30,12 @@ import { createEpisodeCompletionHandlers, isMergeExpected } from './lib/episode-
 import { createFfmpegStatus } from './lib/ffmpeg-status'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import type { ParkedQueues } from './lib/shikimori-queue'
-import { applyApiBaseOverrides, shikimoriOrigin, smotretApiBase } from './lib/api-bases'
+import {
+  applyApiBaseOverrides,
+  rewriteLegacySmotretUrl,
+  shikimoriOrigin,
+  smotretApiBase
+} from './lib/api-bases'
 import { setNetworkObserver, setOfflineCheck } from './lib/net'
 import { installOfflineRequestGate } from './lib/offline-request-gate'
 import { createOfflineService } from './services/offline'
@@ -940,10 +945,14 @@ async function bootstrap(): Promise<void> {
   // Satisfy Shikimori's image hotlink protection so friend avatars (loaded by
   // the renderer straight from shikimori.io) render instead of coming back blank.
   installShikimoriReferer(session.defaultSession)
+  // Must stay the session's only `onBeforeRequest` listener: Electron keeps the
+  // last one, so a second would drop both the offline gate and the redirect of
+  // stored legacy smotret poster URLs (#684).
   installOfflineRequestGate(
     session.defaultSession,
     isOffline,
-    is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+    is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined,
+    rewriteLegacySmotretUrl
   )
 
   // Handle anime-video:// protocol for local video playback with Range request support.
@@ -968,6 +977,7 @@ async function bootstrap(): Promise<void> {
   )
 
   animeCacheService.cleanupStale()
+  animeCacheService.purgeNonImagePosters()
   store.migrateWatchProgressV2()
   store.ensureInstallId()
   // The merge subscribes before the startup read, whose availability

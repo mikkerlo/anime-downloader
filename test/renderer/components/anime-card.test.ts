@@ -105,3 +105,41 @@ describe('AnimeCard — poster source (#570)', () => {
     expect(wrapper.find('img.poster').attributes('src')).toBe('poster.jpg')
   })
 })
+
+// #684: a remote poster that fails too (a host serving a "site moved" page)
+// left a broken image with its alt text spilling over the card.
+describe('AnimeCard — poster placeholder (#684)', () => {
+  it('a remote poster that fails shows the placeholder instead of the <img>', async () => {
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    await wrapper.find('img.poster').trigger('error')
+    expect(wrapper.find('[data-testid=poster-fallback]').exists()).toBe(true)
+    expect(wrapper.find('img.poster').exists()).toBe(false)
+  })
+
+  it('local, then remote failing ends on the placeholder', async () => {
+    useLibraryStore().posterIds = new Set([1])
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    await wrapper.find('img.poster').trigger('error')
+    expect(wrapper.find('[data-testid=poster-fallback]').exists()).toBe(false)
+    await wrapper.find('img.poster').trigger('error')
+    expect(wrapper.find('[data-testid=poster-fallback]').exists()).toBe(true)
+  })
+
+  it('the <img> comes back once the poster is cached', async () => {
+    const store = useLibraryStore()
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    await wrapper.find('img.poster').trigger('error')
+    expect(wrapper.find('img.poster').exists()).toBe(false)
+    store.posterIds = new Set([...store.posterIds, 1])
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid=poster-fallback]').exists()).toBe(false)
+    expect(wrapper.find('img.poster').attributes('src')).toBe('anime-poster://1')
+  })
+
+  it('the <img> comes back for a new remote URL of the same title', async () => {
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    await wrapper.find('img.poster').trigger('error')
+    await wrapper.setProps({ anime: { ...anime, posterUrlSmall: 'poster-new.jpg' } })
+    expect(wrapper.find('img.poster').attributes('src')).toBe('poster-new.jpg')
+  })
+})

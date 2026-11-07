@@ -3,13 +3,14 @@
 // through Chromium's network stack — so the session cancels them while the
 // app is offline. Local schemes (`anime-video:`, `file:`, `devtools:`) never
 // touch the network, and the electron-vite dev server is the renderer itself.
+// Online, the same listener redirects legacy smotret hosts (#684).
 
 interface GateSession {
   webRequest: {
     onBeforeRequest(
       listener: (
         details: { url: string },
-        callback: (response: { cancel: boolean }) => void
+        callback: (response: { cancel?: boolean; redirectURL?: string }) => void
       ) => void
     ): void
   }
@@ -33,12 +34,23 @@ export function shouldCancelWhileOffline(url: string, devServerUrl?: string): bo
   return true
 }
 
+/**
+ * `redirect` (#684) moves a request that is not cancelled to the URL it
+ * returns; `null` lets it through unchanged. It lives here because Electron
+ * keeps only the last `onBeforeRequest` listener per session.
+ */
 export function installOfflineRequestGate(
   session: GateSession,
   isOffline: () => boolean,
-  devServerUrl?: string
+  devServerUrl?: string,
+  redirect?: (url: string) => string | null
 ): void {
   session.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: isOffline() && shouldCancelWhileOffline(details.url, devServerUrl) })
+    if (isOffline() && shouldCancelWhileOffline(details.url, devServerUrl)) {
+      callback({ cancel: true })
+      return
+    }
+    const redirectURL = redirect?.(details.url)
+    callback(redirectURL ? { redirectURL } : { cancel: false })
   })
 }

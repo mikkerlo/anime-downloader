@@ -14,6 +14,14 @@ Dependencies: electron-vite bundles everything except electron-store (excluded f
 
 `build.artifactName` is `Anime-DL-${version}-${arch}.${ext}` for every target except Windows **portable**, which overrides to `…-portable.exe` (`build.portable.artifactName`) — portable and NSIS both produce `.exe`, and without the suffix the second build overwrote the first in `dist/` (#189).
 
+## Runtime icon (#686)
+
+`build.icon` and `win.icon` are build-time inputs only. electron-builder turns them into the exe icon, the `.icns` and the Linux desktop icons, and copies neither file next to the app.
+
+The window icon is loaded at runtime. `createWindow` passes `windowIconPath(__dirname, process.platform)` (`src/main/window-icon.ts`), which resolves `out/main/../../resources/icon.ico` on Windows and `icon.png` elsewhere. In a package that path is inside `app.asar`, and the archive holds only what `build.files` lists. That is why `build.files` names `resources/icon.ico` and `resources/icon.png` next to `out/**/*`. Don't widen them to `resources/**`, which would also pack the README screenshots. A later runtime asset under `resources/` has to be added to `build.files` the same way.
+
+Two checks hold this. `test/window-icon.test.ts` asserts that the path the helper builds is listed in `build.files`. `scripts/check-packaged-icon.mjs` runs after `electron-builder` on all three legs of the `check.yml` build job. It reads the header of every packaged `app.asar` under `dist/` and fails when an icon is missing, or when it finds no archive at all.
+
 ## macOS signing + notarization (#189)
 
 The mac build is signed with a Developer ID Application certificate and notarized so Gatekeeper accepts it and `electron-updater` (Squirrel.Mac) can auto-update. Config lives in `package.json` `build.mac`: `hardenedRuntime` + the Electron JIT entitlements in `build/entitlements.mac.plist` (required or the signed app crashes at launch), `notarize: true`.

@@ -57,8 +57,16 @@ const posterSrc = computed(() =>
       )
 );
 
+// A remote poster that fails too (#684) shows a placeholder until the source
+// changes: a cached copy arrives, or a new URL.
+const remoteFailed = ref(false);
+watch(posterSrc, () => {
+  remoteFailed.value = false;
+});
+
 function onPosterError(): void {
   if (posterSrc.value.startsWith(POSTER_SCHEME)) localFailed.value = true;
+  else remoteFailed.value = true;
 }
 </script>
 
@@ -98,7 +106,9 @@ function onPosterError(): void {
         @click.stop
         @change="emit('toggleSelect', anime)"
       />
+      <div v-if="remoteFailed" class="poster poster-fallback" data-testid="poster-fallback"></div>
       <img
+        v-else
         :src="posterSrc"
         :alt="anime.title"
         class="poster"
@@ -169,6 +179,10 @@ function onPosterError(): void {
 .acard.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent);
+}
+
+.poster-fallback {
+  background: linear-gradient(135deg, var(--surface-2) 0%, var(--bg-deep) 100%);
 }
 
 .acard.unavailable .poster,

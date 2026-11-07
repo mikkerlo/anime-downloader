@@ -44,6 +44,9 @@ import { FIXTURE_LIBRARY_ID, copyFixtureLibrary, mtimeSnapshot } from '../helper
 import { cleanup } from '../helpers/shared-library'
 
 const DAY = 24 * 60 * 60 * 1000
+// A JPEG header, so `fetchPoster` takes the stub's poster for an image (#684).
+const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0])
+const stubPoster = (id: number): Buffer => Buffer.concat([JPEG_MAGIC, Buffer.from(`jpeg-${id}`)])
 
 function ctx(): PrepareStepContext & {
   ticks: { done: number; total: number; message?: string }[]
@@ -231,7 +234,7 @@ function startStub(): Promise<Stub> {
         return
       }
       res.setHeader('content-type', 'image/jpeg')
-      res.end(Buffer.from(`jpeg-${poster[1]}`))
+      res.end(stubPoster(Number(poster[1])))
       return
     }
     res.writeHead(404).end()
@@ -306,7 +309,7 @@ describe('step 3: library metadata (stub smotret server)', () => {
       expect(entry.animeDetail?.id).toBe(id)
       expect(Object.keys(entry.episodes)).toEqual([String(id * 100 + 1)])
       expect(entry.posterCached).toBe(true)
-      expect(fs.readFileSync(r.posterFile(id), 'utf8')).toBe(`jpeg-${id}`)
+      expect(fs.readFileSync(r.posterFile(id))).toEqual(stubPoster(id))
     }
     // 200 days ago is outside S2's scope.
     expect(r.cache.getEntry(4)).toBeNull()
@@ -357,7 +360,7 @@ describe('step 3: library metadata (stub smotret server)', () => {
     })
     expect(fs.existsSync(r.posterFile(2))).toBe(false)
     await r.step.run(ctx())
-    expect(fs.readFileSync(r.posterFile(2), 'utf8')).toBe('jpeg-2')
+    expect(fs.readFileSync(r.posterFile(2))).toEqual(stubPoster(2))
     expect(r.cache.getEntry(2)?.posterCached).toBe(true)
   })
 

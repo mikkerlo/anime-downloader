@@ -20,7 +20,7 @@ Poster + name resolution priority for each row: `library` → `downloadedAnime` 
 ```
 SearchView  -->  window.api.searchAnime(query)
             -->  ipcMain 'search-anime'
-            -->  fetch smotret-anime.ru/api/series/?query=...
+            -->  fetch smotret-anime.app/api/series/?query=...
             <--  AnimeSearchResult[]
             -->  AnimeCard grid
             -->  click card --> AnimeDetailView
@@ -255,6 +255,7 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
     - Periodic persist every 5s while downloads are active
 11. On app start: loadQueue() restores items from queue.json
     - In-progress/queued items restored as paused (URLs expire)
+    - A URL on a legacy smotret host (.ru) moves to smotret-anime.app (#684)
     - Active merges reset to pending
     - .part files resumed via existing Range header logic
 ```

@@ -3,6 +3,7 @@ import {
   installOfflineRequestGate,
   shouldCancelWhileOffline
 } from '../../src/main/lib/offline-request-gate'
+import { rewriteLegacySmotretUrl } from '../../src/main/lib/api-bases'
 
 describe('shouldCancelWhileOffline (#567)', () => {
   it('cancels renderer http(s): posters, avatars, the CDN', () => {
@@ -37,8 +38,12 @@ describe('shouldCancelWhileOffline (#567)', () => {
 })
 
 describe('installOfflineRequestGate', () => {
-  function install(offline: { value: boolean }): (url: string) => { cancel: boolean } {
-    let listener!: (d: { url: string }, cb: (r: { cancel: boolean }) => void) => void
+  type Answer = { cancel?: boolean; redirectURL?: string }
+  function install(
+    offline: { value: boolean },
+    redirect?: (url: string) => string | null
+  ): (url: string) => Answer {
+    let listener!: (d: { url: string }, cb: (r: Answer) => void) => void
     const session = {
       webRequest: {
         onBeforeRequest: vi.fn((l: typeof listener) => {
@@ -46,10 +51,10 @@ describe('installOfflineRequestGate', () => {
         })
       }
     }
-    installOfflineRequestGate(session, () => offline.value)
+    installOfflineRequestGate(session, () => offline.value, undefined, redirect)
     expect(session.webRequest.onBeforeRequest).toHaveBeenCalledTimes(1)
     return (url) => {
-      let response!: { cancel: boolean }
+      let response!: Answer
       listener({ url }, (r) => (response = r))
       return response
     }
@@ -64,5 +69,28 @@ describe('installOfflineRequestGate', () => {
     expect(request('anime-video:///a.mp4')).toEqual({ cancel: false })
     offline.value = false
     expect(request('https://smotret-anime.ru/p.jpg')).toEqual({ cancel: false })
+  })
+
+  // #684: stored `.ru` poster URLs move to the new host in the same listener,
+  // since Electron keeps only the last `onBeforeRequest` per session.
+  describe('with the legacy smotret redirect (#684)', () => {
+    const RU = 'https://smotret-anime.ru/posters/1234.5678.200x600.0.jpg'
+    const APP = 'https://smotret-anime.app/posters/1234.5678.200x600.0.jpg'
+
+    it('online, a .ru poster is redirected to smotret-anime.app', () => {
+      const request = install({ value: false }, rewriteLegacySmotretUrl)
+      expect(request(RU)).toEqual({ redirectURL: APP })
+    })
+
+    it('offline, the same URL is cancelled: cancel wins', () => {
+      const request = install({ value: true }, rewriteLegacySmotretUrl)
+      expect(request(RU)).toEqual({ cancel: true })
+    })
+
+    it('online, a live host or a local scheme passes untouched', () => {
+      const request = install({ value: false }, rewriteLegacySmotretUrl)
+      expect(request(APP)).toEqual({ cancel: false })
+      expect(request('anime-video:///a.mp4')).toEqual({ cancel: false })
+    })
   })
 })

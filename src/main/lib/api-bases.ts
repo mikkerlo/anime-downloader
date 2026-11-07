@@ -3,7 +3,15 @@
 // ignore them.
 import { SHIKIMORI_ORIGIN } from '../../shared/shikimori'
 
-export const SMOTRET_API_BASE = 'https://smotret-anime.ru/api'
+// smotret moved off `.ru` in November 2026 (#684); its `.ru` hosts now answer
+// poster URLs with a "site moved" HTML page.
+export const SMOTRET_ORIGIN = 'https://smotret-anime.app'
+export const SMOTRET_API_BASE = `${SMOTRET_ORIGIN}/api`
+export const LEGACY_SMOTRET_HOSTS: readonly string[] = [
+  'smotret-anime.ru',
+  'smotretanime.ru',
+  'anime-365.ru'
+]
 export const SMOTRET_API_BASE_ENV = 'ANIME_DL_SMOTRET_API_BASE'
 export const SHIKIMORI_ORIGIN_ENV = 'ANIME_DL_SHIKIMORI_ORIGIN'
 
@@ -21,6 +29,27 @@ export function applyApiBaseOverrides(env: NodeJS.ProcessEnv, isPackaged: boolea
 
 export function smotretApiBase(): string {
   return smotretBase
+}
+
+export function smotretOrigin(): string {
+  return SMOTRET_ORIGIN
+}
+
+/**
+ * The same path and query on `smotretOrigin()` for an http(s) URL on a legacy
+ * smotret host (`www.` included); `null` for anything else, live mirrors too.
+ */
+export function rewriteLegacySmotretUrl(url: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  const host = parsed.hostname.replace(/^www\./, '')
+  if (!LEGACY_SMOTRET_HOSTS.includes(host)) return null
+  return `${smotretOrigin()}${parsed.pathname}${parsed.search}${parsed.hash}`
 }
 
 export function shikimoriOrigin(): string {

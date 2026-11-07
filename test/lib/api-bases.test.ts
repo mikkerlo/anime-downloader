@@ -4,6 +4,7 @@ import {
   SMOTRET_API_BASE,
   SMOTRET_API_BASE_ENV,
   applyApiBaseOverrides,
+  rewriteLegacySmotretUrl,
   shikimoriOrigin,
   smotretApiBase
 } from '../../src/main/lib/api-bases'
@@ -41,8 +42,8 @@ afterEach(() => {
 
 describe('API base overrides (#567)', () => {
   it('defaults to the production hosts', () => {
-    expect(smotretApiBase()).toBe('https://smotret-anime.ru/api')
-    expect(SMOTRET_API_BASE).toBe('https://smotret-anime.ru/api')
+    expect(smotretApiBase()).toBe('https://smotret-anime.app/api')
+    expect(SMOTRET_API_BASE).toBe('https://smotret-anime.app/api')
     expect(shikimoriOrigin()).toBe(SHIKIMORI_ORIGIN)
   })
 
@@ -77,5 +78,47 @@ describe('API base overrides (#567)', () => {
     await shikimori.getUser('tok')
     expect(String(stub.mock.calls[0][0])).toMatch(/^http:\/\/127\.0\.0\.1:4002\/api\//)
     expect(shikimori.getAuthUrl()).toMatch(/^http:\/\/127\.0\.0\.1:4002\/oauth\/authorize\?/)
+  })
+})
+
+describe('rewriteLegacySmotretUrl (#684)', () => {
+  it.each([
+    [
+      'https://smotret-anime.ru/posters/1234.5678.200x600.0.jpg',
+      'https://smotret-anime.app/posters/1234.5678.200x600.0.jpg'
+    ],
+    [
+      'https://www.smotret-anime.ru/posters/1234.jpg?v=2',
+      'https://smotret-anime.app/posters/1234.jpg?v=2'
+    ],
+    [
+      'http://smotretanime.ru/translations/ass/42?download=1&access_token=t',
+      'https://smotret-anime.app/translations/ass/42?download=1&access_token=t'
+    ],
+    ['https://www.smotretanime.ru/posters/9.jpg', 'https://smotret-anime.app/posters/9.jpg'],
+    [
+      'https://anime-365.ru/posters/9.jpg?a=1&b=2',
+      'https://smotret-anime.app/posters/9.jpg?a=1&b=2'
+    ],
+    ['https://www.anime-365.ru/posters/9.jpg', 'https://smotret-anime.app/posters/9.jpg'],
+    ['https://SMOTRET-ANIME.RU/posters/9.jpg', 'https://smotret-anime.app/posters/9.jpg']
+  ])('%s → .app', (from, to) => {
+    expect(rewriteLegacySmotretUrl(from)).toBe(to)
+  })
+
+  it.each([
+    'https://smotret-anime.app/posters/9.jpg',
+    'https://smotret-anime.co/posters/9.jpg',
+    'https://smotret-anime.org/catalog/9',
+    'https://shikimori.io/system/animes/original/9.jpg',
+    'https://example.invalid/9.jpg',
+    'https://notsmotret-anime.ru/posters/9.jpg',
+    'https://smotret-anime.ru.example.invalid/posters/9.jpg',
+    'anime-poster://1',
+    'ftp://smotret-anime.ru/posters/9.jpg',
+    'not a url',
+    ''
+  ])('%s → null', (url) => {
+    expect(rewriteLegacySmotretUrl(url)).toBeNull()
   })
 })

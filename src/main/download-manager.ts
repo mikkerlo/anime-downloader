@@ -7,6 +7,7 @@ import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import Ffmpeg from 'fluent-ffmpeg'
 import type { SmotretApi } from './smotret-api'
+import { rewriteLegacySmotretUrl } from './lib/api-bases'
 import { fetchWithTimeout } from './lib/net'
 import { isNetworkError } from './lib/errors'
 import { createListenerSet } from './lib/listener-set'
@@ -500,6 +501,8 @@ export class DownloadManager {
           // Defensive: older queue.json predates animeId/episodeInt on items
           if (typeof item.animeId !== 'number') item.animeId = 0
           if (typeof item.episodeInt !== 'string') item.episodeInt = ''
+          // A subtitle or mp4-fallback URL saved before smotret left `.ru` (#684).
+          if (typeof item.url === 'string') item.url = rewriteLegacySmotretUrl(item.url) ?? item.url
           this.queue.push(item)
         }
       }
@@ -1185,7 +1188,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1904-1909`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1907-1912`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1214,7 +1217,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1900`)
+   * (`src/main/download-manager.ts:1903`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.

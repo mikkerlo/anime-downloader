@@ -6,7 +6,8 @@ import {
   applyApiBaseOverrides,
   rewriteLegacySmotretUrl,
   shikimoriOrigin,
-  smotretApiBase
+  smotretApiBase,
+  smotretOrigin
 } from '../../src/main/lib/api-bases'
 import { SHIKIMORI_ORIGIN } from '../../src/shared/shikimori'
 import { SmotretApi } from '../../src/main/smotret-api'
@@ -70,6 +71,34 @@ describe('API base overrides (#567)', () => {
     const stub = captureFetch({ data: [] })
     await new SmotretApi(() => '').searchAnime('x')
     expect(String(stub.mock.calls[0][0])).toMatch(/^http:\/\/127\.0\.0\.1:4001\/api\/series/)
+  })
+
+  // #685 review: the subtitle and mp4-fallback builders went to the real host
+  // under a stubbed API.
+  it('builds the subtitle and mp4-fallback URLs on the override’s site', () => {
+    applyApiBaseOverrides(STUBS, false)
+    const api = new SmotretApi(() => 'tok')
+    expect(smotretOrigin()).toBe('http://127.0.0.1:4001')
+    expect(api.getSubtitlesUrl(9001)).toBe(
+      'http://127.0.0.1:4001/translations/ass/9001?download=1&access_token=tok'
+    )
+    expect(api.getFallbackVideoUrl(9001, 720)).toBe(
+      'http://127.0.0.1:4001/translations/mp4/9001?format=mp4&height=720&access_token=tok'
+    )
+    expect(rewriteLegacySmotretUrl('https://smotret-anime.ru/posters/9.jpg')).toBe(
+      'http://127.0.0.1:4001/posters/9.jpg'
+    )
+  })
+
+  it('drops /api from an override, takes the origin of any other, and ignores it packaged', () => {
+    applyApiBaseOverrides({ [SMOTRET_API_BASE_ENV]: 'http://127.0.0.1:4003/smotret' }, false)
+    expect(smotretOrigin()).toBe('http://127.0.0.1:4003')
+    applyApiBaseOverrides({ [SMOTRET_API_BASE_ENV]: 'http://127.0.0.1:4004/smotret/api' }, false)
+    expect(smotretOrigin()).toBe('http://127.0.0.1:4004/smotret')
+    applyApiBaseOverrides(STUBS, true)
+    expect(smotretOrigin()).toBe('https://smotret-anime.app')
+    applyApiBaseOverrides({}, false)
+    expect(smotretOrigin()).toBe('https://smotret-anime.app')
   })
 
   it('points Shikimori requests and the auth URL at the override', async () => {

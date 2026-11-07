@@ -16,7 +16,18 @@ export const SMOTRET_API_BASE_ENV = 'ANIME_DL_SMOTRET_API_BASE'
 export const SHIKIMORI_ORIGIN_ENV = 'ANIME_DL_SHIKIMORI_ORIGIN'
 
 let smotretBase = SMOTRET_API_BASE
+let smotretSiteOrigin = SMOTRET_ORIGIN
 let shikiOrigin = SHIKIMORI_ORIGIN
+
+/** The site root an API base was built from: `<root>/api` → `<root>`, else its origin. */
+function siteRootOf(apiBase: string): string {
+  if (apiBase.endsWith('/api')) return apiBase.slice(0, -'/api'.length)
+  try {
+    return new URL(apiBase).origin
+  } catch {
+    return SMOTRET_ORIGIN
+  }
+}
 
 export function applyApiBaseOverrides(env: NodeJS.ProcessEnv, isPackaged: boolean): void {
   const pick = (name: string, fallback: string): string => {
@@ -24,6 +35,7 @@ export function applyApiBaseOverrides(env: NodeJS.ProcessEnv, isPackaged: boolea
     return !isPackaged && value ? value.replace(/\/+$/, '') : fallback
   }
   smotretBase = pick(SMOTRET_API_BASE_ENV, SMOTRET_API_BASE)
+  smotretSiteOrigin = smotretBase === SMOTRET_API_BASE ? SMOTRET_ORIGIN : siteRootOf(smotretBase)
   shikiOrigin = pick(SHIKIMORI_ORIGIN_ENV, SHIKIMORI_ORIGIN)
 }
 
@@ -31,8 +43,13 @@ export function smotretApiBase(): string {
   return smotretBase
 }
 
+/**
+ * The site the subtitle, mp4-fallback and legacy-redirect URLs are built on.
+ * Follows an `ANIME_DL_SMOTRET_API_BASE` override, so a stubbed run keeps
+ * those requests on the stub too.
+ */
 export function smotretOrigin(): string {
-  return SMOTRET_ORIGIN
+  return smotretSiteOrigin
 }
 
 /**

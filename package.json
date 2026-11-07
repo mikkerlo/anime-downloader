@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "6.0.20",
+  "version": "6.0.21",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "engines": {
@@ -75,7 +75,9 @@
       "repo": "anime-downloader"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "resources/icon.ico",
+      "resources/icon.png"
     ]
   },
   "keywords": [],

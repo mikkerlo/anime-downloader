@@ -43,6 +43,7 @@ jobs:
               - 'package-lock.json'
               - 'electron.vite.config.*'
               - 'tsconfig*.json'
+              - 'scripts/check-packaged-icon.mjs'
 
   build:
     needs: changes
@@ -102,6 +103,9 @@ jobs:
       - run: npx electron-builder ${{ matrix.args }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The window icon is loaded from inside app.asar at runtime (#686).
+      - run: node scripts/check-packaged-icon.mjs
 
       - name: Extract zip for single-layer artifact
         shell: bash

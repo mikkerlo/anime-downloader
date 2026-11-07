@@ -43,6 +43,7 @@ jobs:
               - 'package-lock.json'
               - 'electron.vite.config.*'
               - 'tsconfig*.json'
+              - 'scripts/check-packaged-icon.mjs'
 
   build:
     needs: changes

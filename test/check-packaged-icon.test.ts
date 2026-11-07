@@ -165,7 +165,9 @@ describe('check.yml runs the packaged-icon check', () => {
     expect(code).toBeGreaterThan(-1)
     const end = lines.findIndex((l, i) => i > code && !/^ {14}- /.test(l))
     const filter = lines.slice(code + 1, end === -1 ? undefined : end)
-    expect(filter).toContain("              - 'scripts/check-packaged-icon.mjs'")
+    expect(filter.map((l) => l.trimEnd())).toContain(
+      "              - 'scripts/check-packaged-icon.mjs'"
+    )
   })
 
   it('runs in the build job that packages all three platforms', () => {

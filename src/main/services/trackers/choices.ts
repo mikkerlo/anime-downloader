@@ -1,0 +1,146 @@
+// The setters behind `tracker:set-primary`, `tracker:set-mirror` and
+// `tracker:set-feature-source` (#696, epic #688): the only writers of
+// `trackerPrimary`, `trackerMirror` and `trackerFeatureSource`, which the
+// settings guard refuses to the renderer so these side effects always run.
+// Each rejects a tracker that isn't connected (`<provider>User` unset), and
+// each applied change broadcasts `tracker:accounts-changed` through the
+// lifecycle's one seam. A call that matches what is stored is a no-op: no
+// write and no broadcast. `docs/trackers.md` § Primary, mirrors and feature
+// sources describes the rules.
+
+import type { StorageService } from '../../store/types'
+import { TRACKER_KEYS } from '../../trackers/keys'
+import type { TrackerLifecycle } from '../../trackers/lifecycle'
+import {
+  TRACKER_LABELS,
+  type TrackerCapabilities,
+  type TrackerCapability
+} from '../../trackers/types'
+import type { TrackerFanOut } from './fan-out'
+
+/**
+ * The capability each feature needs. #706 (T11a) or #701 (T5b), whichever
+ * lands first, moves the setter's check onto the static matrix in
+ * `src/shared/trackers/feature-source.ts`; until then it reads each
+ * provider's own `TrackerCapabilities`.
+ */
+export const FEATURE_CAPABILITY: Readonly<Record<TrackerFeature, TrackerCapability>> = {
+  calendar: 'getCalendar',
+  chronology: 'getRelated',
+  forYou: 'getRecommendations',
+  details: 'getDetails',
+  airing: 'getAiringInfo'
+}
+
+export const TRACKER_FEATURES = Object.keys(FEATURE_CAPABILITY) as readonly TrackerFeature[]
+
+export function isTrackerFeature(value: unknown): value is TrackerFeature {
+  return typeof value === 'string' && (TRACKER_FEATURES as readonly string[]).includes(value)
+}
+
+export interface TrackerChoicesDeps {
+  store: StorageService
+  trackers: Pick<TrackerFanOut, 'discardQueue' | 'mirrorQueueCount'>
+  lifecycle: Pick<TrackerLifecycle, 'accountsState' | 'primary' | 'notifyAccountsChanged'>
+  /** Each landed provider, for its capabilities. A tracker missing here is capable of nothing. */
+  providers: Partial<Record<TrackerId, { capabilities: TrackerCapabilities }>>
+}
+
+export interface TrackerChoices {
+  /** Writes `trackerPrimary`. The current primary again is a no-op. */
+  setPrimary(trackerId: TrackerId): TrackerAccountsState
+  /**
+   * The mirror toggle. Rejects the current primary in both directions. Off
+   * without `confirm` only counts; off with `confirm` writes the flag, then
+   * runs `discardQueue`, which takes the tracker's queue lock itself.
+   */
+  setMirror(
+    trackerId: TrackerId,
+    enabled: boolean,
+    opts?: TrackerSetMirrorOptions
+  ): Promise<TrackerSetMirrorResult>
+  /** Stores (or with null clears) an override. #706 resolves it. */
+  setFeatureSource(feature: TrackerFeature, trackerId: TrackerId | null): TrackerAccountsState
+}
+
+type Toggles = Partial<Record<TrackerId, boolean>>
+type Sources = Partial<Record<TrackerFeature, TrackerId>>
+
+export function createTrackerChoices(deps: TrackerChoicesDeps): TrackerChoices {
+  const { store, trackers, lifecycle } = deps
+
+  function assertConnected(id: TrackerId): void {
+    if (store.get(TRACKER_KEYS[id].user) == null) {
+      throw new Error(`${TRACKER_LABELS[id]} isn't connected`)
+    }
+  }
+
+  const toggles = (): Toggles => (store.get('trackerMirror') as Toggles | undefined) ?? {}
+  const sources = (): Sources => (store.get('trackerFeatureSource') as Sources | undefined) ?? {}
+
+  function applied(): TrackerAccountsState {
+    lifecycle.notifyAccountsChanged()
+    return lifecycle.accountsState()
+  }
+
+  function setPrimary(id: TrackerId): TrackerAccountsState {
+    // Connected means the user is set: an expired session or "Needs setup"
+    // is accepted, and writes to it queue until it can drain.
+    assertConnected(id)
+    if (lifecycle.primary() === id) return lifecycle.accountsState()
+    // No queue moves: every reader takes the primary at call or tick time,
+    // and the old primary mirrors under its stored toggle.
+    store.set('trackerPrimary', id)
+    return applied()
+  }
+
+  async function setMirror(
+    id: TrackerId,
+    enabled: boolean,
+    opts: TrackerSetMirrorOptions = {}
+  ): Promise<TrackerSetMirrorResult> {
+    assertConnected(id)
+    if (lifecycle.primary() === id) {
+      // Its stored toggle is kept for when it stops being primary.
+      throw new Error(`${TRACKER_LABELS[id]} is the primary: its mirror toggle can't change`)
+    }
+    // A missing entry means on.
+    const on = toggles()[id] !== false
+    if (on === enabled) return { applied: false }
+    if (enabled) {
+      store.set('trackerMirror', { ...toggles(), [id]: true })
+      lifecycle.notifyAccountsChanged()
+      return { applied: true, offerReconcile: true }
+    }
+    if (!opts.confirm)
+      return { applied: false, pendingMirrorChanges: trackers.mirrorQueueCount(id) }
+    // The flag first: the fan-out reads it in the step that appends a mirror
+    // entry, after the primary's await, so nothing is appended after this
+    // line. `discardQueue` then waits for a drain in flight under the lock.
+    store.set('trackerMirror', { ...toggles(), [id]: false })
+    lifecycle.notifyAccountsChanged()
+    const discarded = await trackers.discardQueue(id)
+    return { applied: true, discarded }
+  }
+
+  function setFeatureSource(feature: TrackerFeature, id: TrackerId | null): TrackerAccountsState {
+    if (!isTrackerFeature(feature)) throw new Error(`Unknown feature: ${String(feature)}`)
+    const current = sources()
+    if (id === null) {
+      if (current[feature] === undefined) return lifecycle.accountsState()
+      const next = { ...current }
+      delete next[feature]
+      store.set('trackerFeatureSource', next)
+      return applied()
+    }
+    assertConnected(id)
+    if (!deps.providers[id]?.capabilities[FEATURE_CAPABILITY[feature]]) {
+      throw new Error(`${TRACKER_LABELS[id]} can't be the ${feature} source`)
+    }
+    if (current[feature] === id) return lifecycle.accountsState()
+    store.set('trackerFeatureSource', { ...current, [feature]: id })
+    return applied()
+  }
+
+  return { setPrimary, setMirror, setFeatureSource }
+}

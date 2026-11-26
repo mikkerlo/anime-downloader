@@ -1094,13 +1094,17 @@ later slice keeps green.
   temp `cwd` (so `config.json` is the real file), the real Shikimori sync
   service and IPC router, the export, the attached-library service, the merge
   runner, all six Prepare for offline steps and the auto-downloader, wired as
-  `src/main/index.ts` wires them. It signs in as A, marks an episode watched
-  online, subscribes to auto-download, exports With metadata, attaches the
-  drive, runs Prepare for offline and one auto-download tick, goes Work offline
-  and edits a rate and marks another episode (both queue), lets the owner's
-  other PC edit the drive, runs a merge (one pending raise, one conflict), and
-  signs in as B through `SHIKIMORI_EXCHANGE_CODE` (A's queue parks). The
-  network is `test/helpers/golden-shikimori.ts`, which puts A's rows on
+  `src/main/index.ts` wires them. Since #693 it also runs `index.ts`'s
+  per-tracker rates registration over a disconnected AniList and MyAnimeList
+  instance (`test/helpers/generic-tracker.ts`), so a rates step that joins a
+  run while its tracker is disconnected reds the Prepare golden on the extra
+  row. It signs in as A, marks an episode watched online, subscribes to
+  auto-download, exports With metadata, attaches the drive, runs Prepare for
+  offline and one auto-download tick, goes Work offline and edits a rate and
+  marks another episode (both queue), lets the owner's other PC edit the
+  drive, runs a merge (one pending raise, one conflict), and signs in as B
+  through `SHIKIMORI_EXCHANGE_CODE` (A's queue parks). The network is
+  `test/helpers/golden-shikimori.ts`, which puts A's rows on
   `fake-shikimori.ts`'s `server`, and a stub smotret; the test blocks `fetch`,
   so an unmocked call fails rather than leaving the machine.
 - **Determinism.** `Date` is faked and set at each step; real timers still run,
@@ -1150,7 +1154,12 @@ later slice keeps green.
   (`rate-limit`). Those replies encode the epic's documented behaviour only;
   #702 (T6) and #703 (T7) replace them with captured fixtures.
   `fake-shikimori.ts` stays as it is: a module-level `vi.mock` fake that
-  imports nothing from `src/`.
+  imports nothing from `src/`. `test/helpers/generic-tracker.ts` (#693) builds
+  an AniList or MyAnimeList generic sync instance over `fake-tracker.ts` with a
+  plain rate cache, for tests that need a second tracker beside Shikimori's real one:
+  `test/integration/tracker-drains.test.ts` (one tracker's expired session, 401
+  or synchronous throw never stops another's drain at boot or on the online
+  edge), the AniList case of `offline-kickoff.test.ts`, and the Prepare rows.
 
 ## Coverage thresholds
 

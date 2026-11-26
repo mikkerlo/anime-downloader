@@ -4,7 +4,8 @@
 // A step whose `isAvailable()` says no is reported "Not available" with its
 // reason and never runs. While offline, every `requiresNetwork` step is
 // skipped and the local ones still run. One step throwing is recorded as
-// `failed`; the next steps still run.
+// `failed`; the next steps still run. A step whose `joinsRun()` says no when
+// a run starts has no row in that run (#693).
 
 import { randomUUID } from 'crypto'
 import type { StorageService } from '../../store/types'
@@ -26,6 +27,11 @@ export interface PrepareStep {
   label: string
   requiresNetwork: boolean
   isAvailable(): { available: true } | { available: false; reason: string }
+  /**
+   * Read once when a run starts (#693): false leaves the step out of that run,
+   * so it has no row. Without it the step always joins.
+   */
+  joinsRun?(): boolean
   run(ctx: PrepareStepContext): Promise<PrepareStepResult>
 }
 
@@ -128,9 +134,23 @@ export function createPrepareOfflineService(
     }
   }
 
-  async function execute(current: PrepareOfflineRun, signal: AbortSignal): Promise<void> {
-    for (let i = 0; i < steps.length; i++) {
-      await runStep(steps[i], current.steps[i], signal)
+  function joins(step: PrepareStep): boolean {
+    try {
+      return step.joinsRun?.() ?? true
+    } catch (err) {
+      // It joins, and its own check reports when it runs.
+      log.error(`[prepare-offline] step ${step.id} joinsRun failed:`, err)
+      return true
+    }
+  }
+
+  async function execute(
+    current: PrepareOfflineRun,
+    joined: { step: PrepareStep; state: PrepareOfflineStepState }[],
+    signal: AbortSignal
+  ): Promise<void> {
+    for (const { step, state } of joined) {
+      await runStep(step, state, signal)
     }
     current.finishedAt = now()
     current.cancelled = signal.aborted
@@ -154,24 +174,28 @@ export function createPrepareOfflineService(
     start() {
       if (running && run) return { runId: run.runId }
       controller = new AbortController()
+      const joined = steps.filter(joins).map((step) => {
+        const state: PrepareOfflineStepState = {
+          id: step.id,
+          label: step.label,
+          state: 'pending',
+          done: 0,
+          total: 0,
+          details: []
+        }
+        return { step, state }
+      })
       const current: PrepareOfflineRun = {
         runId: makeId(),
         runSeq: ++runSeq,
         startedAt: now(),
         finishedAt: null,
         cancelled: false,
-        steps: steps.map((s) => ({
-          id: s.id,
-          label: s.label,
-          state: 'pending',
-          done: 0,
-          total: 0,
-          details: []
-        }))
+        steps: joined.map((j) => j.state)
       }
       run = current
       emit()
-      running = execute(current, controller.signal)
+      running = execute(current, joined, controller.signal)
         .catch((err) => log.error('[prepare-offline] run failed:', err))
         .finally(() => {
           running = null

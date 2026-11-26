@@ -4,7 +4,8 @@
 // own services. Every member is a closure that reads its service when a run
 // calls it: the download manager is assigned in `bootstrap()`, long after the
 // steps are registered, so it comes in through a getter. The other four steps'
-// deps stay inline in `index.ts`.
+// deps stay inline in `index.ts`. The per-tracker rates steps (#693) are
+// registered here, one per known tracker but Shikimori.
 
 import * as fs from 'fs'
 import type { DownloadManager } from '../../download-manager'
@@ -13,8 +14,16 @@ import type { AnimeCacheService } from '../anime-cache'
 import type { ColdStorageService } from '../cold-storage'
 import { animeRecordsFrom, playerRecordFrom, subscriptionNameFrom } from '../../lib/anime-record'
 import type { probeDuration as probeDurationFn } from '../../lib/probe-duration'
+import type { TrackerSyncService } from '../trackers/sync'
+import { isTrackerConnected } from '../trackers/edges'
+import type { PrepareOfflineService } from './index'
 import { cachableIdsFrom, type MetadataStepDeps } from './steps/metadata'
 import type { LocalIntegrityStepDeps } from './steps/local-integrity'
+import {
+  createTrackerRatesStep,
+  type RatesTrackerId,
+  type TrackerRatesStepDeps
+} from './steps/tracker-rates'
 
 type Store = { get(key: string): unknown }
 
@@ -74,5 +83,43 @@ export function metadataDeps(w: MetadataWiring): MetadataStepDeps {
     getEpisodesBatch: (ids) => smotretApi.getEpisodesBatch(ids),
     refreshAnimeDetail: (id, detail) => animeCacheService.refreshAnimeDetail(id, detail),
     updateEpisodes: (id, details) => animeCacheService.updateEpisodes(id, details)
+  }
+}
+
+export interface TrackerRatesWiring {
+  store: Store
+  /** Every tracker's sync instance (the fan-out's `syncServices()`). */
+  trackers: () => TrackerSyncService<unknown, unknown>[]
+}
+
+/** One tracker's rates-step deps, each resolving the instance when a run calls it. */
+export function trackerRatesDeps(
+  trackerId: RatesTrackerId,
+  w: TrackerRatesWiring
+): TrackerRatesStepDeps {
+  const instance = (): TrackerSyncService<unknown, unknown> => {
+    const sync = w.trackers().find((s) => s.trackerId === trackerId)
+    if (!sync) throw new Error(`no ${trackerId} sync service`)
+    return sync
+  }
+  return {
+    isConnected: () => isTrackerConnected(w.store, instance()),
+    drain: () => instance().drainNow(),
+    refreshRates: (opts) => instance().refreshRates(opts)
+  }
+}
+
+/**
+ * Registers a rates step for every known tracker but Shikimori, connected or
+ * not (#693): `registerStep` rejects a duplicate id, so a tracker connected
+ * later could never get one. `joinsRun` is the only gate.
+ */
+export function registerTrackerRatesSteps(
+  prepare: Pick<PrepareOfflineService, 'registerStep'>,
+  w: TrackerRatesWiring
+): void {
+  for (const { trackerId } of w.trackers()) {
+    if (trackerId === 'shikimori') continue
+    prepare.registerStep(createTrackerRatesStep(trackerId, trackerRatesDeps(trackerId, w)))
   }
 }

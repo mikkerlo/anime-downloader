@@ -42,6 +42,11 @@ import { sanitizeFilename } from '../../src/main/download-manager'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
 import { FIXTURE_LIBRARY_ID, copyFixtureLibrary, mtimeSnapshot } from '../helpers/attached-library'
 import { cleanup } from '../helpers/shared-library'
+import { createGenericTracker } from '../helpers/generic-tracker'
+import { createShikimoriRatesStep } from '../../src/main/services/prepare-offline/steps/shikimori-rates'
+import { registerTrackerRatesSteps } from '../../src/main/services/prepare-offline/wiring'
+import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
+import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
 
 const DAY = 24 * 60 * 60 * 1000
 // A JPEG header, so `fetchPoster` takes the stub's poster for an image (#684).
@@ -1180,5 +1185,176 @@ describe('steps 5 and 6: Shared Libraries (fixture library)', () => {
       ['unavailable', 'No Shared Library attached']
     ])
     expect(runAll).not.toHaveBeenCalled()
+  })
+})
+
+// --- The per-tracker rates steps (#693) ---------------------------------------------
+
+describe('the per-tracker rates steps, registered as index.ts registers them (#693)', () => {
+  const GOLDEN_PREPARE = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, '..', 'fixtures', 'golden-6.0.21', 'prepare.json'),
+      'utf-8'
+    )
+  ) as PrepareOfflineRun
+
+  /** Shikimori signed out, AniList and MyAnimeList generic instances, all disconnected. */
+  function world() {
+    const store = new InMemoryStorage({
+      prepareOfflineLastRun: null,
+      shikimoriCredentials: null,
+      shikimoriUser: null,
+      shikimoriUpdateQueue: [],
+      shikimoriParkedQueues: {},
+      shikimoriUserRates: [],
+      shikimoriAnimeDetails: {},
+      anilistCredentials: null,
+      anilistUser: null,
+      anilistUpdateQueue: [],
+      anilistParkedQueues: {},
+      anilistUserRates: [],
+      myanimelistCredentials: null,
+      myanimelistUser: null,
+      myanimelistUpdateQueue: [],
+      myanimelistParkedQueues: {},
+      myanimelistUserRates: []
+    })
+    const shiki = createShikimoriSyncService({
+      store,
+      broadcast: () => {},
+      syncStatusChannel: 's',
+      offlineQueueChangedChannel: 'q',
+      rateUpdatedChannel: 'r',
+      animeDetailsUpdatedChannel: 'd',
+      lookupByMalIds: async () => ({}),
+      ratesRefreshedChannel: 'rr'
+    })
+    const anilist = createGenericTracker('anilist', store as never)
+    const mal = createGenericTracker('mal', store as never)
+    const svc = createPrepareOfflineService({
+      store,
+      isOffline: () => false,
+      broadcast: () => {},
+      progressChannel: 'p'
+    })
+    return { store, shiki, anilist, mal, svc }
+  }
+
+  /** The six production steps in `index.ts`'s order, plus `index.ts`'s tracker registration. */
+  function registerAll(w: ReturnType<typeof world>): void {
+    const fake = (id: PrepareOfflineStepId) => {
+      const golden = GOLDEN_PREPARE.steps.find((s) => s.id === id)!
+      return {
+        id,
+        label: golden.label,
+        requiresNetwork: false,
+        isAvailable: () => ({ available: true as const }),
+        run: async () => ({ status: 'ok' as const, details: [] })
+      }
+    }
+    w.svc.registerStep(fake('binaries'))
+    w.svc.registerStep(
+      createShikimoriRatesStep({
+        isLoggedIn: () => w.store.get('shikimoriUser') !== null,
+        drain: () => w.shiki.drainNow(),
+        refreshRates: (opts) => w.shiki.refreshRates(opts),
+        prefetchShikimoriDetails: () => w.shiki.prefetchShikimoriDetails(),
+        abortPrefetch: () => w.shiki.abortPrefetch()
+      })
+    )
+    registerTrackerRatesSteps(w.svc, {
+      store: w.store,
+      trackers: () => [
+        w.shiki.tracker as TrackerSyncService<unknown, unknown>,
+        w.anilist.sync,
+        w.mal.sync
+      ]
+    })
+    for (const id of [
+      'metadata',
+      'local-integrity',
+      'attached-integrity',
+      'library-sync'
+    ] as const) {
+      w.svc.registerStep(fake(id))
+    }
+  }
+
+  it('a Shikimori-only run, signed out: the golden’s six rows, Shikimori’s "Not logged in"', async () => {
+    const w = world()
+    registerAll(w)
+    w.svc.start()
+    await w.svc.idle()
+    const steps = w.svc.getState().run!.steps
+    expect(steps.map((s) => [s.id, s.label])).toEqual(
+      GOLDEN_PREPARE.steps.map((s) => [s.id, s.label])
+    )
+    const shikimori = steps.find((s) => s.id === 'shikimori-rates')!
+    expect([shikimori.status, shikimori.details]).toEqual([
+      'skipped',
+      [{ text: 'Not logged in', status: 'skipped' }]
+    ])
+    expect(
+      (w.store.get('prepareOfflineLastRun') as PrepareOfflineLastRun).steps.map((s) => s.id)
+    ).toEqual(GOLDEN_PREPARE.steps.map((s) => s.id))
+  })
+
+  it('AniList connected after start-up: the next run carries its row, right after Shikimori’s', async () => {
+    const w = world()
+    registerAll(w)
+    w.svc.start()
+    await w.svc.idle()
+    expect(w.svc.getState().run!.steps.map((s) => s.id)).not.toContain('anilist-rates')
+
+    // Sign in to AniList with one queued edit and one title on the server.
+    w.store.set('anilistCredentials', { v: 1, enc: 'plain', data: 'blob' })
+    w.store.set('anilistUser', { id: 1, nickname: 'anilist-user', avatar: null })
+    w.anilist.fake.set(2, { episodes: 4, score: 8 })
+    w.store.set('anilistUpdateQueue', [
+      {
+        malId: 1,
+        rateId: null,
+        queuedAt: 1,
+        before: { episodes: 0, status: 'watching', score: 0, rewatches: 0 },
+        after: { episodes: 3, status: 'watching', score: 0, rewatches: 0 }
+      }
+    ])
+    w.svc.start()
+    await w.svc.idle()
+    const steps = w.svc.getState().run!.steps
+    expect(steps.map((s) => s.id)).toEqual([
+      'binaries',
+      'shikimori-rates',
+      'anilist-rates',
+      'metadata',
+      'local-integrity',
+      'attached-integrity',
+      'library-sync'
+    ])
+    const row = steps[2]
+    expect([row.label, row.status, row.total, row.details]).toEqual([
+      'AniList rates',
+      'ok',
+      2,
+      [{ text: '2 rates refreshed', status: 'ok' }]
+    ])
+    expect(w.anilist.fake.upserts.map((u) => u.ref.malId)).toEqual([1])
+    expect(w.store.get('anilistUpdateQueue')).toEqual([])
+    expect(steps.map((s) => s.id)).not.toContain('mal-rates')
+  })
+
+  it('index.ts registers them through registerTrackerRatesSteps, right after Shikimori’s (source pin)', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'main', 'index.ts'),
+      'utf-8'
+    )
+    const shikimori = src.indexOf('createShikimoriRatesStep({')
+    const trackers = src.indexOf(
+      'registerTrackerRatesSteps(prepareOffline, { store, trackers: () => trackerFanOut.syncServices() })'
+    )
+    const metadata = src.indexOf('createMetadataStep(')
+    expect(shikimori).toBeGreaterThan(-1)
+    expect(trackers).toBeGreaterThan(shikimori)
+    expect(metadata).toBeGreaterThan(trackers)
   })
 })

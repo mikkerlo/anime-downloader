@@ -4,9 +4,21 @@
 export const AUTO_DOWNLOAD_STAGGER_MS = 5_000
 export const PREFETCH_STAGGER_MS = 10_000
 
-export interface OfflineKickoffDeps {
+/** One tracker's part of the online edge (#693). */
+export interface KickoffTracker {
+  /** `run()`'s label: `'<Name> queue drain'`. */
+  drainLabel: string
   /** Drains the live queue of the signed-in user; parked queues stay parked. */
-  syncShikimoriQueue: () => Promise<unknown> | unknown
+  drain: () => Promise<unknown> | unknown
+  /** `'<Name> details prefetch'`; Shikimori's is `'details prefetch'`. */
+  prefetchLabel: string
+  /** Fired at the `PREFETCH_STAGGER_MS` mark. An entry without one schedules no timer. */
+  prefetch?: () => Promise<unknown> | unknown
+}
+
+export interface OfflineKickoffDeps {
+  /** Read at each online edge: Shikimori's entry, then one per other connected tracker. */
+  trackers: () => readonly KickoffTracker[]
   suspendDownloads: () => void
   resumeDownloads: () => void
   suspendSyncplay: () => void
@@ -14,7 +26,6 @@ export interface OfflineKickoffDeps {
   /** Retries the first-launch ffmpeg/fpcalc install the boot task skipped. */
   retryBinaries: () => Promise<unknown> | unknown
   runAutoDownloadTick: () => Promise<unknown> | unknown
-  prefetchShikimoriDetails: () => Promise<unknown> | unknown
 }
 
 export interface OfflineKickoff {
@@ -31,10 +42,12 @@ function run(label: string, fn: () => Promise<unknown> | unknown): void {
 }
 
 /**
- * Online: the queue drain, the download pump, Syncplay and the binaries go at
- * once; the auto-download tick and the details prefetch are staggered behind
- * them so a reconnect is not one burst of every background job. Each has its
- * own single-flight guard as well.
+ * Online: every tracker's queue drain, the download pump, Syncplay and the
+ * binaries go at once; the auto-download tick and the details prefetches are
+ * staggered behind them so a reconnect is not one burst of every background
+ * job. Every prefetch fires at the same mark, and each drain runs in its own
+ * `run()`, so one tracker's throw never skips another's. Each job has its own
+ * single-flight guard as well.
  */
 export function createOfflineKickoff(deps: OfflineKickoffDeps): OfflineKickoff {
   const timers = new Set<ReturnType<typeof setTimeout>>()
@@ -49,12 +62,20 @@ export function createOfflineKickoff(deps: OfflineKickoffDeps): OfflineKickoff {
 
   return {
     onOnline() {
-      run('Shikimori queue drain', deps.syncShikimoriQueue)
+      let trackers: readonly KickoffTracker[] = []
+      try {
+        trackers = deps.trackers()
+      } catch (err) {
+        console.warn('[offline] tracker list failed:', err)
+      }
+      for (const t of trackers) run(t.drainLabel, t.drain)
       run('download resume', deps.resumeDownloads)
       run('Syncplay resume', deps.resumeSyncplay)
       run('binary install retry', deps.retryBinaries)
       later('auto-download tick', AUTO_DOWNLOAD_STAGGER_MS, deps.runAutoDownloadTick)
-      later('details prefetch', PREFETCH_STAGGER_MS, deps.prefetchShikimoriDetails)
+      for (const t of trackers) {
+        if (t.prefetch) later(t.prefetchLabel, PREFETCH_STAGGER_MS, t.prefetch)
+      }
     },
     onOffline() {
       for (const timer of timers) clearTimeout(timer)

@@ -26,6 +26,7 @@ import { createShikimoriPrimary } from '../../src/main/services/trackers/shikimo
 import { ANILIST_KEYS, MYANIMELIST_KEYS } from '../../src/main/trackers/keys'
 import { testRateCodec } from '../helpers/test-rate-codec'
 import { createTrackerRates } from '../../src/main/services/trackers/rates'
+import { trackerAccounts } from '../helpers/tracker-fan-out'
 import { NO_RATE_BEFORE, type RateValues } from '../../src/main/lib/shikimori-rate'
 import type { QueuedTrackerUpdate } from '../../src/main/lib/shikimori-queue'
 
@@ -905,11 +906,13 @@ describe('the Shikimori handlers own their reply shape (#692 review)', () => {
   /** The real router on the rig's store and fan-out; returns an invoker. */
   function router(r: ReturnType<typeof rig>) {
     ;(ipcMain.handle as unknown as Mock).mockClear()
+    const trackerRates = createTrackerRates({ store: r.store as never, trackers: r.fan })
     register({
       store: r.store,
       shikimoriSyncService: r.shiki,
       trackers: r.fan,
-      trackerRates: createTrackerRates({ store: r.store as never, trackers: r.fan }),
+      trackerRates,
+      ...trackerAccounts(r.store as never, trackerRates),
       lookupByMalIds: vi.fn(async () => ({})),
       maybeBroadcastCleanupPrompt: r.cleanup,
       runAutoDownloadTick: vi.fn(async () => ({})),

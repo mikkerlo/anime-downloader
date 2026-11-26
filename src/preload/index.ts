@@ -505,6 +505,32 @@ const api = {
   onTrackerOfflineQueueChanged: subscribe<TrackerOfflineQueueChangedEvent>(
     EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
   ),
+  // Accounts, auth and logout (#695).
+  trackerListAccounts: () =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_LIST_ACCOUNTS) as Promise<TrackerAccountsState>,
+  trackerBeginAuth: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_BEGIN_AUTH, trackerId) as Promise<TrackerAuthResult>,
+  trackerCompleteAuth: (trackerId: TrackerId, urlOrToken: string) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_COMPLETE_AUTH,
+      trackerId,
+      urlOrToken
+    ) as Promise<TrackerAuthResult>,
+  trackerCancelAuth: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_CANCEL_AUTH, trackerId) as Promise<void>,
+  trackerLogout: (trackerId: TrackerId, opts?: TrackerLogoutOptions) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_LOGOUT, trackerId, opts) as Promise<void>,
+  trackerGetClientConfig: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_GET_CLIENT_CONFIG,
+      trackerId
+    ) as Promise<TrackerClientConfig>,
+  trackerSetClientConfig: (trackerId: TrackerId, config: TrackerClientConfigInput) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_SET_CLIENT_CONFIG,
+      trackerId,
+      config
+    ) as Promise<TrackerClientConfig>,
 
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: {

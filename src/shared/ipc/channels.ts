@@ -166,13 +166,23 @@ export const CHANNELS = {
 
   // Trackers (#694): rates, sync status and queues, per `trackerId`. The nine
   // `SHIKIMORI_*` counterparts above are aliases of these until v7.0 (#717).
+  // Accounts, auth and logout (#695): `SHIKIMORI_GET_AUTH_URL`,
+  // `SHIKIMORI_EXCHANGE_CODE`, `SHIKIMORI_LOGOUT` and `SHIKIMORI_GET_USER` stay
+  // as delegating aliases until #717.
+  TRACKER_BEGIN_AUTH: 'tracker:begin-auth',
+  TRACKER_CANCEL_AUTH: 'tracker:cancel-auth',
+  TRACKER_COMPLETE_AUTH: 'tracker:complete-auth',
   TRACKER_DISCARD_PARKED_QUEUE: 'tracker:discard-parked-queue',
+  TRACKER_GET_CLIENT_CONFIG: 'tracker:get-client-config',
   TRACKER_GET_OFFLINE_QUEUE_LENGTH: 'tracker:get-offline-queue-length',
   TRACKER_GET_PARKED_QUEUES: 'tracker:get-parked-queues',
   TRACKER_GET_RATE: 'tracker:get-rate',
   TRACKER_GET_RATES: 'tracker:get-rates',
   TRACKER_GET_SYNC_STATUS: 'tracker:get-sync-status',
+  TRACKER_LIST_ACCOUNTS: 'tracker:list-accounts',
+  TRACKER_LOGOUT: 'tracker:logout',
   TRACKER_MARK_EPISODE_WATCHED: 'tracker:mark-episode-watched',
+  TRACKER_SET_CLIENT_CONFIG: 'tracker:set-client-config',
   TRACKER_TRIGGER_SYNC: 'tracker:trigger-sync',
   TRACKER_UPDATE_RATE: 'tracker:update-rate',
 

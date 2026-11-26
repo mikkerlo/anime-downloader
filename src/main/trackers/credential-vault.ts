@@ -107,6 +107,13 @@ export interface CredentialVault {
   read<T = unknown>(key: VaultKey): Promise<VaultRead<T>>
   /** Whether a blob is stored, a `locked` one included. Never touches safeStorage. */
   has(key: VaultKey): Promise<boolean>
+  /**
+   * Whether the last `read` of `key` failed to decrypt the blob still stored
+   * there (#695's `credentialState: 'locked'`). Synchronous and never touches
+   * safeStorage: a blob nothing has read yet isn't locked, and a new sign-in's
+   * blob or a cleared key isn't either.
+   */
+  isLocked(key: VaultKey): boolean
 }
 
 export interface CredentialVaultDeps {
@@ -279,5 +286,11 @@ export function createCredentialVault(deps: CredentialVaultDeps): CredentialVaul
     return raw !== null && raw !== undefined
   }
 
-  return { encrypt, commit, write, read, has }
+  function isLocked(key: VaultKey): boolean {
+    assertVaultKey(key)
+    const bytes = lockedBytes.get(key)
+    return bytes !== undefined && bytes === JSON.stringify(stored(key))
+  }
+
+  return { encrypt, commit, write, read, has, isLocked }
 }

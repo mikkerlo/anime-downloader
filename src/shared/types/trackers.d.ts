@@ -121,3 +121,63 @@ interface TrackerOfflineQueueChangedEvent {
   length: number
   queuedAfter: Record<number, TrackerRateValues>
 }
+
+// ---- Accounts, auth and logout (#695) ----------------------------------------
+
+// One tracker's account, connected or not. "Connected" means `user` is set;
+// `sessionExpired` means the user is kept and the credentials are cleared.
+// `credentialState` is `'locked'` only after a real read failed to decrypt the
+// stored blob (AniList, MAL); listing accounts never decrypts. `needsSetup` is
+// MAL with no client ID saved, or the tracker's sync instance reporting a
+// `config`-class failure.
+interface TrackerAccount {
+  trackerId: TrackerId
+  user: TrackerUser | null
+  hasCredentials: boolean
+  sessionExpired: boolean
+  needsSetup: boolean
+  credentialState: 'none' | 'ok' | 'locked'
+  // When the session ends, in ms, from a provider that knows it (AniList, #703).
+  sessionExpiresAt?: number
+}
+
+// `tracker:list-accounts`. `primary` is resolved: the stored `trackerPrimary`
+// when that tracker is connected, else the first connected one in
+// `shikimori`, `anilist`, `mal` order, else null. `mirror` and
+// `featureSources` are as stored (`trackerMirror`, `trackerFeatureSource`).
+interface TrackerAccountsState {
+  accounts: TrackerAccount[]
+  primary: TrackerId | null
+  mirror: Partial<Record<TrackerId, boolean>>
+  featureSources: Record<string, TrackerId>
+}
+
+// What `tracker:begin-auth` and `tracker:complete-auth` resolve to.
+// `open-failed` and `port-busy` resolve early and keep the attempt held, so a
+// paste can still finish it; `port-busy` never opens the browser.
+type TrackerAuthResult =
+  | { status: 'connected'; account: TrackerAccount }
+  | { status: 'cancelled' }
+  | { status: 'error'; kind: TrackerErrorClass; message: string }
+  | { status: 'offline' }
+  | { status: 'needs-setup' }
+  | { status: 'open-failed'; authorizeUrl: string }
+  | { status: 'port-busy'; authorizeUrl: string }
+
+// `tracker:get-client-config` / `tracker:set-client-config` (MAL only). The
+// secret is never returned: `hasSecret` says whether one is stored.
+interface TrackerClientConfig {
+  clientId: string | null
+  hasSecret: boolean
+}
+
+// `secret`: a string stores one, null clears it, and leaving it out keeps it.
+interface TrackerClientConfigInput {
+  clientId: string
+  secret?: string | null
+}
+
+interface TrackerLogoutOptions {
+  // The live queue: `keep` (the default) parks it under the user, `discard` drops it.
+  pending?: 'keep' | 'discard'
+}

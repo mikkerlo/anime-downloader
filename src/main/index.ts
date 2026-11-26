@@ -81,6 +81,9 @@ import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createTrackerFanOut } from './services/trackers/fan-out'
 import { createTrackerRates } from './services/trackers/rates'
 import { createShikimoriEventBridge } from './trackers/events'
+import { createTrackerLifecycle } from './trackers/lifecycle'
+import { createTrackerAuthSessions } from './trackers/auth-session'
+import { createShikimoriProvider } from './trackers/shikimori.provider'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
@@ -393,6 +396,22 @@ const trackerFanOut = createTrackerFanOut({
 })
 // The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
 const trackerRates = createTrackerRates({ store, trackers: trackerFanOut, isOffline })
+// The account lifecycle per tracker and the sign-in attempts (#695). Each
+// refers to the other only at call time: a logout cancels the held attempt,
+// and an attempt completes through the lifecycle.
+const trackerLifecycle = createTrackerLifecycle({
+  store,
+  vault: credentialVault,
+  trackerRates,
+  cancelAttempt: (id) => trackerAuth.cancel(id)
+})
+const trackerAuth = createTrackerAuthSessions({
+  lifecycle: trackerLifecycle,
+  // AniList (#703) and MyAnimeList (#702) add their providers here.
+  providers: { shikimori: createShikimoriProvider({ store }) },
+  isOffline,
+  openExternal: (url) => shell.openExternal(url)
+})
 let downloadManager: DownloadManager
 
 // First refreshed by the background ffmpeg-ensure task in `bootstrap()`. The
@@ -806,6 +825,8 @@ function registerIpcHandlers(): void {
     shikimoriSyncService,
     trackers: trackerFanOut,
     trackerRates,
+    trackerLifecycle,
+    trackerAuth,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

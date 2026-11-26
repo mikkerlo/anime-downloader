@@ -1,7 +1,8 @@
-// The `tracker:*` rate, sync-status and queue channels (#694, epic #688). Each
-// handler validates its arguments, calls the shared function in
-// `services/trackers/rates.ts` that its `shikimori:*` alias calls too, and
-// shapes the reply per `trackerId`. This router names none of the
+// The `tracker:*` account, auth and logout channels (#695) and the rate,
+// sync-status and queue channels (#694, epic #688). Each handler validates its
+// arguments, calls the shared function its `shikimori:*` alias calls too (in
+// `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
+// and shapes the reply per `trackerId`. This router names none of the
 // `EVENT_CHANNELS.TRACKER_*` symbols: the bridge emits them, configured from
 // `index.ts`, which is where the emitter scan has to find them.
 
@@ -11,6 +12,8 @@ import type { RateValues } from '../lib/shikimori-rate'
 import { STATUS_ORDER } from '../lib/shikimori-rate'
 import { isTrackerId } from '../services/trackers/rates'
 import type { ApplyOutcome } from '../services/trackers/fan-out'
+import { getClientConfig, setClientConfig } from '../trackers/client-config'
+import { TRACKER_LABELS } from '../trackers/types'
 import type { AppDeps } from './index'
 
 function trackerIdArg(value: unknown): TrackerId {
@@ -54,7 +57,91 @@ function writtenValues(outcome: ApplyOutcome): RateValues | null {
   return outcome.entry ? { ...outcome.entry.after } : null
 }
 
-export function register({ trackerRates: rates }: AppDeps): void {
+function malOnly(value: unknown): 'mal' {
+  const id = trackerIdArg(value)
+  if (id !== 'mal') throw new Error(`${TRACKER_LABELS[id]} has no client config`)
+  return id
+}
+
+function clientConfigArg(value: unknown): TrackerClientConfigInput {
+  const v = (value ?? {}) as Record<string, unknown>
+  if (typeof v.clientId !== 'string' || v.clientId.trim() === '') {
+    throw new Error('Invalid client ID')
+  }
+  if (v.secret !== undefined && v.secret !== null && typeof v.secret !== 'string') {
+    throw new Error('Invalid client secret')
+  }
+  const input: TrackerClientConfigInput = { clientId: v.clientId.trim() }
+  // An empty secret field means "no secret", as null does.
+  if (v.secret !== undefined) input.secret = v.secret === '' ? null : (v.secret as string | null)
+  return input
+}
+
+function logoutArg(value: unknown): TrackerLogoutOptions {
+  if (value === undefined || value === null) return {}
+  const pending = (value as { pending?: unknown }).pending
+  if (pending === undefined) return {}
+  if (pending !== 'keep' && pending !== 'discard') {
+    throw new Error(`Invalid pending: ${String(pending)}`)
+  }
+  return { pending }
+}
+
+export function register({
+  store,
+  credentialVault,
+  trackerRates: rates,
+  trackerLifecycle: lifecycle,
+  trackerAuth: auth
+}: AppDeps): void {
+  // Accounts, auth and logout (#695). `docs/trackers.md` § Accounts and sign-in.
+  ipcMain.handle(
+    CHANNELS.TRACKER_LIST_ACCOUNTS,
+    (): TrackerAccountsState => lifecycle.accountsState()
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_BEGIN_AUTH,
+    (_event, trackerId: unknown): Promise<TrackerAuthResult> => auth.begin(trackerIdArg(trackerId))
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_COMPLETE_AUTH,
+    (_event, trackerId: unknown, urlOrToken: unknown): Promise<TrackerAuthResult> => {
+      const id = trackerIdArg(trackerId)
+      if (typeof urlOrToken !== 'string') throw new Error('Invalid sign-in input')
+      return auth.complete(id, urlOrToken)
+    }
+  )
+
+  ipcMain.handle(CHANNELS.TRACKER_CANCEL_AUTH, (_event, trackerId: unknown): void => {
+    auth.cancel(trackerIdArg(trackerId))
+  })
+
+  ipcMain.handle(CHANNELS.TRACKER_LOGOUT, (_event, trackerId: unknown, opts?: unknown): void => {
+    lifecycle.logout(trackerIdArg(trackerId), logoutArg(opts))
+  })
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_CLIENT_CONFIG,
+    (_event, trackerId: unknown): TrackerClientConfig => {
+      malOnly(trackerId)
+      return getClientConfig(store)
+    }
+  )
+
+  // The only writer of `myanimelistClientConfig` and `myanimelistClientSecret`:
+  // the settings guard refuses both (#690). It doesn't clear the instance's
+  // "Needs setup"; T6 (#702) wires that.
+  ipcMain.handle(
+    CHANNELS.TRACKER_SET_CLIENT_CONFIG,
+    async (_event, trackerId: unknown, input: unknown): Promise<TrackerClientConfig> => {
+      malOnly(trackerId)
+      await setClientConfig(store, credentialVault, clientConfigArg(input))
+      return getClientConfig(store)
+    }
+  )
+
   ipcMain.handle(
     CHANNELS.TRACKER_GET_RATE,
     async (_event, trackerId: unknown, malId: unknown): Promise<TrackerRateResult | null> => {

@@ -51,7 +51,8 @@ import {
 import { NO_RATE_BEFORE, rateValues, type RateValues } from '../../lib/shikimori-rate'
 import {
   mergeQueues,
-  stripField,
+  revertAndRebase,
+  stripFieldSlots,
   type ParkedQueues,
   type QueuedShikimoriUpdate
 } from '../../lib/shikimori-queue'
@@ -1230,8 +1231,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   async function stripQueued(malId: number, field: SyncRateField): Promise<void> {
     for (const t of trackers) {
       await t.withQueueLock(() => {
+        // Rebase only (#692 review): a later `via` survivor built on the
+        // stripped value would otherwise drain as drift on `field`.
         const live = store.get<QueuedShikimoriUpdate[] | undefined>(t.keys.updateQueue) ?? []
-        const nextLive = stripField(live, malId, field)
+        const nextLive = revertAndRebase(stripFieldSlots(live, malId, field)).queue
         if (!sameValue(nextLive, live)) {
           store.set(t.keys.updateQueue, nextLive)
           t.broadcastQueueChanged()
@@ -1239,7 +1242,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         const parked = store.get<ParkedQueues | undefined>(t.keys.parkedQueues) ?? {}
         const nextParked: ParkedQueues = {}
         for (const [owner, bucket] of Object.entries(parked)) {
-          const entries = stripField(bucket.entries, malId, field)
+          const entries = revertAndRebase(stripFieldSlots(bucket.entries, malId, field)).queue
           if (entries.length > 0) nextParked[owner] = { ...bucket, entries }
         }
         if (!sameValue(nextParked, parked)) store.set(t.keys.parkedQueues, nextParked)

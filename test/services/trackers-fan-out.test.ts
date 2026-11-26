@@ -1,8 +1,12 @@
 // The fan-out writer (#692): `applyChange` with Shikimori's real primary
 // branch against `fake-shikimori.ts`, and AniList / MyAnimeList mirrors from
 // `fake-tracker.ts` behind the generic sync service.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
+import { ipcMain } from 'electron'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
+import { CHANNELS } from '../../src/shared/ipc/channels'
+import { register } from '../../src/main/ipc/shikimori.ipc'
+import type { AppDeps } from '../../src/main/ipc/index'
 
 vi.mock('../../src/main/shikimori', async (orig) => ({
   ...(await orig<typeof import('../../src/main/shikimori')>()),
@@ -397,8 +401,8 @@ describe('no mirror entry when the primary refuses (§ 1)', () => {
     r.shikiCache([1, rv(10)])
     r.alCache([1, rv(12, 7, 'completed')])
     offlineOnce()
-    expect(await r.mark(1, 5)).toBeNull()
-    expect(await r.mark(1, 0)).toBeNull()
+    expect(await r.mark(1, 5)).toEqual({ kind: 'primary', result: null })
+    expect(await r.mark(1, 0)).toEqual({ kind: 'primary', result: null })
     expectNoMirror(r)
   })
 
@@ -406,7 +410,7 @@ describe('no mirror entry when the primary refuses (§ 1)', () => {
     const r = rig()
     server.set(1, { episodes: 10 })
     r.alCache([1, rv(12, 7, 'completed')])
-    expect(await r.mark(1, 5)).toBeNull()
+    expect(await r.mark(1, 5)).toEqual({ kind: 'primary', result: null })
     expectNoMirror(r)
   })
 })
@@ -449,7 +453,10 @@ describe('clocks, the prompt and failure isolation', () => {
       const result = await r.set('shikimori', 1, rv(8))
       await vi.advanceTimersByTimeAsync(5_000)
 
-      expect(result).toMatchObject({ id: 10, target_id: 1, episodes: 8 })
+      expect(result).toMatchObject({
+        kind: 'primary',
+        result: { id: 10, target_id: 1, episodes: 8 }
+      })
       expect(server.get(1)!.episodes).toBe(8)
       expect(r.queueOf(id)).toHaveLength(1)
       expect(fake.upserts).toHaveLength(1)
@@ -723,7 +730,7 @@ describe('the non-primary user change (§ 3a, "Copy from primary")', () => {
     const r = rig()
     r.shikiCache([1, rv(8, 9)])
     r.alCache([1, rv(8, 9)])
-    expect(await r.set('anilist', 1, rv(8, 9))).toBeNull()
+    expect(await r.set('anilist', 1, rv(8, 9))).toEqual({ kind: 'queued', entry: null })
     expect(r.queueOf('anilist')).toEqual([])
     expect(r.rateKeys()).toEqual([])
     expect(r.alFake.upserts).toEqual([])
@@ -914,5 +921,74 @@ describe('discardQueue (§ 7)', () => {
     expect(r.queueOf('shikimori').map((q) => q.via)).toEqual(['mirror', undefined])
     await r.fan.discardQueue('shikimori')
     expect(r.cacheOf('shikimori', 1)).toEqual(rv(6, 9))
+  })
+})
+
+describe('the Shikimori handlers own their reply shape (#692 review)', () => {
+  /** The real router on the rig's store and fan-out; returns an invoker. */
+  function router(r: ReturnType<typeof rig>) {
+    ;(ipcMain.handle as unknown as Mock).mockClear()
+    register({
+      store: r.store,
+      shikimoriSyncService: r.shiki,
+      trackers: r.fan,
+      lookupByMalIds: vi.fn(async () => ({})),
+      maybeBroadcastCleanupPrompt: r.cleanup,
+      runAutoDownloadTick: vi.fn(async () => ({})),
+      broadcast: () => {}
+    } as unknown as AppDeps)
+    const handlers = new Map<string, (...args: unknown[]) => unknown>(
+      (ipcMain.handle as unknown as Mock).mock.calls.map(([c, h]) => [c, h])
+    )
+    return (channel: string, ...args: unknown[]) => handlers.get(channel)!({}, ...args)
+  }
+  const rate = (episodes: number, score = 7) => ({
+    id: 10,
+    score,
+    status: 'watching',
+    episodes,
+    rewatches: 0,
+    target_id: 1,
+    target_type: 'Anime'
+  })
+
+  it('update-rate on a non-primary Shikimori replies with the queued copy as a synthetic rate', async () => {
+    const r = rig()
+    r.primary('anilist')
+    r.offline.shikimori = true
+    r.shikiCache([1, rv(5)])
+    const invoke = router(r)
+
+    const reply = await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 8, 'watching', 7, 0)
+
+    expect(r.queueOf('shikimori')).toMatchObject([{ via: 'copy', fields: ['episodes'] }])
+    expect(reply).toEqual(rate(8))
+  })
+
+  it('an equal copy replies with the cached rate, never null', async () => {
+    const r = rig()
+    r.primary('anilist')
+    r.offline.shikimori = true
+    r.shikiCache([1, rv(5)])
+    const invoke = router(r)
+
+    expect(await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 5, 'watching', 7, 0)).toEqual(rate(5))
+    expect(r.queueOf('shikimori')).toEqual([])
+  })
+
+  it('mark-episode-watched on a non-primary Shikimori replies null', async () => {
+    const r = rig()
+    r.primary('anilist')
+    r.shikiCache([1, rv(5)])
+    const invoke = router(r)
+    expect(await invoke(CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED, 1, 6)).toBeNull()
+  })
+
+  it('as the primary, update-rate still replies with the rate Shikimori returned', async () => {
+    const r = rig()
+    server.set(1, { episodes: 5, score: 7 })
+    r.shikiCache([1, rv(5)])
+    const invoke = router(r)
+    expect(await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 6, 'watching', 7, 0)).toEqual(rate(6))
   })
 })

@@ -22,6 +22,7 @@ import {
 } from '../../lib/shikimori-rate'
 import { rateClockKey, stampRateClocks } from '../../store/sync-meta'
 import type { StorageService } from '../../store/types'
+import type { ShikiUserRate } from '../../shikimori'
 import { TRACKER_LABELS } from '../../trackers/types'
 import type { TrackerSyncService } from './sync'
 
@@ -54,7 +55,28 @@ export interface PrimaryWrite<T = unknown> {
 }
 
 /** A tracker's primary branch: a write, null when there was nothing to write; throws on a refusal. */
-export type PrimaryWriter = (malId: number, change: RateChange) => Promise<PrimaryWrite | null>
+export type PrimaryWriter<T = unknown> = (
+  malId: number,
+  change: RateChange
+) => Promise<PrimaryWrite<T> | null>
+
+/**
+ * What each tracker's primary branch returns: Shikimori's is the rate its
+ * handlers reply with. AniList's and MAL's are typed by T7 and T6.
+ */
+export interface PrimaryResults {
+  shikimori: ShikiUserRate
+  anilist: unknown
+  mal: unknown
+}
+
+/**
+ * What `applyChange` did: the primary branch ran (`result` null when it wrote
+ * nothing), or the change was queued only (`entry` null when nothing differed).
+ */
+export type ApplyOutcome<T = unknown> =
+  | { kind: 'primary'; result: T | null }
+  | { kind: 'queued'; entry: QueuedTrackerUpdate | null }
 
 export interface FanOutTracker {
   sync: TrackerSyncService<unknown, unknown>
@@ -71,16 +93,20 @@ export interface TrackerFanOutDeps {
 
 export interface TrackerFanOut {
   /**
-   * Writes one change. A `'user'` change to the primary returns the primary
-   * branch's result (null when it wrote nothing); every other change is queued
-   * only and returns the queued entry, or null when nothing was queued.
+   * Writes one change. A `'user'` change to the primary runs the primary
+   * branch (`kind: 'primary'`); every other change is queued only
+   * (`kind: 'queued'`). A caller replying to a request owns the reply's shape
+   * for both kinds.
    */
-  applyChange(
+  applyChange<K extends TrackerId>(
     malId: number,
     change: RateChange,
-    opts: { target: TrackerId; cause: ChangeCause }
-  ): Promise<unknown>
-  setPrimaryWriter(trackerId: TrackerId, writer: PrimaryWriter): void
+    opts: { target: K; cause: ChangeCause }
+  ): Promise<ApplyOutcome<PrimaryResults[K]>>
+  setPrimaryWriter<K extends TrackerId>(
+    trackerId: K,
+    writer: PrimaryWriter<PrimaryResults[K]>
+  ): void
   /** The stored primary if connected, else the first connected tracker, else null. */
   primary(): TrackerId | null
   /**
@@ -283,11 +309,11 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
     }
   }
 
-  async function applyChange(
+  async function applyChange<K extends TrackerId>(
     malId: number,
     change: RateChange,
-    opts: { target: TrackerId; cause: ChangeCause }
-  ): Promise<unknown> {
+    opts: { target: K; cause: ChangeCause }
+  ): Promise<ApplyOutcome<PrimaryResults[K]>> {
     const target = byId(opts.target)
     if (opts.cause === 'merge') {
       // The merge leg and the conflict resolution keep writing through
@@ -298,18 +324,26 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
       const p = primary()
       if (connected(target) && p !== opts.target) {
         // § 3a: queued to that tracker only, never live, no fan-out.
-        if (change.kind !== 'set') return null
-        return queueDiffed(target, malId, { kind: 'set', values: change.values }, 'copy', true)
+        if (change.kind !== 'set') return { kind: 'queued', entry: null }
+        const entry = queueDiffed(
+          target,
+          malId,
+          { kind: 'set', values: change.values },
+          'copy',
+          true
+        )
+        return { kind: 'queued', entry }
       }
       const writer = writers.get(opts.target)
       if (!writer) throw new Error(`${TRACKER_LABELS[opts.target]} has no primary write path`)
       const wrote = await writer(malId, change)
-      if (!wrote) return null
+      if (!wrote) return { kind: 'primary', result: null }
       fanOut(opts.target, malId, change, wrote)
-      return wrote.result
+      // `setPrimaryWriter` types each tracker's writer by `PrimaryResults`.
+      return { kind: 'primary', result: wrote.result as PrimaryResults[K] }
     }
     if (change.kind !== 'set') throw new Error(`A ${opts.cause} change is a set`)
-    return queueDiffed(target, malId, change, opts.cause, false)
+    return { kind: 'queued', entry: queueDiffed(target, malId, change, opts.cause, false) }
   }
 
   async function discardQueue(trackerId: TrackerId): Promise<number> {
@@ -342,7 +376,7 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
 
   return {
     applyChange,
-    setPrimaryWriter: (id, writer) => void writers.set(id, writer),
+    setPrimaryWriter: (id, writer) => void writers.set(id, writer as PrimaryWriter),
     primary,
     discardQueue,
     mirrorQueueCount: (id) => liveQueue(byId(id)).filter((q) => q.via === 'mirror').length,

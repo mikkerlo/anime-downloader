@@ -31,8 +31,11 @@ import {
   type CalendarEntry
 } from '../services/shikimori-sync'
 import {
+  cachedShikimoriRate,
   createShikimoriPrimary,
-  isQueueableRateError
+  isQueueableRateError,
+  shikimoriRateReply,
+  syntheticRate
 } from '../services/trackers/shikimori-primary'
 import type { AppDeps } from './index'
 
@@ -682,24 +685,36 @@ export function register({
       status: shikimori.ShikiUserRateStatus,
       score: number,
       rewatches: number
-    ) =>
-      trackers.applyChange(
+    ): Promise<shikimori.ShikiUserRate> => {
+      const values = { episodes, status, score, rewatches }
+      const outcome = await trackers.applyChange(
         malId,
-        { kind: 'set', values: { episodes, status, score, rewatches } },
+        { kind: 'set', values },
         { target: 'shikimori', cause: 'user' }
-      ) as Promise<shikimori.ShikiUserRate | null>
+      )
+      // An equal copy queued nothing: the cache already holds the values.
+      return shikimoriRateReply(
+        malId,
+        outcome,
+        () => cachedShikimoriRate(store, malId) ?? syntheticRate(malId, null, values)
+      )
+    }
   )
 
   // The player's auto-mark (#565): the primary's live read and its queue
   // fallback are Shikimori's primary branch (`services/trackers`).
   ipcMain.handle(
     CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED,
-    (_event, malId: number, epNum: number): Promise<shikimori.ShikiUserRate | null> =>
-      trackers.applyChange(
+    async (_event, malId: number, epNum: number): Promise<shikimori.ShikiUserRate | null> =>
+      shikimoriRateReply(
         malId,
-        { kind: 'mark-watched', episode: epNum },
-        { target: 'shikimori', cause: 'user' }
-      ) as Promise<shikimori.ShikiUserRate | null>
+        await trackers.applyChange(
+          malId,
+          { kind: 'mark-watched', episode: epNum },
+          { target: 'shikimori', cause: 'user' }
+        ),
+        () => null
+      )
   )
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS_RATES, async (_event, malId: number) => {

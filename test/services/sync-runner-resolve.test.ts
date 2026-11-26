@@ -371,6 +371,45 @@ describe('a Shikimori-side score conflict through the review sheet', () => {
     expect(await pc.runner.listConflicts()).toEqual([])
   })
 
+  it('Keep theirs (Shikimori) rebases a later via survivor: a copy queued over the library 8 still lands its 10 (#692 review)', async () => {
+    const { pc, libraryId, rec } = await shikimoriSideConflict()
+    // The leg's entry (its `before` is the server's 9 / 3 at the leg), then a
+    // "Copy from primary" built on its projection: score 8 is the library's.
+    const merge = {
+      malId: MAL,
+      rateId: MAL * 10,
+      before: vals({ score: 9, episodes: 3 }),
+      after: vals({ score: 8, episodes: 4 }),
+      queuedAt: 5,
+      fields: ['score', 'episodes'],
+      origin: { kind: 'sync-merge', provenance: { score: { libraryId }, episodes: { libraryId } } }
+    }
+    const copy = {
+      malId: MAL,
+      rateId: MAL * 10,
+      before: vals({ score: 8, episodes: 4 }),
+      after: vals({ score: 10, episodes: 4 }),
+      queuedAt: 6,
+      fields: ['score'],
+      via: 'copy'
+    }
+    pc.store.set('shikimoriUpdateQueue', [merge, copy])
+    pc.offline.value = true
+
+    await pc.runner.resolve([rec.id], { [rec.id]: keep('shikimori') })
+
+    expect(queue(pc)).toHaveLength(2)
+    expect(queue(pc)[1]).toMatchObject({
+      via: 'copy',
+      before: vals({ score: 9, episodes: 4 }),
+      after: vals({ score: 10, episodes: 4 })
+    })
+    pc.offline.value = false
+    await settleDrain(pc)
+    expect(server.get(MAL)).toMatchObject({ score: 10, episodes: 4 })
+    expect(queue(pc)).toEqual([])
+  })
+
   it('the merge pin (#692 § 5): the resolution entry is exactly its eight keys, with no clock, no prompt and no enqueue patch', async () => {
     const { pc, libraryId, rec } = await shikimoriSideConflict()
     pc.offline.value = true

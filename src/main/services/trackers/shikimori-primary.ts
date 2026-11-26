@@ -22,7 +22,7 @@ import {
 import { rateClockKey, stampRateClocks } from '../../store/sync-meta'
 import type { StorageService } from '../../store/types'
 import type { ShikimoriSyncService } from '../shikimori-sync'
-import type { PrimaryWrite, RateChange } from './fan-out'
+import type { ApplyOutcome, PrimaryWrite, RateChange } from './fan-out'
 
 type CachedRateEntry = {
   rate: Record<string, unknown> & {
@@ -365,4 +365,49 @@ export function createShikimoriPrimary(deps: ShikimoriPrimaryDeps): ShikimoriPri
     sendRate,
     queueRate
   }
+}
+
+/** The synthetic rate `queueRate` returns for a queued write: `values` under `rateId`. */
+export function syntheticRate(
+  malId: number,
+  rateId: number | null,
+  values: RateValues
+): shikimori.ShikiUserRate {
+  const { episodes, status, score, rewatches } = values
+  return {
+    id: rateId ?? -1,
+    score,
+    status,
+    episodes,
+    rewatches,
+    target_id: malId,
+    target_type: 'Anime'
+  }
+}
+
+/**
+ * What a Shikimori rate handler replies with, whichever branch `applyChange`
+ * took (#692 review). The primary's own result; for a change queued only (the
+ * § 3a copy, when Shikimori is connected but not the primary) the synthetic
+ * rate of the queued entry; and when nothing was queued, `onNothing()`.
+ */
+export function shikimoriRateReply<T>(
+  malId: number,
+  outcome: ApplyOutcome<shikimori.ShikiUserRate>,
+  onNothing: () => T
+): shikimori.ShikiUserRate | T {
+  if (outcome.kind === 'primary') return outcome.result ?? onNothing()
+  if (outcome.entry) return syntheticRate(malId, outcome.entry.rateId, outcome.entry.after)
+  return onNothing()
+}
+
+/** The signed-in user's cached rate for `malId` as a reply, or null when it has no row. */
+export function cachedShikimoriRate(
+  store: StorageService,
+  malId: number
+): shikimori.ShikiUserRate | null {
+  const entry = (store.get('shikimoriUserRates') as CachedRateEntry[]).find(
+    (e) => e.rate.target_id === malId
+  )
+  return entry ? syntheticRate(malId, cachedBasis(entry).rateId, rateValues(entry.rate)) : null
 }

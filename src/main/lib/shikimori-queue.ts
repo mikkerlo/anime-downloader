@@ -330,18 +330,30 @@ export function stripField(
   malId: number,
   field: SyncRateField
 ): QueuedShikimoriUpdate[] {
-  const out: QueuedShikimoriUpdate[] = []
+  return stripSurvivors(stripFieldSlots(entries, malId, field))
+}
+
+/** `stripField`, entry by entry, in queue order (#692 review: Keep theirs rebases too). */
+export function stripFieldSlots(
+  entries: QueuedShikimoriUpdate[],
+  malId: number,
+  field: SyncRateField
+): StripSlot[] {
+  const out: StripSlot[] = []
   for (const entry of entries) {
     const scoped = !!entry.fields?.includes(field) || !!entry.resolvedFields?.includes(field)
     if (entry.malId !== malId || !entry.origin || !scoped) {
-      out.push(entry)
+      out.push({ entry, next: entry, stripped: [] })
       continue
     }
     const keep = (fs?: SyncRateField[]): SyncRateField[] | undefined =>
       fs?.filter((f) => f !== field)
     const fields = keep(entry.fields)
     const resolvedFields = keep(entry.resolvedFields)
-    if ((fields?.length ?? 0) + (resolvedFields?.length ?? 0) === 0) continue
+    if ((fields?.length ?? 0) + (resolvedFields?.length ?? 0) === 0) {
+      out.push({ entry, next: null, stripped: [field] })
+      continue
+    }
     const next: QueuedShikimoriUpdate = {
       ...entry,
       after: { ...entry.after, [field]: entry.before[field] }
@@ -353,7 +365,7 @@ export function stripField(
     )
     if (Object.keys(prov).length > 0) next.origin = { kind: 'sync-merge', provenance: prov }
     else delete next.origin
-    out.push(next)
+    out.push({ entry, next, stripped: [field] })
   }
   return out
 }

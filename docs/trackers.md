@@ -272,6 +272,15 @@ change is a `{ kind: 'set', values, fields?, origin? }` or a mark-watched
 `index.ts` builds it with one entry per tracker sync instance (Shikimori alone
 today) and passes it to the routers as `AppDeps.trackers`.
 
+`applyChange` resolves to an `ApplyOutcome`: `{ kind: 'primary', result }`
+when the primary branch ran (`result` null when it wrote nothing), or
+`{ kind: 'queued', entry }` when the change was only queued (`entry` null when
+nothing differed). Each tracker's `result` is typed through `PrimaryResults`,
+and `setPrimaryWriter` takes a writer of that type. A caller that replies to a
+request builds the reply from the outcome. The Shikimori handlers reply with
+the primary's rate, the synthetic rate `queueRate` builds for a queued copy,
+and for an equal copy the cached rate (update-rate) or null (mark-watched).
+
 - **The primary** is the stored `trackerPrimary` if that tracker is connected,
   else the first connected tracker in `shikimori`, `anilist`, `mal` order, else
   null. Connected means `<provider>User` is set.

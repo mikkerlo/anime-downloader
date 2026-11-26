@@ -18,7 +18,10 @@ export interface TrackerConnectFormProps {
 export interface TrackerConnectFormHandle {
   /** A sign-in is in progress, so the body has something to show. */
   active: boolean
-  /** Starts a sign-in: the card's Reconnect on an expired session. */
+  /**
+   * Starts a sign-in: the card's Reconnect on an expired session. The card
+   * discards the promise, so the body shows its own failure.
+   */
   begin: () => Promise<void>
   /** Clears a sign-in in progress: run after a logout. */
   reset: () => void

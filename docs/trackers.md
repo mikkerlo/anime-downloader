@@ -498,9 +498,16 @@ pending-verifier key exists.
 - **Completing.** The loopback callback and a `'url'` paste must carry the
   held `state` and a `code`; otherwise the callback gets a static refusal page,
   the paste an `error` / `auth` result, and the attempt keeps waiting. A
-  callback or paste that arrives while the attempt is `exchanging`, or after it
-  connected, runs no second exchange: it resolves that one exchange's result,
-  and the loopback answers with the static page.
+  callback or paste that arrives while the attempt is `exchanging` runs no
+  second exchange: it resolves that one exchange's result, and the loopback
+  answers with the static page.
+- **After it connected.** Only a replay, the same code or token again while
+  its credential is still stored, gets the connected result back with no
+  exchange (a double submit, or a late paste of the URL the loopback took).
+  Anything else drops the attempt and is a new sign-in: a different token is
+  an account switch, and any paste after an expiry cleared the credential runs
+  a fresh exchange. For MAL that means a URL from another attempt is refused
+  as expired, like a paste with no attempt held.
 - **No attempt held.** A `'token'` or `'code'` completion (AniList, Shikimori)
   registers an implicit attempt that starts in `exchanging`, so cancel, logout
   and a new `BEGIN` stop it like any other. A `'url'` completion (MAL) returns

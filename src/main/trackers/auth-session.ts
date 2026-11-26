@@ -42,6 +42,8 @@ interface Attempt {
   settle: ((result: TrackerAuthResult) => void) | null
   /** The one exchange, once started: a second callback or paste awaits it. */
   exchange: Promise<TrackerAuthResult> | null
+  /** What that exchange ran with (the code or token), so only a replay of it reuses the result. */
+  input: string | null
 }
 
 export interface TrackerAuthSessionsDeps {
@@ -128,6 +130,7 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
   /** The one exchange of an attempt. Resolves `cancelled` if the attempt was overtaken. */
   function runExchange(a: Attempt, input: string): Promise<TrackerAuthResult> {
     a.phase = 'exchanging'
+    a.input = input
     const isCurrent = (): boolean => current.get(a.trackerId) === a
     a.exchange = (async (): Promise<TrackerAuthResult> => {
       let result: TrackerAuthResult
@@ -227,7 +230,8 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
       phase: loopback ? 'binding' : 'waiting',
       loopback: null,
       settle: null,
-      exchange: null
+      exchange: null,
+      input: null
     }
     current.set(id, a)
     const pending = new Promise<TrackerAuthResult>((resolve) => (a.settle = resolve))
@@ -291,13 +295,23 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
   async function complete(id: TrackerId, urlOrToken: string): Promise<TrackerAuthResult> {
     const { provider, flow } = providerOf(id)
     const held = current.get(id)
-    // Exchanging, or already connected: the one exchange's result, no second one.
-    if (held?.exchange) return held.exchange
+    // Exchanging: the one exchange's result, no second one.
+    if (held?.exchange && held.phase !== 'connected') return held.exchange
     if (held) {
       const p = pasted(flow, held, urlOrToken)
-      if ('refused' in p) return { status: 'error', kind: 'auth', message: p.refused }
-      closeLoopback(held)
-      return runExchange(held, p.input)
+      if (held.phase === 'connected' && held.exchange) {
+        // The same input again (a double submit, a late paste of the URL the
+        // loopback took) gets that result while its credential is still
+        // stored. Anything else, or a replay after an expiry cleared the
+        // credential, is a new sign-in.
+        const replay = 'input' in p && p.input === held.input
+        if (replay && lifecycle.account(id).hasCredentials) return held.exchange
+        cancel(id)
+      } else {
+        if ('refused' in p) return { status: 'error', kind: 'auth', message: p.refused }
+        closeLoopback(held)
+        return runExchange(held, p.input)
+      }
     }
     // No attempt held (a restart, or a window reload, then a paste).
     if (flow.paste === 'url') {
@@ -320,7 +334,8 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
       phase: 'exchanging',
       loopback: null,
       settle: null,
-      exchange: null
+      exchange: null,
+      input: null
     }
     current.set(id, a)
     return runExchange(a, text)

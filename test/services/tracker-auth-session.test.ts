@@ -391,3 +391,99 @@ describe('a completion with no attempt held', () => {
     expect(r.auth.phase('mal')).toBeNull()
   })
 })
+
+// PR #725 review (r4712794234): a connected attempt answers only a replay of
+// its own input while its credential is stored; anything else is a new sign-in.
+describe('a completion after an attempt connected', () => {
+  const B = { id: 2, nickname: 'bob', avatar: null }
+
+  /** What an expiry leaves: the user kept, the credential cleared. */
+  function expire(r: Rig, id: 'anilist' | 'shikimori'): void {
+    const prefix = id === 'anilist' ? 'anilist' : 'shikimori'
+    r.store.set(`${prefix}Credentials`, null)
+    r.store.set(`${prefix}SessionExpired`, true)
+  }
+
+  it('AniList: after an expiry, an attempt-less paste of a new token runs the exchange and commits B', async () => {
+    const r = rig()
+    r.fakes.anilist.signIn.accounts.set('tok-b', B)
+    expect(await r.auth.complete('anilist', 'tok-a')).toMatchObject({ status: 'connected' })
+    expire(r, 'anilist')
+
+    const result = await r.auth.complete('anilist', 'tok-b')
+
+    expect(r.fakes.anilist.signIn.calls.map((c) => c.input)).toEqual(['tok-a', 'tok-b'])
+    expect(result).toMatchObject({
+      status: 'connected',
+      account: { trackerId: 'anilist', user: B, hasCredentials: true, sessionExpired: false }
+    })
+    expect(r.store.get('anilistUser')).toEqual(B)
+    expect(r.store.get('anilistCredentials')).toMatchObject({ v: 1 })
+    expect(r.store.get('anilistSessionExpired')).toBe(false)
+  })
+
+  it('Shikimori: after an expiry, a fresh code runs the exchange and signs in again', async () => {
+    const r = rig()
+    r.fakes.shikimori.signIn.accounts.set('code-b', B)
+    expect(await r.auth.complete('shikimori', 'code-a')).toMatchObject({ status: 'connected' })
+    expire(r, 'shikimori')
+
+    const result = await r.auth.complete('shikimori', 'code-b')
+
+    expect(r.fakes.shikimori.signIn.calls.map((c) => c.input)).toEqual(['code-a', 'code-b'])
+    expect(result).toMatchObject({
+      status: 'connected',
+      account: { user: B, hasCredentials: true }
+    })
+    expect(r.store.get('shikimoriUser')).toEqual(B)
+    expect(r.store.get('shikimoriCredentials')).toEqual({
+      access_token: 'shikimori-token-for-code-b'
+    })
+    expect(r.store.get('shikimoriSessionExpired')).toBe(false)
+  })
+
+  it('the same token after an expiry runs a new exchange too: the cached result is a dead session', async () => {
+    const r = rig()
+    await r.auth.complete('anilist', 'tok-a')
+    expire(r, 'anilist')
+    expect(await r.auth.complete('anilist', 'tok-a')).toMatchObject({
+      status: 'connected',
+      account: { hasCredentials: true }
+    })
+    expect(r.fakes.anilist.signIn.calls).toHaveLength(2)
+  })
+
+  it('AniList: a different token while connected is an account switch, not a replay', async () => {
+    const r = rig()
+    r.fakes.anilist.signIn.accounts.set('tok-b', B)
+    await r.auth.complete('anilist', 'tok-a')
+    expect(await r.auth.complete('anilist', 'tok-b')).toMatchObject({
+      status: 'connected',
+      account: { user: B }
+    })
+    expect(r.fakes.anilist.signIn.calls.map((c) => c.input)).toEqual(['tok-a', 'tok-b'])
+    expect(r.store.get('anilistUser')).toEqual(B)
+  })
+
+  it('a double submit of the same token while connected is a replay: one exchange', async () => {
+    const r = rig()
+    const first = await r.auth.complete('anilist', 'tok-a')
+    expect(await r.auth.complete('anilist', ' tok-a ')).toEqual(first)
+    expect(r.fakes.anilist.signIn.calls).toHaveLength(1)
+  })
+
+  it('MAL: a URL from another attempt after the loopback connected is refused as expired', async () => {
+    const r = rig()
+    const begin = r.auth.begin('mal')
+    await opened(r)
+    await hit(r.port(), 'code=c&state=state-1')
+    await begin
+    expect(await r.auth.complete('mal', malUrl('state-9', 'c2'))).toMatchObject({
+      status: 'error',
+      kind: 'auth',
+      message: expect.stringMatching(/expired/)
+    })
+    expect(r.fakes.mal.signIn.calls).toHaveLength(1)
+    expect(r.auth.phase('mal')).toBeNull()
+  })
+})

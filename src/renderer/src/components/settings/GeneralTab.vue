@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../stores/settings';
 import { useOfflineStore } from '../../stores/offline';
 import { usePrepareOfflineStore } from '../../stores/prepare-offline';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import { usePrimaryTrackerLabel } from '../../composables/use-primary-tracker-label';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 import SettingsSwitch from './SettingsSwitch.vue';
@@ -14,6 +15,7 @@ const { updateStatus } = storeToRefs(settingsStore);
 const { autoSave, showSaved } = useSettingsAutosave();
 const offlineStore = useOfflineStore();
 const { isManual: workOffline } = storeToRefs(offlineStore);
+const primaryTrackerLabel = usePrimaryTrackerLabel();
 
 function setWorkOffline(on: boolean): void {
   void offlineStore.setManual(on).then(() => showSaved());
@@ -223,7 +225,7 @@ watch(autoDownloadEnabled, (val) => {
       </SettingsRow>
       <SettingsRow
         label="Work offline"
-        desc="Stop all network access: no searches, syncs, downloads, update checks or Watch Together. Shikimori changes queue until you turn it off."
+        :desc="`Stop all network access: no searches, syncs, downloads, update checks or Watch Together. ${primaryTrackerLabel} changes queue until you turn it off.`"
       >
         <SettingsSwitch
           :model-value="workOffline"

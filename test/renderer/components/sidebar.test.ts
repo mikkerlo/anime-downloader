@@ -102,7 +102,8 @@ describe('Sidebar', () => {
 
     await chip.trigger('click')
     expect(library.currentView).toBe('settings')
-    expect(library.pendingSettingsTab).toBe('connectors')
+    expect(library.pendingSettingsTab).toBe('trackers')
+    expect(library.pendingSettingsTrackerId).toBe('shikimori')
   })
 
   it('shows the update banner even when logged out (it is not gated on login)', () => {

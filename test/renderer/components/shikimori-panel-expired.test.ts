@@ -88,13 +88,14 @@ describe('ShikimoriPanel — expired session banner', () => {
     expect(wrapper.find('.shiki-offline').exists()).toBe(false)
   })
 
-  it('"Sign in again" deep-links to Settings → Connectors', async () => {
+  it('"Sign in again" deep-links to the Shikimori card in Settings → Trackers', async () => {
     const wrapper = await mountPanel(true)
     const library = useLibraryStore()
 
     await wrapper.find('.shiki-expired-btn').trigger('click')
 
     expect(library.currentView).toBe('settings')
-    expect(library.pendingSettingsTab).toBe('connectors')
+    expect(library.pendingSettingsTab).toBe('trackers')
+    expect(library.pendingSettingsTrackerId).toBe('shikimori')
   })
 })

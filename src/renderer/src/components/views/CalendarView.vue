@@ -169,7 +169,7 @@ async function load(force = false): Promise<void> {
   const user = await window.api.shikimoriGetUser();
   if (!user) {
     entries.value = [];
-    error.value = 'Connect to Shikimori in Settings to see the calendar.';
+    error.value = 'Connect to Shikimori in Settings → Trackers to see the calendar.';
     return;
   }
   loading.value = true;

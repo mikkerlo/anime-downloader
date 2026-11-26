@@ -294,7 +294,7 @@ body {
 .user-meta .u-sync.offline {
   color: var(--st-orange);
 }
-/* Expired session — a button, not a status line: it routes to Connectors. */
+/* Expired session — a button, not a status line: it routes to Settings → Trackers. */
 .user-meta button.u-sync.expired {
   color: var(--st-red);
   background: none;

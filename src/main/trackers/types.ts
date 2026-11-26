@@ -135,3 +135,50 @@ export interface TrackerProvider<TSession, TNative, TRate = unknown> {
   getRecommendations?(seedMalIds: readonly number[]): Promise<unknown>
   getDetails?(malId: number): Promise<unknown>
 }
+
+/** Each tracker's name in the sync service's strings (`Shikimori rate limit — will retry`). */
+export const TRACKER_LABELS: Readonly<Record<TrackerId, string>> = {
+  shikimori: 'Shikimori',
+  anilist: 'AniList',
+  mal: 'MyAnimeList'
+}
+
+/**
+ * How a tracker's rate cache (its `userRates` key) is written (#691). Rows are
+ * built from each listed entry's `native`, never from the lossy normalized
+ * fields, so Shikimori's `shikimoriUserRates` keeps its bytes.
+ */
+export interface TrackerRateCacheCodec<TNative, TRow> {
+  /** The cache rows for a listed page, from each entry's `native` and `smotretAnime`. */
+  fromEntries(entries: readonly TrackerRateEntry<TNative>[]): TRow[]
+  /** A row's MAL id, as a refresh with `keepQueued` matches it. */
+  malIdOf(row: TRow): number | undefined
+  /** The index of the row a patch for `malId` writes, or -1. */
+  indexOf(rows: readonly TRow[], malId: number): number
+  /**
+   * `row` with `values` laid over it and its local update time moved to now.
+   * `remoteId`, when given, becomes the row's id; otherwise the id is left alone.
+   */
+  patch(row: TRow, values: RateValues, remoteId?: number): TRow
+}
+
+/**
+ * What `createTrackerSyncService` (#691) needs from a tracker beyond the seam:
+ * its rate-cache codec and the token step's "the session is gone" predicate.
+ * A session carries the account it was refreshed for, as `userId`.
+ */
+export interface TrackerSyncProvider<
+  TSession extends { userId: number },
+  TNative,
+  TRate,
+  TRow
+> extends TrackerProvider<TSession, TNative, TRate> {
+  readonly rateCache: TrackerRateCacheCodec<TNative, TRow>
+  /**
+   * True when an `auth()` failure means the stored credentials are gone, so the
+   * timer stops. Narrower than the `auth` class: Shikimori's is
+   * `instanceof ShikiAuthError`, and a `ShikiApiError(403)` from the refresh
+   * endpoint leaves the timer running.
+   */
+  isSessionGone(err: unknown): boolean
+}

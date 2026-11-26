@@ -132,6 +132,50 @@ describe('Shikimori offline drain — multi-item integration', () => {
     expect(lastQueueEvent?.[1]).toEqual({ length: 0 })
   })
 
+  // The drain lives in the generic tracker service (#691); Shikimori's calendar
+  // stays in the wrapper, which reaches it through `onRateUpdated`. Only the
+  // refresh path was pinned before (`prepare-offline.test.ts`).
+  it('a drained edit marks the calendar snapshot stale and broadcasts the patched entry once', async () => {
+    const { store, broadcast, svc } = boot({
+      shikimoriUserRates: [cacheEntry(10, 0)],
+      shikimoriUpdateQueue: [queued(10, 0, 1, 1)]
+    })
+    svc.setCachedCalendar([])
+    expect(svc.getCachedCalendar()?.invalidated).toBe(false)
+    getUserRate.mockResolvedValue({
+      id: 10,
+      target_id: 10,
+      episodes: 0,
+      status: 'watching',
+      score: 0
+    })
+    updateUserRate.mockResolvedValue({
+      id: 10,
+      target_id: 10,
+      episodes: 1,
+      status: 'watching',
+      score: 0,
+      rewatches: 0
+    })
+
+    await svc.syncShikimoriQueue()
+
+    expect(svc.getCachedCalendar()?.invalidated).toBe(true)
+    const patched = (store.get('shikimoriUserRates') as unknown[])[0]
+    expect(patched).toEqual({
+      ...cacheEntry(10, 0),
+      rate: {
+        ...cacheEntry(10, 0).rate,
+        episodes: 1,
+        rewatches: 0,
+        updated_at: expect.any(String)
+      }
+    })
+    expect(broadcast.mock.calls.filter((c) => c[0] === CH.rateUpdated)).toEqual([
+      [CH.rateUpdated, patched]
+    ])
+  })
+
   it('consolidates multiple queued edits to the same malId into one server write', async () => {
     const { store, svc } = boot({
       shikimoriUserRates: [cacheEntry(10, 0)],
@@ -425,6 +469,10 @@ describe('Shikimori offline queue — kept per owner across accounts (#588)', ()
       vi.setSystemTime(T0 + 10 * 60_000)
       await app.invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'keep' })
       await app.signIn(ALICE)
+      // Let the sign-in's drain run before `waitFor`, which advances the faked
+      // clock by its interval on every failed check (#691: the drain reaches
+      // the stamp through the provider, a couple of microtasks later).
+      await new Promise((resolve) => setImmediate(resolve))
       await vi.waitFor(() => {
         expect(getUserRate).toHaveBeenCalledTimes(2)
         expect(app.svc.getSyncStatus().state).toBe('idle')

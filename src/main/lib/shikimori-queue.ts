@@ -31,6 +31,12 @@ export interface QueuedShikimoriUpdate {
   origin?: { kind: 'sync-merge'; provenance: Partial<Record<SyncRateField, SyncProvenance>> }
 }
 
+/**
+ * Any tracker's queue entry (#691): the same shape, in that tracker's own
+ * queue key, so an entry carries no tracker id.
+ */
+export type QueuedTrackerUpdate = QueuedShikimoriUpdate
+
 export const SERVER_ERROR_WINDOW_MS = 24 * 60 * 60 * 1000
 export const SERVER_ERROR_GAP_MS = 60 * 60 * 1000
 

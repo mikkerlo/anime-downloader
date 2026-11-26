@@ -79,6 +79,9 @@ describe('shared-library-e2e workflow', () => {
       'src/main/services/shared-library-export/**',
       'src/main/services/sync-runner/**',
       'src/main/services/shikimori-sync/**',
+      // The drain moved into the generic tracker service and its provider (#691).
+      'src/main/services/trackers/**',
+      'src/main/trackers/**',
       'src/main/services/offline/**',
       'src/main/ipc/shared-library.ipc.ts',
       'src/main/ipc/watch-progress.ipc.ts',

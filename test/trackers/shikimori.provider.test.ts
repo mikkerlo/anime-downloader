@@ -31,7 +31,11 @@ import {
   type ShikiUserRate
 } from '../../src/main/shikimori'
 import { buildRateCacheEntries } from '../../src/main/lib/shikimori-rate-cache'
-import { createShikimoriProvider, parseUpdatedAt } from '../../src/main/trackers/shikimori.provider'
+import {
+  createShikimoriProvider,
+  parseUpdatedAt,
+  shikimoriRateCache
+} from '../../src/main/trackers/shikimori.provider'
 import { TRACKER_CAPABILITIES } from '../../src/main/trackers/types'
 
 const A = { id: 1, nickname: 'alice', avatar: '/a.png' }
@@ -273,5 +277,52 @@ describe('listEntries', () => {
         SMOTRET
       )
     ).toEqual(buildRateCacheEntries(ROWS, SMOTRET))
+  })
+})
+
+// T2a's codec (#691): what the generic sync service writes into `shikimoriUserRates`.
+describe('the rate-cache codec', () => {
+  const session = { token: 'token-a', userId: A.id }
+
+  it('builds exactly today’s cache bytes from the listed entries, key order included', async () => {
+    api.getUserAnimeRates.mockResolvedValueOnce(ROWS)
+    const p = provider()
+    const rows = p.rateCache.fromEntries(await p.listEntries(session))
+    expect(JSON.stringify(rows)).toBe(JSON.stringify(buildRateCacheEntries(ROWS, SMOTRET)))
+  })
+
+  it('matches a row by target_id for a patch, and falls back to shikiAnime.id for keepQueued', () => {
+    const noTarget = { rate: { id: 1, score: 0, status: 'watching' }, shikiAnime: { id: 77 } }
+    const rows = [noTarget, { rate: { id: 2, target_id: 5114 }, shikiAnime: { id: 5114 } }]
+    expect(shikimoriRateCache.indexOf(rows as never, 77)).toBe(-1)
+    expect(shikimoriRateCache.indexOf(rows as never, 5114)).toBe(1)
+    expect(shikimoriRateCache.malIdOf(noTarget as never)).toBe(77)
+  })
+
+  it('patch lays the values over the row, sets the id only when given, and keeps key order', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 10, 1) })
+    try {
+      const [row] = buildRateCacheEntries([ROWS[0]], SMOTRET)
+      const values = { episodes: 9, status: 'completed' as const, score: 10, rewatches: 1 }
+      const settled = shikimoriRateCache.patch(row, values, 555)
+      expect(settled.rate).toEqual({
+        ...row.rate,
+        id: 555,
+        ...values,
+        updated_at: '2026-11-01T00:00:00.000Z'
+      })
+      expect(Object.keys(settled.rate)).toEqual(Object.keys(row.rate))
+      expect(settled.shikiAnime).toBe(row.shikiAnime)
+      expect(shikimoriRateCache.patch(row, values).rate.id).toBe(row.rate.id)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the session is gone only for a ShikiAuthError, not for a 403 from the refresh', () => {
+    const p = provider()
+    expect(p.isSessionGone(new ShikiAuthError('expired', 400))).toBe(true)
+    expect(p.isSessionGone(new ShikiApiError('Shikimori API error: 403', 403))).toBe(false)
+    expect(p.isSessionGone(new TypeError('fetch failed'))).toBe(false)
   })
 })

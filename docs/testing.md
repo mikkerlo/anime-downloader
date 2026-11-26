@@ -1178,6 +1178,13 @@ both inside the ~7–13 point margin the other floors use. The single-file globs
 `use-syncplay-client.ts` still counts into the composables aggregate too and
 the tighter of the two floors is what binds.
 
+`src/main/services/trackers/**` (#691) is the generic tracker sync service. The
+Shikimori drain moved there from `src/main/services/shikimori-sync/**`, and the
+65 floor moved with it (measured 99.51% at #691). What stays in
+`services/shikimori-sync/**` is the Shikimori wrapper and its extras (the
+details prefetch, the snapshots, the recommendations cache): measured 91.61% at
+#691, floored at 85.
+
 `src/main/trackers/**` (#689) is the tracker seam: measured 100%
 statements/lines at #689, floored at 92. `types.ts` has no statements, so the
 aggregate is the adapter, the classifiers and the score helpers. Its provider

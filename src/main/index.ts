@@ -423,7 +423,8 @@ const sharedLibraryExport = createSharedLibraryExportService({
     installId: store.ensureInstallId(),
     appVersion: app.getVersion(),
     shikimoriUserId: (store.get('shikimoriUser') as { id: number } | null)?.id ?? null,
-    claim: null
+    claim: null,
+    trackerAccounts: []
   }),
   broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
   onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root),

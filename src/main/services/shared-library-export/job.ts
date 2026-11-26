@@ -12,7 +12,7 @@
 
 import * as path from 'path'
 import type { MergeStatus } from '../../download-manager'
-import { itemKey } from '../../lib/shared-library/format'
+import { itemKey, layoutVersionFor } from '../../lib/shared-library/format'
 import { renderIndexHtml } from '../../lib/shared-library/index-html'
 import type { MountCandidates } from '../../lib/shared-library/mount-candidates'
 import { nameItems } from '../../lib/shared-library/naming'
@@ -488,7 +488,7 @@ export class ExportJob {
           generation: r.generation,
           stateGeneration: r.stateGeneration,
           layoutMinor: this.base.layoutMinor,
-          layoutVersion: 1
+          layoutVersion: layoutVersionFor(next.owner)
         }
         this.libraryWritten()
         this.signature = await this.manifestSignature()

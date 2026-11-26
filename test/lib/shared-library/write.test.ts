@@ -443,7 +443,7 @@ describe('the first write into a With-metadata library', () => {
         torn: false
       })
       expect(r.manifest.stateGeneration).toBeNull()
-      expect(r.manifest.owner?.shikimoriId).toBe(OWNER_ID)
+      expect(r.manifest.owner).toMatchObject({ shikimoriId: OWNER_ID })
       await writeState(root, EMPTY_DOC, OWNER, null)
       expect((await ok(root)).stateInitialized).toBe(true)
     }

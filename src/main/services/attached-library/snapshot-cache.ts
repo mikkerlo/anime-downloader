@@ -4,7 +4,8 @@
 // rate values: a claim PC reads those from the library base (S9 #584).
 //
 // - `snapshot.json`: the manifest and the `meta/*.json` of every title (each
-//   capped at 1 MB by S5's reader), always kept.
+//   capped at 1 MB by S5's reader), always kept. `version: 2` holds a layout
+//   v2 manifest (#713).
 // - `posters/<animeId>.jpg`: a poster over 2 MB isn't cached. All libraries'
 //   posters together are capped at 100 MB; above that, the posters of the
 //   unavailable library seen longest ago are evicted, a whole library at a
@@ -37,6 +38,9 @@ const POSTERS_STAGING = 'posters.next'
 // `libraryId` comes from the drive: S5's reader checks it is a UUID, and it is
 // checked again here, where it becomes a folder name.
 const SAFE_ID = /^[A-Za-z0-9-]{1,64}$/
+
+/** `snapshot.json`'s `version`: 2 for a v2 manifest (#713), 1 otherwise, as before. */
+const snapshotVersionOf = (m: SharedLibraryManifest): 1 | 2 => (m.layoutVersion === 2 ? 2 : 1)
 
 export interface LibrarySnapshot {
   manifest: SharedLibraryManifest
@@ -225,9 +229,11 @@ export function createSnapshotCache(deps: SnapshotCacheDeps): SnapshotCache {
       }
       const metas: Record<string, SharedLibraryMeta> = {}
       for (const [id, meta] of input.metas) metas[String(id)] = meta
+      // A v2 manifest goes under `version: 2`, which a v6 `load` rejects, so a
+      // downgraded PC never renders it as a v1 one (#713).
       await writeAtomic(
         path.join(dir, SNAPSHOT_FILE),
-        JSON.stringify({ version: 1, manifest: input.manifest, metas })
+        JSON.stringify({ version: snapshotVersionOf(input.manifest), manifest: input.manifest, metas })
       )
       // No `posterFile` path points into the folder while it is swapped.
       indexes.delete(libraryId)
@@ -260,8 +266,9 @@ export function createSnapshotCache(deps: SnapshotCacheDeps): SnapshotCache {
       }
       const m = raw?.manifest
       if (
-        raw?.version !== 1 ||
         !m ||
+        (raw.version !== 1 && raw.version !== 2) ||
+        raw.version !== snapshotVersionOf(m) ||
         m.libraryId !== libraryId ||
         !Array.isArray(m.titles) ||
         !Array.isArray(m.items)

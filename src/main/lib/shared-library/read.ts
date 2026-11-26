@@ -14,6 +14,7 @@ import * as path from 'path'
 import {
   CAPS,
   FORBIDDEN_FIELDS,
+  LAYOUT_READER_MAX,
   META_SCHEMA,
   MANIFEST_SCHEMAS,
   READ_ONLY_MESSAGES,
@@ -22,6 +23,7 @@ import {
   isPlainObject,
   put,
   setUnknownFields,
+  type LayoutMajor,
   type RecordNode,
   type SchemaNode
 } from './format'
@@ -201,19 +203,35 @@ export type Classified<T> =
   | { kind: 'invalid' }
   | { kind: 'valid'; raw: Record<string, unknown>; value: T; issues: Issue[] }
 
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v !== ''
+
+const isKnownMajor = (v: unknown): v is LayoutMajor =>
+  isInt(v) && v >= 1 && v <= LAYOUT_READER_MAX
+
+/** Whether `owner` fits `mode` at `major`. v2 is always With metadata, with a v2 owner. */
+function ownerFits(major: LayoutMajor, mode: SharedLibraryMode, owner: unknown): boolean {
+  if (major === 2) {
+    return (
+      mode === 'metadata' &&
+      isPlainObject(owner) &&
+      isNonEmptyString(owner.provider) &&
+      isNonEmptyString(owner.userId)
+    )
+  }
+  return mode === 'videos' ? owner === null : isPlainObject(owner) && isInt(owner.shikimoriId)
+}
+
 /** A manifest file's envelope; `null` when it holds, otherwise why not. */
 export function manifestEnvelopeFailure(raw: unknown): string | null {
   if (!isPlainObject(raw)) return 'not an object'
-  if (raw.layoutVersion !== 1) return 'layoutVersion'
+  const major = raw.layoutVersion
+  if (!isKnownMajor(major)) return 'layoutVersion'
   if (!isInt(raw.layoutMinor) || raw.layoutMinor < 0) return 'layoutMinor'
   if (typeof raw.libraryId !== 'string' || !UUID.test(raw.libraryId)) return 'libraryId'
   if (!isInt(raw.generation)) return 'generation'
   if (raw.stateGeneration !== null && !isInt(raw.stateGeneration)) return 'stateGeneration'
   if (raw.mode !== 'videos' && raw.mode !== 'metadata') return 'mode'
-  const owner = raw.owner
-  if (raw.mode === 'videos' ? owner !== null : !isPlainObject(owner) || !isInt(owner.shikimoriId)) {
-    return 'owner'
-  }
+  if (!ownerFits(major, raw.mode, raw.owner)) return 'owner'
   if (!Array.isArray(raw.items)) return 'items'
   if (!Array.isArray(raw.titles)) return 'titles'
   return null
@@ -241,7 +259,8 @@ function classify<T>(
   versionField: string,
   known: number,
   failure: (raw: unknown) => string | null,
-  schema: RecordNode,
+  // The schema of the file's own major, once its envelope holds.
+  schemaOf: (raw: Record<string, unknown>) => RecordNode,
   overItems: (raw: Record<string, unknown>) => boolean
 ): Classified<T> {
   if (loaded.status === 'missing' || loaded.status === 'size') return { kind: loaded.status }
@@ -251,7 +270,12 @@ function classify<T>(
   if (isNewer(raw[versionField], known)) return { kind: 'newer' }
   if (failure(raw) !== null) return { kind: 'invalid' }
   const issues: Issue[] = []
-  const c = check(schema, raw, versionField === 'layoutVersion' ? 'manifest' : 'state', issues)
+  const c = check(
+    schemaOf(raw),
+    raw,
+    versionField === 'layoutVersion' ? 'manifest' : 'state',
+    issues
+  )
   if (!c.ok) return { kind: 'invalid' }
   return { kind: 'valid', raw, value: c.value as T, issues }
 }
@@ -259,13 +283,24 @@ function classify<T>(
 const manifestOverItems = (raw: Record<string, unknown>): boolean =>
   Array.isArray(raw.items) && raw.items.length > CAPS.items
 
-export function classifyManifest(loaded: Loaded): Classified<SharedLibraryManifest> {
+/**
+ * The reader's options. `readerMax` is the newest layout major it opens: a
+ * test sets 1 to read a tree as 6.x does (#713).
+ */
+export interface ReadOptions {
+  readerMax?: number
+}
+
+export function classifyManifest(
+  loaded: Loaded,
+  { readerMax = LAYOUT_READER_MAX }: ReadOptions = {}
+): Classified<SharedLibraryManifest> {
   return classify(
     loaded,
     'layoutVersion',
-    1,
+    readerMax,
     manifestEnvelopeFailure,
-    MANIFEST_SCHEMAS[1],
+    (raw) => MANIFEST_SCHEMAS[raw.layoutVersion as LayoutMajor],
     manifestOverItems
   )
 }
@@ -276,7 +311,7 @@ export function classifyState(loaded: Loaded): Classified<SharedLibraryState> {
     'stateVersion',
     STATE_VERSION,
     stateEnvelopeFailure,
-    STATE_SCHEMA,
+    () => STATE_SCHEMA,
     () => false
   )
 }
@@ -353,7 +388,7 @@ function pairs(m: SharedLibraryManifest, s: ChosenState | null): s is ChosenStat
 }
 
 /** The pair search, with the files it chose. `readLibrary` is its public face. */
-export async function inspectLibrary(root: string): Promise<Inspection> {
+export async function inspectLibrary(root: string, opts: ReadOptions = {}): Promise<Inspection> {
   const dir = path.join(root, LIBRARY_DIR)
   const at = (name: string): string => path.join(dir, name)
   const loaded = new Map<string, Loaded>()
@@ -384,8 +419,8 @@ export async function inspectLibrary(root: string): Promise<Inspection> {
   if (mStat === 'missing' && pStat === 'missing') {
     return { dir, result: { status: 'none' }, manifest: null, state: null, loaded }
   }
-  const m = classifyManifest(await load(mStat, MANIFEST, CAPS.manifestBytes))
-  const p = classifyManifest(await load(pStat, MANIFEST_PREV, CAPS.manifestBytes))
+  const m = classifyManifest(await load(mStat, MANIFEST, CAPS.manifestBytes), opts)
+  const p = classifyManifest(await load(pStat, MANIFEST_PREV, CAPS.manifestBytes), opts)
   const chosen = (
     c: Classified<SharedLibraryManifest>,
     file: ManifestFile
@@ -453,6 +488,6 @@ export async function inspectLibrary(root: string): Promise<Inspection> {
  * Reads the library at `root`: the manifest and state pair, after the version
  * and size checks that come before the pair search. Never calls `realpath`.
  */
-export async function readLibrary(root: string): Promise<SharedLibraryRead> {
-  return (await inspectLibrary(root)).result
+export async function readLibrary(root: string, opts: ReadOptions = {}): Promise<SharedLibraryRead> {
+  return (await inspectLibrary(root, opts)).result
 }

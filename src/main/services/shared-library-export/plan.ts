@@ -10,6 +10,7 @@ import { discoverLibraries } from '../../lib/shared-library/discover'
 import { itemKey } from '../../lib/shared-library/format'
 import { libraryFolderName } from '../../lib/shared-library/naming'
 import { readLibrary } from '../../lib/shared-library/read'
+import { isOwnedBy } from '../../lib/shared-library/owner'
 
 export const DEFAULT_LIBRARY_NAME = 'Anime Library'
 
@@ -416,11 +417,9 @@ export async function classifyTarget(
     return { kind: 'new', mode, root, libraryName: libName, blocked: null, manifest: null }
   }
   const m = read.manifest
+  // This PC presents its Shikimori user only, so a v2 library is foreign (#713).
   const isOwn = (x: SharedLibraryManifest): boolean =>
-    x.mode === 'metadata' &&
-    x.owner !== null &&
-    shikimoriUserId !== null &&
-    x.owner.shikimoriId === shikimoriUserId
+    x.mode === 'metadata' && isOwnedBy(x.owner, { shikimoriUserId, trackerAccounts: [] })
   // A Videos-only library: added to in Videos only, taken over With metadata.
   const videosOnly: 'add' | 'upgrade' = mode === 'metadata' ? 'upgrade' : 'add'
   if (m !== null && m.mode === 'metadata' && m.owner !== null && !isOwn(m)) {

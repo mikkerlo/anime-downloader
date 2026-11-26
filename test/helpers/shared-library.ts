@@ -18,25 +18,58 @@ export const OWNER: SharedLibraryActor = {
   installId: 'pc-owner',
   appVersion: '5.0.25',
   shikimoriUserId: OWNER_ID,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 export const STRANGER: SharedLibraryActor = {
   installId: 'pc-stranger',
   appVersion: '5.0.25',
   shikimoriUserId: 777,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 export const LOGGED_OUT: SharedLibraryActor = {
   installId: 'pc-anon',
   appVersion: '5.0.25',
   shikimoriUserId: null,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 export const CLAIMANT: SharedLibraryActor = {
   installId: 'pc-claim',
   appVersion: '5.0.25',
   shikimoriUserId: null,
-  claim: { libraryId: LIB, ownerId: OWNER_ID }
+  claim: { libraryId: LIB, ownerId: OWNER_ID },
+  trackerAccounts: []
+}
+
+// Layout v2 (#713): an AniList-owned library, written only by a test actor
+// that holds the tracker account (production actors pass `trackerAccounts: []`).
+export const V2_USER_ID = '5'
+export const ANILIST_OWNER: SharedLibraryTrackerOwner = {
+  provider: 'anilist',
+  userId: V2_USER_ID,
+  nickname: 'alice'
+}
+export const ANILIST_ACTOR: SharedLibraryActor = {
+  installId: 'pc-anilist',
+  appVersion: '7.0.0',
+  shikimoriUserId: null,
+  claim: null,
+  trackerAccounts: [{ provider: 'anilist', userId: V2_USER_ID }]
+}
+
+/** A layout v2 manifest: `manifest(…)` with a v2 owner, always With metadata. */
+export function manifestV2(
+  generation: number,
+  stateGeneration: number | null,
+  over: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return manifest(generation, stateGeneration, {
+    layoutVersion: 2,
+    owner: { ...ANILIST_OWNER },
+    ...over
+  })
 }
 
 export function item(episodeInt: string, translationId: number, extra: object = {}): object {

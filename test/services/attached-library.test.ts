@@ -563,7 +563,8 @@ describe('refresh after a write (#616)', () => {
     installId: 'pc-export',
     appVersion: '5.0.29',
     shikimoriUserId: null,
-    claim: null
+    claim: null,
+    trackerAccounts: []
   }
   const MESHI = 'Dungeon Meshi/Dungeon Meshi - 01 [AniLibria].mkv'
 

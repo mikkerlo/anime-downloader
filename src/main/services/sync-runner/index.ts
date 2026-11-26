@@ -20,6 +20,7 @@ import * as shikimoriApi from '../../shikimori'
 import { isNetworkError } from '../../lib/errors'
 import { createMutex } from '../../lib/async-mutex'
 import { inspectLibrary, readMeta } from '../../lib/shared-library/read'
+import { isOwnedBy, shikimoriOwnerId } from '../../lib/shared-library/owner'
 import { writeState as defaultWriteState } from '../../lib/shared-library/write'
 import { toAnimeSearchResult } from '../../lib/shared-library/format'
 import { createSyncBaseStore, type SyncBase } from '../../lib/sync-state/bases'
@@ -435,7 +436,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     if (manifest.libraryId !== libraryId || manifest.mode !== 'metadata' || !manifest.owner) {
       return fail('unreadable')
     }
-    const ownerId = manifest.owner.shikimoriId
+    // A v2 owner is never this PC's (#713), on the export's leg too.
+    const ownerId = shikimoriOwnerId(manifest.owner)
+    if (ownerId === null) return { ...out, drive: 'skipped', driveReason: 'foreign' }
     // The export's leg is the owner's only: an account switched meanwhile is foreign.
     if (force && userId() !== ownerId) return { ...out, drive: 'skipped', driveReason: 'foreign' }
     const role = lib.role
@@ -1415,7 +1418,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         read.status === 'read-only' ||
         read.manifest.libraryId !== lib.libraryId ||
         read.manifest.mode !== 'metadata' ||
-        read.manifest.owner?.shikimoriId !== ownerId
+        !isOwnedBy(read.manifest.owner, { shikimoriUserId: ownerId, trackerAccounts: [] })
       ) {
         await holdForNextRun(lib)
         notes.push(`${lib.name} couldn't be read. It gets this choice on its next sync.`)

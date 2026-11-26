@@ -94,6 +94,15 @@ async function start(
   return res.job.jobId
 }
 
+/** Another PC with no account, adding to the Videos-only library. */
+const OTHER_PC: SharedLibraryActor = {
+  installId: 'pc-other',
+  appVersion: '5.0.37',
+  shikimoriUserId: null,
+  claim: null,
+  trackerAccounts: []
+}
+
 const root = (r: PrefetchRig): string => path.join(r.env.drive, 'Trip')
 const manifestKeys = (r: PrefetchRig): string[] => {
   const m = JSON.parse(
@@ -892,7 +901,7 @@ describe('pre-fetch (#577) — the drive already has it (review of 8f2dacb4)', (
         ],
         naming: r.manifest.naming
       },
-      { installId: 'pc-other', appVersion: '5.0.37', shikimoriUserId: null, claim: null },
+      OTHER_PC,
       r.manifest.generation
     )
     rig.net.release(12)
@@ -944,7 +953,7 @@ describe('pre-fetch (#577) — a key another PC adds after the item was planned 
         ],
         naming: r.manifest.naming
       },
-      { installId: 'pc-other', appVersion: '5.0.37', shikimoriUserId: null, claim: null },
+      OTHER_PC,
       r.manifest.generation
     )
     rig.env.presence.open = false

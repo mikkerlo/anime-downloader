@@ -80,11 +80,12 @@ interface SharedLibraryNaming {
 
 /** `.anime-dl/manifest.json` as the reader returns it. */
 interface SharedLibraryManifest {
-  layoutVersion: 1
+  // 2 only for a v2 owner (#713): a library owned by a non-Shikimori account.
+  layoutVersion: 1 | 2
   layoutMinor: number
   libraryId: string
   name?: string
-  owner: SharedLibraryOwner | null
+  owner: SharedLibraryOwner | SharedLibraryTrackerOwner | null
   mode: SharedLibraryMode
   generation: number
   stateGeneration: number | null
@@ -98,7 +99,7 @@ interface SharedLibraryManifest {
 interface SharedLibraryManifestInput {
   libraryId: string
   name?: string
-  owner: SharedLibraryOwner | null
+  owner: SharedLibraryOwner | SharedLibraryTrackerOwner | null
   mode: SharedLibraryMode
   titles: SharedLibraryTitle[]
   items: SharedLibraryItem[]
@@ -174,7 +175,11 @@ interface SharedLibraryActor {
   installId: string
   appVersion: string
   shikimoriUserId: number | null
+  // A claim only ever names a v1 (Shikimori) owner.
   claim: { libraryId: string; ownerId: number } | null
+  // The accounts that match a v2 owner (#713). Production actors pass `[]`
+  // until #715, so every v2 library is `foreign` to them.
+  trackerAccounts: { provider: string; userId: string }[]
 }
 
 /** `resolveItem` / `resolveWriteTarget`: an absolute path, or why there is none. */
@@ -215,7 +220,10 @@ interface AttachedLibraryRecord {
   root: string
   name: string
   mode: SharedLibraryMode
+  // `null` for a v2 library too, so a downgraded v6 reads it as `videos`.
   owner: SharedLibraryOwner | null
+  // A v2 library's owner (#713); never set next to a v1 `owner`.
+  trackerOwner?: SharedLibraryTrackerOwner
   access: 'read-write' | 'read-only'
   accessReason?: AttachedLibraryAccessReason
   claim?: { ownerId: number; at: number }

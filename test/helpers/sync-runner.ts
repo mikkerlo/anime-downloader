@@ -54,7 +54,8 @@ export const ownerActor = (installId = 'pc-owner', ownerId = OWNER.id): SharedLi
   installId,
   appVersion: '5.0.39',
   shikimoriUserId: ownerId,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 })
 
 export const LIB_A = '3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90'
@@ -207,13 +208,17 @@ export function makePc(
       if (r.status === 'none' || !r.manifest) throw new Error('no library')
       const m = r.manifest
       const recs = (store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>) ?? {}
+      // As `attach` stores them (#713): a v2 owner as `trackerOwner`, next to `owner: null`.
+      const v1 = m.owner !== null && 'shikimoriId' in m.owner ? m.owner : null
+      const v2 = m.owner !== null && 'provider' in m.owner ? m.owner : null
       recs[m.libraryId] = {
         root,
         name: m.name ?? 'Drive',
         mode: m.mode,
-        owner: m.owner,
+        owner: v1,
+        ...(v2 ? { trackerOwner: { provider: v2.provider, userId: v2.userId } } : {}),
         access: a.access ?? 'read-write',
-        ...(a.claim && m.owner ? { claim: { ownerId: m.owner.shikimoriId, at: 1 } } : {}),
+        ...(a.claim && v1 ? { claim: { ownerId: v1.shikimoriId, at: 1 } } : {}),
         lastSeenAt: 0,
         lastSyncAt: null
       }

@@ -64,6 +64,7 @@ const testCodec: TrackerRateCacheCodec<unknown, TestRow> = {
     })),
   malIdOf: (row) => row.malId,
   indexOf: (rows, malId) => rows.findIndex((r) => r.malId === malId),
+  read: (row) => ({ remoteId: row.remoteId, values: { ...row.values } }),
   patch: (row, values, remoteId) => ({
     ...row,
     ...(remoteId !== undefined ? { remoteId } : {}),
@@ -841,5 +842,95 @@ describe('two instances are independent', () => {
     expect(shiki.queue()).toEqual([])
     expect(anilist.calls.filter((c) => c === 'auth')).toHaveLength(2)
     shiki.svc.stopSyncTimer()
+  })
+})
+
+describe('via items (#692 § 4)', () => {
+  it('colliding queuedAt across via: the first settle leaves the via entry queued, and it drains on the next pass', async () => {
+    const r = rig('shikimori')
+    r.fake.set(1, vals(5))
+    const leg = queued(1, vals(5), vals(6), 100, { fields: ['episodes'] })
+    const mirror = queued(1, vals(6), vals(6, 9), 100, { fields: ['score'], via: 'mirror' })
+    r.store.set(r.keys.updateQueue, [leg, mirror])
+    const settled: unknown[] = []
+    r.svc.onItemSettled((e) => {
+      settled.push(e)
+      // The second item's read fails the way an offline drain does.
+      if (settled.length === 1) r.fake.fail('network', { member: 'getEntry' })
+    })
+
+    await drain(r.svc)
+
+    expect(settled).toHaveLength(1)
+    expect(r.queue()).toEqual([mirror])
+    expect(r.fake.rows.get(1)?.values).toEqual(vals(6))
+
+    r.svc.stopSyncTimer()
+    await drain(r.svc)
+    expect(r.queue()).toEqual([])
+    expect(r.fake.rows.get(1)?.values).toEqual(vals(6, 9))
+    expect(settled[1]).toMatchObject({ via: 'mirror', consumedQueuedAts: [100] })
+  })
+
+  it('the settled event carries the item’s via, and an item with none has no via key', async () => {
+    const r = rig('anilist')
+    r.fake.set(1, vals(3))
+    r.fake.set(2, vals(3))
+    r.store.set(r.keys.updateQueue, [
+      queued(1, vals(3), vals(4), 1, { fields: ['episodes'], via: 'copy' }),
+      queued(2, vals(3), vals(4), 2)
+    ])
+    const settled: Record<string, unknown>[] = []
+    r.svc.onItemSettled((e) => settled.push(e as never))
+
+    await drain(r.svc)
+
+    expect(settled.map((e) => e.via)).toEqual(['copy', undefined])
+    expect('via' in settled[1]).toBe(false)
+  })
+
+  it('a via item with nothing to change makes no call; a non-via one keeps the drift-match PATCH', async () => {
+    const r = rig('anilist')
+    r.fake.set(1, vals(4))
+    r.fake.set(2, vals(4))
+    r.store.set(r.keys.updateQueue, [
+      queued(1, vals(4), vals(4), 1, { fields: ['episodes'], via: 'mirror' }),
+      queued(2, vals(4), vals(4), 2, { fields: ['episodes'] })
+    ])
+
+    await drain(r.svc)
+
+    expect(r.fake.upserts.map((u) => [u.ref.malId, u.changedFields])).toEqual([[2, []]])
+    expect(r.queue()).toEqual([])
+  })
+})
+
+describe('the enqueue (#692 § 3)', () => {
+  it('appends, then patches the cached row through the codec patch, then broadcasts the queue', () => {
+    const order: string[] = []
+    const r = rig('anilist', {
+      initial: {
+        [ANILIST_KEYS.userRates]: [
+          { malId: 1, remoteId: 10, values: vals(5), updated_at: 'listed' }
+        ]
+      },
+      deps: { onRateUpdated: (id, malId) => order.push(`hook:${id}:${malId}`) }
+    })
+    const entry = queued(1, vals(5), vals(6), 1, { fields: ['episodes'], via: 'mirror' })
+
+    r.svc.enqueue(entry)
+
+    expect(r.queue()).toEqual([entry])
+    expect(r.svc.cachedRate(1)).toEqual({ remoteId: 10, values: vals(6) })
+    expect(order).toEqual(['hook:anilist:1'])
+    expect(r.events.map(([c]) => c)).toEqual([r.ch.rate, r.ch.queue])
+    expect(r.events[1][1]).toEqual({ length: 1 })
+  })
+
+  it('with no cached row nothing is patched and only the queue is broadcast', () => {
+    const r = rig('anilist')
+    r.svc.enqueue(queued(1, vals(0), vals(1), 1))
+    expect(r.store.get(ANILIST_KEYS.userRates)).toEqual([])
+    expect(r.events.map(([c]) => c)).toEqual([r.ch.queue])
   })
 })

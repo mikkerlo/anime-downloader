@@ -51,6 +51,11 @@ export const shikimoriRateCache: TrackerRateCacheCodec<
   },
   malIdOf: (row) => row.rate.target_id ?? row.shikiAnime?.id,
   indexOf: (rows, malId) => rows.findIndex((e) => e.rate.target_id === malId),
+  // The router's `cachedBasis`: a row with no numeric id has no rate yet.
+  read: (row) => ({
+    remoteId: typeof row.rate.id === 'number' ? row.rate.id : null,
+    values: rateValues(row.rate)
+  }),
   patch(row, values, remoteId) {
     return {
       ...row,

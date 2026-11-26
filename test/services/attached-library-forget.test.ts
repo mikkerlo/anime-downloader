@@ -5,6 +5,33 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
+
+vi.mock('../../src/main/shikimori', async (orig) => ({
+  ...(await orig<typeof import('../../src/main/shikimori')>()),
+  ...(await import('../helpers/fake-shikimori')).fakeApi
+}))
+
+import {
+  ANIME,
+  MAL,
+  OWNER,
+  T0,
+  cacheEntry,
+  makeLibrary,
+  makePc,
+  server,
+  type Pc
+} from '../helpers/sync-runner'
+import { createFakeTracker } from '../helpers/fake-tracker'
+import {
+  createTrackerSyncService,
+  type TrackerSyncService
+} from '../../src/main/services/trackers/sync'
+import { createTrackerFanOut, type PrimaryWriter } from '../../src/main/services/trackers/fan-out'
+import type { RunnerTracker } from '../../src/main/services/sync-runner'
+import { ANILIST_KEYS } from '../../src/main/trackers/keys'
+import type { RateValues } from '../../src/main/lib/shikimori-rate'
+import type { QueuedTrackerUpdate } from '../../src/main/lib/shikimori-queue'
 import {
   createAttachedLibraryService,
   type AttachedLibraryServiceDeps,
@@ -265,5 +292,174 @@ describe('Re-locate', () => {
       expect(res.library.available).toBe(true)
     }
     expect(records(m.store)[ID].root).toBe(moved)
+  })
+})
+
+// --- #692 § 6: Forget strips every tracker's queues, and rebases later `via` survivors.
+describe('Forget across trackers (#692 § 6)', () => {
+  const v = (episodes: number): RateValues => ({
+    episodes,
+    status: 'watching',
+    score: 7,
+    rewatches: 0
+  })
+
+  /** A Shikimori-owned library K on an owner PC, with an AniList tracker beside Shikimori. */
+  async function twoTrackers() {
+    server.reset()
+    const runnerTrackers: RunnerTracker[] = []
+    const pc = makePc({
+      store: {
+        anilistCredentials: { v: 1, enc: 'plain', data: 'blob' },
+        anilistUser: { id: 1, nickname: 'al', avatar: null },
+        anilistUserRates: [],
+        anilistUpdateQueue: [],
+        anilistParkedQueues: {},
+        trackerMirror: {}
+      },
+      runner: { trackers: runnerTrackers }
+    })
+    pc.offline.value = true
+    const fake = createFakeTracker('anilist')
+    const anilist = createTrackerSyncService(
+      {
+        ...fake.provider,
+        isSessionGone: () => false,
+        rateCache: {
+          fromEntries: () => [],
+          malIdOf: (row: { malId: number }) => row.malId,
+          indexOf: (rows: { malId: number }[], malId: number) =>
+            rows.findIndex((r) => r.malId === malId),
+          read: (row: { values: RateValues }) => ({ remoteId: null, values: row.values }),
+          patch: (row: object, values: RateValues) => ({ ...row, values })
+        }
+      } as never,
+      ANILIST_KEYS,
+      {
+        store: pc.store as never,
+        broadcast: () => {},
+        syncStatusChannel: 'a:s',
+        offlineQueueChangedChannel: 'a:q',
+        rateUpdatedChannel: 'a:r',
+        ratesRefreshedChannel: 'a:f',
+        isOffline: () => true
+      }
+    ) as TrackerSyncService<unknown, unknown>
+    runnerTrackers.push(pc.sync.tracker as never, anilist as never)
+    const anilistPrimary: PrimaryWriter = async (malId, change) => {
+      if (change.kind !== 'set') return null
+      const basis = anilist.cachedRate(malId)?.values ?? v(5)
+      return { result: null, basis, after: change.values }
+    }
+    const fan = createTrackerFanOut({
+      store: pc.store as never,
+      trackers: [
+        { sync: pc.sync.tracker as never },
+        { sync: anilist, writePrimary: anilistPrimary }
+      ]
+    })
+    pc.store.set('trackerPrimary', 'anilist')
+    const { root, libraryId } = await makeLibrary()
+    await pc.attach(root)
+    return { pc, fan, anilist, libraryId }
+  }
+
+  /** K's owner-leg entry 5 → 6 on Shikimori, its pending field, and the leg's display patch. */
+  function ownerLeg(pc: Pc, K: string) {
+    server.set(MAL, v(5), T0)
+    pc.store.set('shikimoriUserRates', [cacheEntry(MAL, ANIME, v(6), T0)])
+    pc.store.set('shikimoriUpdateQueue', [
+      {
+        malId: MAL,
+        rateId: MAL * 10,
+        before: v(5),
+        after: v(6),
+        queuedAt: 1,
+        fields: ['episodes'],
+        origin: { kind: 'sync-merge', provenance: { episodes: { libraryId: K } } }
+      }
+    ])
+    const dir = path.join(pc.userData, 'sync-pending')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, `${OWNER.id}.json`),
+      JSON.stringify({
+        version: 1,
+        ownerId: OWNER.id,
+        rates: {
+          [MAL]: {
+            episodes: {
+              value: 6,
+              clock: { at: T0 + 10, origin: 'pc-other' },
+              provenance: { libraryId: K },
+              prePatch: { value: 5, serverUpdatedAt: new Date(T0).toISOString() }
+            }
+          }
+        }
+      })
+    )
+  }
+
+  const shikiEpisodes = (pc: Pc) =>
+    (
+      pc.store.get('shikimoriUserRates') as { rate: { target_id: number; episodes: number } }[]
+    ).find((e) => e.rate.target_id === MAL)?.rate.episodes
+
+  async function forgetAndDrain(pc: Pc, libraryId: string): Promise<number> {
+    expect(await pc.attached.forget(libraryId, { confirmDropPending: true })).toEqual({
+      needsConfirm: false
+    })
+    const cached = shikiEpisodes(pc)!
+    pc.offline.value = false
+    await pc.sync.drainNow()
+    await pc.runner.quiesce()
+    return cached
+  }
+
+  it('strips a seeded provenance entry from a non-Shikimori queue, live and parked', async () => {
+    const { pc, libraryId } = await twoTrackers()
+    const entry = (queuedAt: number) => ({
+      malId: MAL,
+      rateId: null,
+      before: v(5),
+      after: v(6),
+      queuedAt,
+      fields: ['episodes'],
+      origin: { kind: 'sync-merge', provenance: { episodes: { libraryId } } }
+    })
+    const user = { malId: 2, rateId: null, before: v(1), after: v(2), queuedAt: 3 }
+    pc.store.set(ANILIST_KEYS.updateQueue, [entry(1), user])
+    pc.store.set(ANILIST_KEYS.parkedQueues, {
+      '9': { nickname: 'x', entries: [entry(2)], parkedAt: 1 }
+    })
+    await pc.attached.forget(libraryId, { confirmDropPending: true })
+    expect(pc.store.get(ANILIST_KEYS.updateQueue)).toEqual([user])
+    expect(pc.store.get(ANILIST_KEYS.parkedQueues)).toEqual({})
+  })
+
+  it('owner-leg entries when the owner is not primary: the cache keeps the user’s 8, and the fake ends at 8', async () => {
+    const { pc, fan, libraryId } = await twoTrackers()
+    ownerLeg(pc, libraryId)
+    await fan.applyChange(MAL, { kind: 'set', values: v(8) }, { target: 'anilist', cause: 'user' })
+    const queue = pc.store.get('shikimoriUpdateQueue') as QueuedTrackerUpdate[]
+    expect(queue[1]).toMatchObject({ via: 'mirror', before: v(6), after: v(8) })
+
+    expect(await forgetAndDrain(pc, libraryId)).toBe(8)
+    expect(server.get(MAL)!.episodes).toBe(8)
+  })
+
+  it('copy variant: a copy to Shikimori setting 8 in place of the mirror entry', async () => {
+    const { pc, fan, libraryId } = await twoTrackers()
+    ownerLeg(pc, libraryId)
+    await fan.applyChange(
+      MAL,
+      { kind: 'set', values: v(8) },
+      { target: 'shikimori', cause: 'user' }
+    )
+    const queue = pc.store.get('shikimoriUpdateQueue') as QueuedTrackerUpdate[]
+    expect(queue[1]).toMatchObject({ via: 'copy', before: v(6), after: v(8) })
+
+    expect(await forgetAndDrain(pc, libraryId)).toBe(8)
+    expect(server.get(MAL)!.episodes).toBe(8)
   })
 })

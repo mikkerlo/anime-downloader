@@ -7,6 +7,7 @@ import type { AnimeCacheService } from '../services/anime-cache'
 import type { ColdStorageService } from '../services/cold-storage'
 import type { SkipAnalysisService } from '../services/skip-analysis'
 import type { ShikimoriSyncService } from '../services/shikimori-sync'
+import type { TrackerFanOut } from '../services/trackers/fan-out'
 import type { DownloadManager } from '../download-manager'
 import type { ShikiUserRateStatus } from '../shikimori'
 import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
@@ -98,6 +99,11 @@ export interface AppDeps {
   checkFfmpeg: () => Promise<FfmpegInfo>
   getDisplayName: (anime: AnimeSearchResult) => string
   shikimoriSyncService: ShikimoriSyncService
+  /**
+   * The fan-out writer (#692): every list change goes through its
+   * `applyChange`. The Shikimori router sets Shikimori's primary branch on it.
+   */
+  trackers: TrackerFanOut
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

@@ -1,5 +1,5 @@
 // Shikimori's classification table (#689): the 6.x drain's branches, in their
-// order (the generic drain applies the class, `services/trackers/sync.ts:521-569`),
+// order (the generic drain applies the class, `services/trackers/sync.ts:571-619`),
 // with `ShikiAuthError` checked by class ahead of the status rows.
 import { describe, it, expect } from 'vitest'
 import { ShikiApiError, ShikiAuthError } from '../../src/main/shikimori'

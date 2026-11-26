@@ -51,7 +51,8 @@ import {
 import { NO_RATE_BEFORE, rateValues, type RateValues } from '../../lib/shikimori-rate'
 import {
   mergeQueues,
-  stripField,
+  revertAndRebase,
+  stripFieldSlots,
   type ParkedQueues,
   type QueuedShikimoriUpdate
 } from '../../lib/shikimori-queue'
@@ -59,6 +60,8 @@ import type { CachedRateEntry } from '../../lib/shikimori-rate-cache'
 import type { StorageService } from '../../store/types'
 import type { AttachedLibraryService } from '../attached-library'
 import type { ShikimoriSyncService, ShikiItemSettled } from '../shikimori-sync'
+import type { TrackerSyncService } from '../trackers/sync'
+import { SHIKIMORI_KEYS } from '../../trackers/keys'
 import { buildActor } from './actor'
 import { createConflictStore } from './conflicts'
 import {
@@ -78,6 +81,12 @@ import {
   type PendingRates
 } from './pending'
 import { createForgetHook } from './forget'
+
+/** One tracker's queues, as Forget and `stripQueued` reach them (#692 § 6). */
+export type RunnerTracker = Pick<
+  TrackerSyncService<unknown, unknown>,
+  'trackerId' | 'keys' | 'withQueueLock' | 'broadcastQueueChanged'
+>
 
 const READ_ONLY_CODES = new Set(['EROFS', 'EACCES', 'EPERM'])
 export const DROPS_TO_CONFLICT = 3
@@ -99,6 +108,12 @@ export interface SyncRunnerDeps {
     ShikimoriSyncService,
     'drainNow' | 'withQueueLock' | 'onItemSettled' | 'syncShikimoriQueue' | 'startSyncTimer'
   >
+  /**
+   * Every tracker whose queues `stripQueued` and Forget strip, each under its
+   * own `withQueueLock` (#692 § 6). Defaults to Shikimori's alone, through
+   * `sync.withQueueLock`.
+   */
+  trackers?: RunnerTracker[]
   isOffline(): boolean
   /** The online edge (S1a's `OFFLINE_STATE_CHANGED → online`). Returns an unsubscribe. */
   onOnline?(listener: () => void): () => void
@@ -226,6 +241,17 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const inflight = new Map<string, Promise<SyncLibraryResult>>()
   const lastResults = new Map<string, SyncLibraryResult>()
   const unsubscribe: (() => void)[] = []
+  const trackers: RunnerTracker[] = deps.trackers ?? [
+    {
+      trackerId: 'shikimori',
+      keys: SHIKIMORI_KEYS,
+      withQueueLock: (fn) => deps.sync.withQueueLock(fn),
+      broadcastQueueChanged: () =>
+        deps.broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+          length: (store.get<unknown[] | undefined>('shikimoriUpdateQueue') ?? []).length
+        })
+    }
+  ]
 
   async function locked<T>(fn: () => Promise<T>): Promise<T> {
     const release = await work.acquire()
@@ -263,15 +289,19 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   /**
    * One rule for dropping a pending field (Forget, and every other drop but
    * path F): a wholesale refresh newer than the patch is kept; otherwise the
-   * newer of `prePatch` and the Shikimori base; with neither, a refresh.
+   * newer of `prePatch` and the Shikimori base; with neither, a refresh. In
+   * Forget's revert a field a later surviving `via` entry carries is kept too
+   * (#692 § 6): that entry's enqueue patch is the cache's newer value.
    */
   function revertTarget(
     ownerId: number,
     malId: number,
     field: SyncRateField,
     p: PendingField,
-    shikiBase: SyncBase | null
+    shikiBase: SyncBase | null,
+    keep?: ReadonlySet<string>
   ): { value: number | string } | 'keep' | 'refresh' {
+    if (keep?.has(`${malId}:${field}`)) return 'keep'
     const c = cacheEntry(store, ownerId, malId)
     const cached = c && c.idx !== -1 ? c.entries[c.idx].rate : null
     if (cached && parseAt(cached.serverUpdatedAt) > parseAt(p.prePatch.serverUpdatedAt))
@@ -292,14 +322,15 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   async function revertFields(
     ownerId: number,
-    dropped: { malId: number; field: SyncRateField; p: PendingField }[]
+    dropped: { malId: number; field: SyncRateField; p: PendingField }[],
+    opts: { keep?: ReadonlySet<string> } = {}
   ): Promise<void> {
     if (dropped.length === 0) return
     const shikiBase = await bases.read(`shikimori-${ownerId}`).catch(() => null)
     const byMal = new Map<number, Partial<Record<SyncRateField, number | string>>>()
     let refresh = false
     for (const d of dropped) {
-      const t = revertTarget(ownerId, d.malId, d.field, d.p, shikiBase)
+      const t = revertTarget(ownerId, d.malId, d.field, d.p, shikiBase, opts.keep)
       if (t === 'keep') continue
       if (t === 'refresh') {
         refresh = true
@@ -1193,23 +1224,30 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     await bases.write(`shikimori-${ownerId}`, { stateGeneration: null, doc })
   }
 
-  /** Strips `field` of `malId` from the merge entries of the live queue and every parked bucket. */
+  /**
+   * Strips `field` of `malId` from the merge entries of every tracker's live
+   * queue and parked buckets, each under that tracker's queue lock.
+   */
   async function stripQueued(malId: number, field: SyncRateField): Promise<void> {
-    await deps.sync.withQueueLock(() => {
-      const live = store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []
-      const nextLive = stripField(live, malId, field)
-      if (!sameValue(nextLive, live)) {
-        store.set('shikimoriUpdateQueue', nextLive)
-        deps.broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: nextLive.length })
-      }
-      const parked = store.get<ParkedQueues | undefined>('shikimoriParkedQueues') ?? {}
-      const nextParked: ParkedQueues = {}
-      for (const [owner, bucket] of Object.entries(parked)) {
-        const entries = stripField(bucket.entries, malId, field)
-        if (entries.length > 0) nextParked[owner] = { ...bucket, entries }
-      }
-      if (!sameValue(nextParked, parked)) store.set('shikimoriParkedQueues', nextParked)
-    })
+    for (const t of trackers) {
+      await t.withQueueLock(() => {
+        // Rebase only (#692 review): a later `via` survivor built on the
+        // stripped value would otherwise drain as drift on `field`.
+        const live = store.get<QueuedShikimoriUpdate[] | undefined>(t.keys.updateQueue) ?? []
+        const nextLive = revertAndRebase(stripFieldSlots(live, malId, field)).queue
+        if (!sameValue(nextLive, live)) {
+          store.set(t.keys.updateQueue, nextLive)
+          t.broadcastQueueChanged()
+        }
+        const parked = store.get<ParkedQueues | undefined>(t.keys.parkedQueues) ?? {}
+        const nextParked: ParkedQueues = {}
+        for (const [owner, bucket] of Object.entries(parked)) {
+          const entries = revertAndRebase(stripFieldSlots(bucket.entries, malId, field)).queue
+          if (entries.length > 0) nextParked[owner] = { ...bucket, entries }
+        }
+        if (!sameValue(nextParked, parked)) store.set(t.keys.parkedQueues, nextParked)
+      })
+    }
   }
 
   /** `value` into one title's field of `doc`, with `clock`; false when there is nothing to put it on. */
@@ -1835,7 +1873,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           createForgetHook({
             store,
             locked,
-            sync: deps.sync,
+            trackers,
             bases,
             pending,
             conflicts: conflictStore,

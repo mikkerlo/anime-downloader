@@ -39,6 +39,7 @@ import type { AppDeps } from '../../src/main/ipc/index'
 import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
 import type { ShikiUser } from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
+import { shikimoriOnlyFanOut } from '../helpers/tracker-fan-out'
 
 type SyncStub = {
   broadcastSyncStatus: Mock
@@ -86,6 +87,9 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     // point being that the router must *emit* a status at all here.
     sessionExpired: Boolean(store.get('shikimoriSessionExpired'))
   }))
+  // The real generic instance on this store, for the fan-out (#692): the
+  // primary branch it runs is the router's own, on the spy surface below.
+  let realTracker: ReturnType<typeof createShikimoriSyncService>['tracker'] | undefined
   const sync: SyncStub = {
     broadcastSyncStatus: vi.fn(() =>
       broadcast(EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS, getSyncStatus())
@@ -109,6 +113,7 @@ function registerRouter(initial: Record<string, unknown> = {}): {
         rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
         animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
       } as unknown as Parameters<typeof createShikimoriSyncService>[0])
+      realTracker = real.tracker
       return {
         fetchAndCacheRates: real.fetchAndCacheRates,
         refreshRates: real.refreshRates,
@@ -119,6 +124,7 @@ function registerRouter(initial: Record<string, unknown> = {}): {
   const funnels = register({
     store,
     shikimoriSyncService: sync,
+    trackers: shikimoriOnlyFanOut(store, { tracker: realTracker! }),
     lookupByMalIds: vi.fn(async () => new Map()),
     maybeBroadcastCleanupPrompt: vi.fn(async () => undefined),
     runAutoDownloadTick: vi.fn(async () => ({})),

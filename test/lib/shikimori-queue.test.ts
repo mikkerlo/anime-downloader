@@ -297,3 +297,127 @@ describe('stripProvenance (#584 Forget)', () => {
     expect(provenanceNames({ resolution: 'c', libraryIds: ['Q'] }, 'Q')).toBe(true)
   })
 })
+
+// --- #692: `via` entries, the drop match and the provenance rule
+describe('consolidateQueue — via entries (#692 § 4)', () => {
+  const v = (episodes: number, score = 0) => ({
+    episodes,
+    status: 'watching' as const,
+    score,
+    rewatches: 0
+  })
+  const q = (queuedAt: number, before: number, after: number, over: object = {}) =>
+    ({ malId: 5, rateId: 1, before: v(before), after: v(after), queuedAt, ...over }) as never
+
+  it('a via entry and a non-via entry for one title stay two items, in queue order, each with its own via', () => {
+    const items = consolidateQueue([
+      q(1, 5, 6, { fields: ['episodes'], via: 'mirror' }),
+      q(2, 6, 8),
+      q(3, 8, 9, { fields: ['episodes'], via: 'mirror' })
+    ])
+    expect(items).toHaveLength(2)
+    expect(items.map((i) => [i.via, i.consumedQueuedAts])).toEqual([
+      ['mirror', [1, 3]],
+      [undefined, [2]]
+    ])
+    expect(items[0]).toMatchObject({ before: v(5), after: v(9), fields: ['episodes'] })
+    expect(items[1].after).toEqual(v(8))
+  })
+
+  it("'mirror', 'reconcile' and 'copy' are kept apart from each other", () => {
+    const items = consolidateQueue([
+      q(1, 5, 6, { fields: ['episodes'], via: 'mirror' }),
+      q(2, 6, 7, { fields: ['episodes'], via: 'reconcile' }),
+      q(3, 7, 8, { fields: ['episodes'], via: 'copy' })
+    ])
+    expect(items.map((i) => i.via)).toEqual(['mirror', 'reconcile', 'copy'])
+  })
+
+  it('a copy and an unscoped user entry stay two items; two copies consolidate into one', () => {
+    const apart = consolidateQueue([q(1, 5, 6), q(2, 6, 8, { fields: ['episodes'], via: 'copy' })])
+    expect(apart.map((i) => i.via)).toEqual([undefined, 'copy'])
+    const [copy, ...rest] = consolidateQueue([
+      q(1, 5, 6, { fields: ['episodes'], via: 'copy' }),
+      q(2, 6, 6, { fields: ['score'], after: v(6, 9), via: 'copy' })
+    ])
+    expect(rest).toEqual([])
+    expect(copy).toMatchObject({
+      via: 'copy',
+      before: v(5),
+      after: v(6, 9),
+      fields: ['episodes', 'score'],
+      consumedQueuedAts: [1, 2]
+    })
+  })
+
+  it('a leftover via entry on a tracker that became primary drains first, as its own item', () => {
+    const items = consolidateQueue([
+      q(1, 5, 6, { fields: ['episodes'], via: 'mirror' }),
+      q(2, 6, 8)
+    ])
+    expect(items.map((i) => [i.via, i.fields, i.after.episodes])).toEqual([
+      ['mirror', ['episodes'], 6],
+      [undefined, undefined, 8]
+    ])
+  })
+})
+
+describe('consolidateQueue — a user edit clears the merge provenance of a field it changes (#692 § 4)', () => {
+  const v = (episodes: number, score = 0) => ({
+    episodes,
+    status: 'watching' as const,
+    score,
+    rewatches: 0
+  })
+  const merge = {
+    malId: 5,
+    rateId: 1,
+    before: v(3),
+    after: v(6),
+    queuedAt: 1,
+    fields: ['episodes'],
+    origin: { kind: 'sync-merge', provenance: { episodes: { libraryId: 'L' } } }
+  }
+  const user = (after: ReturnType<typeof v>) => ({
+    malId: 5,
+    rateId: 1,
+    before: v(6),
+    after,
+    queuedAt: 2
+  })
+
+  it("a user entry with episodes 8 after L's 3 → 6: no episodes provenance, and no origin", () => {
+    const [item] = consolidateQueue([merge, user(v(8))] as never)
+    expect(item.origin?.provenance.episodes).toBeUndefined()
+    expect(item.origin).toBeUndefined()
+  })
+
+  it("a user entry changing only score keeps L's episodes provenance", () => {
+    const [item] = consolidateQueue([merge, user(v(6, 9))] as never)
+    expect(item.origin!.provenance).toEqual({ episodes: { libraryId: 'L' } })
+  })
+})
+
+describe('the drop match takes via (#692 § 4)', () => {
+  const v = { episodes: 5, status: 'watching' as const, score: 0, rewatches: 0 }
+  const leg = { malId: 5, rateId: 1, before: v, after: v, queuedAt: 100, fields: ['episodes'] }
+  const mirror = { ...leg, via: 'mirror' } as never as QueuedShikimoriUpdate
+  const A = { id: '7', nickname: 'alice' }
+
+  it('dropFromParked touches only the entry whose via matches', () => {
+    const parked = parkEntries({}, A, [leg as QueuedShikimoriUpdate, mirror], 1000)
+    expect(dropFromParked(parked, '7', 5, [100])['7'].entries).toEqual([mirror])
+    expect(dropFromParked(parked, '7', 5, [100], 'mirror')['7'].entries).toEqual([leg])
+  })
+
+  it('recordServerError and recordServerErrorInParked stamp only the entry whose via matches', () => {
+    const entries = [leg as QueuedShikimoriUpdate, mirror]
+    const out = recordServerError(entries, 5, [100], 7_000, 'mirror').entries
+    expect(out[0]).toBe(entries[0])
+    expect(out[1]).toMatchObject({ via: 'mirror', firstServerErrorAt: 7_000 })
+    const parked = parkEntries({}, A, entries, 1000)
+    const next = recordServerErrorInParked(parked, '7', 5, [100], 7_000).parked['7'].entries
+    expect(next[0]).toMatchObject({ firstServerErrorAt: 7_000 })
+    expect(next[1]).toEqual(mirror)
+  })
+})

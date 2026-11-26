@@ -11,28 +11,32 @@ import type { SyncBaseStore } from '../../lib/sync-state/bases'
 import { merge3 } from '../../lib/sync-merge/merge3'
 import { dropLibraryParty } from '../../lib/sync-merge/conflicts'
 import {
+  keptByLaterVia,
   provenanceNames,
-  stripProvenance,
+  revertAndRebase,
+  stripProvenanceSlots,
   type ParkedQueues,
   type QueuedShikimoriUpdate
 } from '../../lib/shikimori-queue'
 import type { StorageService } from '../../store/types'
 import type { AttachedLibraryService, ForgetHook } from '../attached-library'
-import type { ShikimoriSyncService } from '../shikimori-sync'
+import type { TrackerSyncService } from '../trackers/sync'
 import type { ConflictStore } from './conflicts'
 import type { PendingField, PendingRates, PendingStore } from './pending'
 
 export interface ForgetHookDeps {
   store: StorageService
   locked<T>(fn: () => Promise<T>): Promise<T>
-  sync: Pick<ShikimoriSyncService, 'withQueueLock'>
+  /** Every tracker's queues are stripped, each under its own lock (#692 § 6). */
+  trackers: Pick<TrackerSyncService<unknown, unknown>, 'trackerId' | 'keys' | 'withQueueLock'>[]
   bases: SyncBaseStore
   pending: PendingStore
   conflicts: ConflictStore
   attached: Pick<AttachedLibraryService, 'get'>
   revertFields(
     ownerId: number,
-    dropped: { malId: number; field: SyncRateField; p: PendingField }[]
+    dropped: { malId: number; field: SyncRateField; p: PendingField }[],
+    opts?: { keep?: ReadonlySet<string> }
   ): Promise<void>
   pendingRatesFor(
     ownerId: number,
@@ -95,37 +99,39 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
     return { libraryChanges, resolutions }
   }
 
+  // One tracker's live queue and parked buckets: stripped of the library's
+  // fields, and every later `via` survivor rebased past what was stripped
+  // (#692 § 6-7: owner-leg strips are passed for the rebase only). Returns
+  // the live fields a later `via` survivor carries, for the owner revert.
+  function stripTracker(
+    keys: Pick<TrackerSyncService<unknown, unknown>['keys'], 'updateQueue' | 'parkedQueues'>,
+    libraryId: string
+  ): Set<string> {
+    const live = store.get<QueuedShikimoriUpdate[] | undefined>(keys.updateQueue) ?? []
+    const slots = stripProvenanceSlots(live, libraryId)
+    const nextLive = revertAndRebase(slots).queue
+    if (JSON.stringify(nextLive) !== JSON.stringify(live)) store.set(keys.updateQueue, nextLive)
+    const parked = store.get<ParkedQueues | undefined>(keys.parkedQueues) ?? {}
+    const nextParked: ParkedQueues = {}
+    for (const [owner, bucket] of Object.entries(parked)) {
+      const entries = revertAndRebase(stripProvenanceSlots(bucket.entries, libraryId)).queue
+      if (entries.length > 0) nextParked[owner] = { ...bucket, entries }
+    }
+    if (JSON.stringify(nextParked) !== JSON.stringify(parked)) {
+      store.set(keys.parkedQueues, nextParked)
+    }
+    return keptByLaterVia(slots)
+  }
+
   async function onForgotten(libraryId: string): Promise<void> {
     await deps.locked(async () => {
-      await deps.sync.withQueueLock(async () => {
-        const live = store.get<QueuedShikimoriUpdate[] | undefined>('shikimoriUpdateQueue') ?? []
-        const nextLive = stripProvenance(live, libraryId)
-        if (JSON.stringify(nextLive) !== JSON.stringify(live))
-          store.set('shikimoriUpdateQueue', nextLive)
-        const parked = store.get<ParkedQueues | undefined>('shikimoriParkedQueues') ?? {}
-        const nextParked: ParkedQueues = {}
-        for (const [owner, bucket] of Object.entries(parked)) {
-          const entries = stripProvenance(bucket.entries, libraryId)
-          if (entries.length > 0) nextParked[owner] = { ...bucket, entries }
-        }
-        if (JSON.stringify(nextParked) !== JSON.stringify(parked)) {
-          store.set('shikimoriParkedQueues', nextParked)
-        }
-        for (const ownerId of await deps.pending.owners()) {
-          const rates = await deps.pending.load(ownerId)
-          const dropped: { malId: number; field: SyncRateField; p: PendingField }[] = []
-          for (const [malId, fields] of Object.entries(rates)) {
-            for (const [f, p] of Object.entries(fields ?? {}) as [SyncRateField, PendingField][]) {
-              if (!provenanceNames(p.provenance, libraryId)) continue
-              dropped.push({ malId: Number(malId), field: f, p })
-              delete fields![f]
-            }
-          }
-          if (dropped.length === 0) continue
-          await deps.pending.save(ownerId, rates)
-          await deps.revertFields(ownerId, dropped)
-        }
-      })
+      for (const t of deps.trackers) {
+        await t.withQueueLock(async () => {
+          const keep = stripTracker(t.keys, libraryId)
+          // The pending store and its owner revert are Shikimori's.
+          if (t.trackerId === 'shikimori') await revertOwner(libraryId, keep)
+        })
+      }
       await deps.bases.remove(`library-${libraryId}`)
       const records = await deps.conflicts.read()
       const next = dropLibraryParty(records, libraryId)
@@ -133,6 +139,23 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
         await deps.conflicts.write(next)
       }
     })
+  }
+
+  async function revertOwner(libraryId: string, keep: ReadonlySet<string>): Promise<void> {
+    for (const ownerId of await deps.pending.owners()) {
+      const rates = await deps.pending.load(ownerId)
+      const dropped: { malId: number; field: SyncRateField; p: PendingField }[] = []
+      for (const [malId, fields] of Object.entries(rates)) {
+        for (const [f, p] of Object.entries(fields ?? {}) as [SyncRateField, PendingField][]) {
+          if (!provenanceNames(p.provenance, libraryId)) continue
+          dropped.push({ malId: Number(malId), field: f, p })
+          delete fields![f]
+        }
+      }
+      if (dropped.length === 0) continue
+      await deps.pending.save(ownerId, rates)
+      await deps.revertFields(ownerId, dropped, { keep })
+    }
   }
 
   return { pendingCount, onForgotten }

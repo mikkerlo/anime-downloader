@@ -9,31 +9,67 @@ export const LIB = '3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90'
 export const OTHER_LIB = '9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e5f'
 export const OWNER_ID = 4242
 export const FIXTURES = path.resolve(__dirname, '../fixtures/shared-library/v1')
-export const SCHEMA_FIXTURE = path.resolve(__dirname, '../fixtures/shared-library/schema-v1.json')
+export const FIXTURES_V2 = path.resolve(__dirname, '../fixtures/shared-library/v2')
+/** The checked-in fingerprint of layout `major`: `schema-v<major>.json`. */
+export const schemaFixture = (major: number): string =>
+  path.resolve(__dirname, `../fixtures/shared-library/schema-v${major}.json`)
 
 export const OWNER: SharedLibraryActor = {
   installId: 'pc-owner',
   appVersion: '5.0.25',
   shikimoriUserId: OWNER_ID,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 export const STRANGER: SharedLibraryActor = {
   installId: 'pc-stranger',
   appVersion: '5.0.25',
   shikimoriUserId: 777,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 export const LOGGED_OUT: SharedLibraryActor = {
   installId: 'pc-anon',
   appVersion: '5.0.25',
   shikimoriUserId: null,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 export const CLAIMANT: SharedLibraryActor = {
   installId: 'pc-claim',
   appVersion: '5.0.25',
   shikimoriUserId: null,
-  claim: { libraryId: LIB, ownerId: OWNER_ID }
+  claim: { libraryId: LIB, ownerId: OWNER_ID },
+  trackerAccounts: []
+}
+
+// Layout v2 (#713): an AniList-owned library, written only by a test actor
+// that holds the tracker account (production actors pass `trackerAccounts: []`).
+export const V2_USER_ID = '5'
+export const ANILIST_OWNER: SharedLibraryTrackerOwner = {
+  provider: 'anilist',
+  userId: V2_USER_ID,
+  nickname: 'alice'
+}
+export const ANILIST_ACTOR: SharedLibraryActor = {
+  installId: 'pc-anilist',
+  appVersion: '7.0.0',
+  shikimoriUserId: null,
+  claim: null,
+  trackerAccounts: [{ provider: 'anilist', userId: V2_USER_ID }]
+}
+
+/** A layout v2 manifest: `manifest(…)` with a v2 owner, always With metadata. */
+export function manifestV2(
+  generation: number,
+  stateGeneration: number | null,
+  over: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return manifest(generation, stateGeneration, {
+    layoutVersion: 2,
+    owner: { ...ANILIST_OWNER },
+    ...over
+  })
 }
 
 export function item(episodeInt: string, translationId: number, extra: object = {}): object {
@@ -163,6 +199,17 @@ export function fixture(name: string): string {
 
 export function fixtureText(name: string, file: string): string {
   return fs.readFileSync(path.join(FIXTURES, name, '.anime-dl', file), 'utf8')
+}
+
+/** A checked-in layout v2 tree (#713), copied into a fresh root. */
+export function fixtureV2(name: string): string {
+  const root = tempRoot()
+  fs.cpSync(path.join(FIXTURES_V2, name), root, { recursive: true })
+  return root
+}
+
+export function fixtureV2Text(name: string, file: string): string {
+  return fs.readFileSync(path.join(FIXTURES_V2, name, '.anime-dl', file), 'utf8')
 }
 
 export function readJson(root: string, file: string): Record<string, any> {

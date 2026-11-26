@@ -16,6 +16,13 @@ import { promises as fsp } from 'fs'
 import * as path from 'path'
 import { itemKey, toAnimeSearchResult } from '../../lib/shared-library/format'
 import { readLibrary, readMeta, LIBRARY_DIR } from '../../lib/shared-library/read'
+import {
+  isOwnedBy,
+  isTrackerOwner,
+  ownerOf,
+  shikimoriOwnerId,
+  type OwnerAccounts
+} from '../../lib/shared-library/owner'
 import { discoverLibraries } from '../../lib/shared-library/discover'
 import {
   absoluteOverflow,
@@ -197,10 +204,20 @@ const episodeOrder = (a: string, b: string): number => {
   return Number.isNaN(d) || d === 0 ? a.localeCompare(b) : d
 }
 
+// The accounts this PC presents to an owner check: its Shikimori user only, so
+// every v2 owner is `foreign` here (#713).
+const accountsOf = (userId: number | null): OwnerAccounts => ({
+  shikimoriUserId: userId,
+  trackerAccounts: []
+})
+
 function roleOf(rec: AttachedLibraryRecord, userId: number | null): AttachedLibraryRole {
-  if (rec.mode === 'videos' || !rec.owner) return 'videos'
-  if (userId !== null) return userId === rec.owner.shikimoriId ? 'owner' : 'foreign'
-  return rec.claim?.ownerId === rec.owner.shikimoriId ? 'claim' : 'videos'
+  if (rec.mode === 'videos') return 'videos'
+  // Before the `owner: null` return: a v2 record keeps its owner here.
+  if (rec.trackerOwner) return isOwnedBy(rec.trackerOwner, accountsOf(userId)) ? 'owner' : 'foreign'
+  if (!rec.owner) return 'videos'
+  if (userId !== null) return isOwnedBy(rec.owner, accountsOf(userId)) ? 'owner' : 'foreign'
+  return rec.claim?.ownerId === shikimoriOwnerId(rec.owner) ? 'claim' : 'videos'
 }
 
 function identityOf(
@@ -208,8 +225,9 @@ function identityOf(
   userId: number | null
 ): SharedLibraryCandidate['identity'] {
   if (manifest.mode === 'videos' || !manifest.owner) return 'videos'
-  if (userId === null) return 'choose'
-  return userId === manifest.owner.shikimoriId ? 'owner' : 'foreign'
+  // A v2 library can't be claimed: no `choose` for it, even with no account.
+  if (userId === null && !isTrackerOwner(manifest.owner)) return 'choose'
+  return isOwnedBy(manifest.owner, accountsOf(userId)) ? 'owner' : 'foreign'
 }
 
 function snapshotAnime(
@@ -399,7 +417,7 @@ export function createAttachedLibraryService(
       root: rec.root,
       name: rec.name,
       mode: rec.mode,
-      ownerNickname: rec.owner?.nickname ?? null,
+      ownerNickname: (rec.owner ?? rec.trackerOwner)?.nickname ?? null,
       role: roleOf(rec, userId()),
       access: rec.access,
       ...(rec.accessReason ? { accessReason: rec.accessReason } : {}),
@@ -684,13 +702,24 @@ export function createAttachedLibraryService(
       if (id !== null || manifest.mode !== 'metadata' || !manifest.owner) {
         return { ok: false, error: 'Only a PC without a Shikimori account can claim a library.' }
       }
-      claim = { ownerId: manifest.owner.shikimoriId, at: now() }
+      // Only a v1 (Shikimori) owner can be claimed.
+      const ownerId = shikimoriOwnerId(manifest.owner)
+      if (ownerId === null) {
+        return { ok: false, error: 'This library belongs to another account and can’t be claimed.' }
+      }
+      claim = { ownerId, at: now() }
     }
+    // A v2 owner is kept apart, with `owner: null`, so a downgraded v6 reads `videos`.
+    const owners: Pick<AttachedLibraryRecord, 'owner' | 'trackerOwner'> = isTrackerOwner(
+      manifest.owner
+    )
+      ? { owner: null, trackerOwner: ownerOf(manifest.owner)! }
+      : { owner: manifest.owner }
     const rec: AttachedLibraryRecord = {
       root,
       name: manifest.name ?? path.basename(root),
       mode: manifest.mode,
-      owner: manifest.owner,
+      ...owners,
       ...(await accessOf(root, read)),
       ...(claim ? { claim } : {}),
       lastSeenAt: now(),

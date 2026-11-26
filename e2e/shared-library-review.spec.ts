@@ -117,7 +117,8 @@ test('a held Shikimori-side score conflict: Review from the toast, Keep mine que
     installId: 'pc-export',
     appVersion: '5.0.0',
     shikimoriUserId: OWNER.id,
-    claim: null
+    claim: null,
+    trackerAccounts: []
   }
   await createLibrary(
     root,

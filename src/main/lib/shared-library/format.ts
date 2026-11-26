@@ -1,5 +1,10 @@
-// The Shared Library on-drive format v1 (#573): constants, the v1 schema as
-// data, the unknown-field bag and the serializer. Pure: no `fs`.
+// The Shared Library on-drive format (#573): constants, the schema of each
+// layout major as data, the unknown-field bag and the serializer. Pure: no `fs`.
+//
+// Layout v2 (#713) differs from v1 only in its owner, `{ provider, userId,
+// nickname? }`, and exists only for libraries a non-Shikimori account owns.
+// `read.ts` and `write.ts` index `MANIFEST_SCHEMAS` and `LAYOUT_MINORS`
+// themselves, so a test that mocks these exports reaches them.
 //
 // The serializer emits each object's allow-listed known fields, then its
 // unknown fields, and nothing else. Unknown fields live in a non-enumerable,
@@ -12,8 +17,15 @@ import { STATE_MINOR, STATE_VERSION } from '../sync-state/project'
 
 export { STATE_MINOR, STATE_VERSION }
 
-export const LAYOUT_VERSION = 1 as const
-export const LAYOUT_MINOR = 1 as const
+/** A layout major this reader knows. */
+export type LayoutMajor = 1 | 2
+
+/** The newest layout major the reader opens; a higher one opens read-only. */
+export const LAYOUT_READER_MAX = 2 as const
+
+/** Each major's own minor: a v2 minor is never stamped onto a v1 file. */
+export const LAYOUT_MINORS: Readonly<Record<LayoutMajor, number>> = { 1: 1, 2: 0 }
+
 export const NAMING_RULE = 'v1' as const
 
 /**
@@ -107,6 +119,14 @@ const opt = (name: string, node: SchemaNode, role?: SchemaField['role']): Schema
 
 const OWNER = record([req('shikimoriId', int()), opt('nickname', str())])
 
+// `provider` is open (a `TrackerId` today) and `userId` a string, so a later
+// provider, whatever its ids look like, costs no new major.
+const OWNER_V2 = record([
+  req('provider', str('nonEmpty')),
+  req('userId', str('nonEmpty')),
+  opt('nickname', str())
+])
+
 const LAST_WRITER = record([req('installId', str()), req('appVersion', str()), req('at', num)])
 
 const TITLE = record([req('animeId', int(1)), req('name', str())])
@@ -136,20 +156,37 @@ const ITEM = record([
 
 const NAMING = record([req('rule', oneOf(NAMING_RULE)), req('renamed', array(str(), 'self'))])
 
-export const MANIFEST_SCHEMA: RecordNode = record([
-  req('layoutVersion', int(), 'envelope'),
-  req('layoutMinor', int(0), 'envelope'),
-  req('libraryId', str('uuid'), 'envelope'),
-  opt('name', str()),
-  req('owner', nullable(OWNER), 'envelope'),
-  req('mode', oneOf('videos', 'metadata'), 'envelope'),
-  req('generation', int(), 'writer'),
-  req('stateGeneration', nullable(int()), 'writer'),
-  opt('lastWriter', LAST_WRITER, 'writer'),
-  req('titles', array(TITLE, 'animeId'), 'envelope'),
-  req('items', array(ITEM, 'itemKey'), 'envelope'),
-  opt('naming', NAMING)
-])
+const manifestSchema = (owner: SchemaNode): RecordNode =>
+  record([
+    req('layoutVersion', int(), 'envelope'),
+    req('layoutMinor', int(0), 'envelope'),
+    req('libraryId', str('uuid'), 'envelope'),
+    opt('name', str()),
+    req('owner', owner, 'envelope'),
+    req('mode', oneOf('videos', 'metadata'), 'envelope'),
+    req('generation', int(), 'writer'),
+    req('stateGeneration', nullable(int()), 'writer'),
+    opt('lastWriter', LAST_WRITER, 'writer'),
+    req('titles', array(TITLE, 'animeId'), 'envelope'),
+    req('items', array(ITEM, 'itemKey'), 'envelope'),
+    opt('naming', NAMING)
+  ])
+
+/**
+ * Each major's manifest schema. v2 is v1 with the v2 owner, which is never
+ * null: the v2 envelope requires a With metadata library with an owner.
+ */
+export const MANIFEST_SCHEMAS: Readonly<Record<LayoutMajor, RecordNode>> = {
+  1: manifestSchema(nullable(OWNER)),
+  2: manifestSchema(OWNER_V2)
+}
+
+/** The major a manifest with `owner` is written at: v2 only for a v2-shaped owner. */
+export function layoutVersionFor(
+  owner: SharedLibraryOwner | SharedLibraryTrackerOwner | null
+): LayoutMajor {
+  return owner !== null && 'provider' in owner ? 2 : 1
+}
 
 const field = (value: SchemaNode): RecordNode =>
   record([req('value', value), req('at', num), req('origin', str())])
@@ -329,15 +366,18 @@ function describeNode(node: SchemaNode, path: string, out: FieldDescription[]): 
   }
 }
 
-/** The v1 format as data: every field's path, type, required flag and enum, plus the caps. */
-export function describeSchema(): SchemaDescription {
+/**
+ * Layout `major`'s format as data: every field's path, type, required flag and
+ * enum, plus the caps. `schema-v<major>.json` is only ever compared with it.
+ */
+export function describeSchema(major: LayoutMajor): SchemaDescription {
   const fields: FieldDescription[] = []
-  describeNode(MANIFEST_SCHEMA, 'manifest', fields)
+  describeNode(MANIFEST_SCHEMAS[major], 'manifest', fields)
   describeNode(STATE_SCHEMA, 'state', fields)
   describeNode(META_SCHEMA, 'meta', fields)
   return {
     versions: {
-      layout: { version: LAYOUT_VERSION, minor: LAYOUT_MINOR },
+      layout: { version: major, minor: LAYOUT_MINORS[major] },
       state: { version: STATE_VERSION, minor: STATE_MINOR }
     },
     caps: { ...CAPS },

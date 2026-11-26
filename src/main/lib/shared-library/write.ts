@@ -23,21 +23,24 @@ import type { FileHandle } from 'fs/promises'
 import * as path from 'path'
 import {
   CAPS,
-  LAYOUT_MINOR,
-  LAYOUT_VERSION,
-  MANIFEST_SCHEMA,
+  LAYOUT_MINORS,
+  MANIFEST_SCHEMAS,
+  READ_ONLY_MESSAGES,
   STATE_MINOR,
   STATE_SCHEMA,
   STATE_VERSION,
   copyUnknown,
   isPlainObject,
   keyOf,
+  layoutVersionFor,
   plainUnknownOf,
   put,
   toFileText,
+  type LayoutMajor,
   type RecordNode,
   type SchemaNode
 } from './format'
+import { isOwnedBy, isTrackerOwner, sameOwner, shikimoriOwnerId } from './owner'
 import {
   LIBRARY_DIR,
   MANIFEST,
@@ -98,7 +101,7 @@ export class IdentityChangeError extends SharedLibraryError {}
 /** The write would produce a file a v1 reader locks as `'size'`. */
 export class LibraryTooLargeError extends SharedLibraryError {}
 
-/** The caller's data fails the v1 schema (other than a cap). */
+/** The caller's data fails the schema (other than a cap). */
 export class InvalidLibraryDataError extends SharedLibraryError {}
 
 // --- serializing with the drive's unknown fields ------------------------------------------
@@ -216,7 +219,7 @@ function serialize(
   const c = check(schema, value, what, issues)
   if (!c.ok) issues.push({ path: what, kind: c.kind })
   const bad = issues.find((i) => i.kind === 'type')
-  if (bad) throw new InvalidLibraryDataError(`${bad.path} fails the v1 schema`)
+  if (bad) throw new InvalidLibraryDataError(`${bad.path} fails the schema`)
   if (issues.length > 0) {
     throw new LibraryTooLargeError(`${issues[0].path} is over ${CAPS.stringBytes} bytes`)
   }
@@ -361,14 +364,37 @@ async function reread(
   return insp as Inspection & { manifest: NonNullable<Inspection['manifest']> }
 }
 
+/** A claim only ever matches a v1 owner: a v2 owner has no Shikimori id. */
 function ownsOrClaims(m: SharedLibraryManifest, actor: SharedLibraryActor): boolean {
   if (m.mode !== 'metadata' || m.owner === null) return false
-  if (actor.shikimoriUserId !== null && actor.shikimoriUserId === m.owner.shikimoriId) return true
+  if (isOwnedBy(m.owner, actor)) return true
+  const ownerId = shikimoriOwnerId(m.owner)
   return (
+    ownerId !== null &&
     actor.claim !== null &&
     actor.claim.libraryId === m.libraryId &&
-    actor.claim.ownerId === m.owner.shikimoriId
+    actor.claim.ownerId === ownerId
   )
+}
+
+/** The writer never creates a v2 owner with `provider: 'shikimori'`: a Shikimori owner it creates is v1. */
+function refuseV2Shikimori(owner: SharedLibraryManifestInput['owner']): void {
+  if (isTrackerOwner(owner) && owner.provider === 'shikimori') {
+    throw new InvalidLibraryDataError('a Shikimori owner is written as a v1 owner')
+  }
+}
+
+/**
+ * The `layoutMinor` a write stamps: `max(own minor, chosen file's minor)` of
+ * the output's major, the chosen file's only when it has that major. A v2
+ * minor is never stamped onto a v1 file.
+ */
+export function layoutMinorFor(
+  major: LayoutMajor,
+  chosen: Pick<SharedLibraryManifest, 'layoutVersion' | 'layoutMinor'> | null
+): number {
+  const own = LAYOUT_MINORS[major]
+  return chosen !== null && chosen.layoutVersion === major ? Math.max(own, chosen.layoutMinor) : own
 }
 
 function writerOf(actor: SharedLibraryActor): SharedLibraryWriter {
@@ -385,7 +411,7 @@ function manifestFields(
   }
 ): Record<string, unknown> {
   return {
-    layoutVersion: LAYOUT_VERSION,
+    layoutVersion: layoutVersionFor(input.owner),
     layoutMinor: over.layoutMinor,
     libraryId: input.libraryId,
     name: input.name,
@@ -421,17 +447,19 @@ export async function createLibrary(
     if (l) throw new LibraryExistsError(`${path.join(dir, name)} already exists`)
   }
   if (manifest.mode === 'metadata') {
-    if (actor.shikimoriUserId === null || manifest.owner?.shikimoriId !== actor.shikimoriUserId) {
+    refuseV2Shikimori(manifest.owner)
+    if (!isOwnedBy(manifest.owner, actor)) {
       throw new NotOwnerError('a With metadata library is owned by the logged-in actor')
     }
   } else if (manifest.owner !== null) {
     throw new InvalidLibraryDataError('a Videos only library has no owner')
   }
   const generation = 1
+  const major = layoutVersionFor(manifest.owner)
   const { text } = serialize(
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[major],
     manifestFields(manifest, {
-      layoutMinor: LAYOUT_MINOR,
+      layoutMinor: layoutMinorFor(major, null),
       generation,
       stateGeneration: null,
       lastWriter: writerOf(actor)
@@ -462,32 +490,37 @@ export async function writeManifest(
     throw new StaleGenerationError(expectedGeneration, m.generation)
   }
   let stateGeneration = m.stateGeneration
+  const major = layoutVersionFor(next.owner)
   if (options.takeover) {
     if (m.owner !== null) throw new NotOwnerError('only a library with no owner can be taken over')
-    if (actor.shikimoriUserId === null)
+    if (actor.shikimoriUserId === null && actor.trackerAccounts.length === 0)
       throw new NotOwnerError('a takeover needs a logged-in actor')
-    if (next.mode !== 'metadata' || next.owner?.shikimoriId !== actor.shikimoriUserId) {
+    refuseV2Shikimori(next.owner)
+    if (next.mode !== 'metadata' || !isOwnedBy(next.owner, actor)) {
       throw new IdentityChangeError(
         'a takeover makes the actor the owner of a With metadata library'
       )
+    }
+    // The one write that changes major (v1 Videos only → v2). A v1 file at a
+    // newer v1 minor holds fields this writer doesn't know, and v2's own minor
+    // wouldn't describe them.
+    if (major !== m.layoutVersion && m.layoutMinor > LAYOUT_MINORS[m.layoutVersion]) {
+      throw new LibraryReadOnlyError('version', READ_ONLY_MESSAGES.version)
     }
     stateGeneration = null
   } else {
     if (m.mode === 'metadata' && !ownsOrClaims(m, actor)) {
       throw new NotOwnerError('only the owner or a matching claim writes this library')
     }
-    if (
-      next.mode !== m.mode ||
-      (next.owner?.shikimoriId ?? null) !== (m.owner?.shikimoriId ?? null)
-    ) {
+    if (next.mode !== m.mode || !sameOwner(next.owner, m.owner)) {
       throw new IdentityChangeError('owner and mode change only through a takeover')
     }
   }
   const generation = m.generation + 1
   const { text } = serialize(
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[major],
     manifestFields(next, {
-      layoutMinor: Math.max(LAYOUT_MINOR, m.layoutMinor),
+      layoutMinor: layoutMinorFor(major, m),
       generation,
       stateGeneration,
       lastWriter: writerOf(actor)
@@ -536,10 +569,12 @@ export async function writeState(
     insp.state?.raw,
     'state'
   )
+  // `m`'s own owner: a hand-written v2 `provider: 'shikimori'` manifest stays v2.
+  const major = layoutVersionFor(m.owner)
   const manifest = serialize(
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[major],
     manifestFields(m, {
-      layoutMinor: Math.max(LAYOUT_MINOR, m.layoutMinor),
+      layoutMinor: layoutMinorFor(major, m),
       generation,
       stateGeneration,
       lastWriter: writerOf(actor)

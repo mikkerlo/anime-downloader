@@ -393,7 +393,7 @@ describe('With metadata: the kills', () => {
       expect(fs.existsSync(path.join(root, LIBRARY_DIR, 'state.json'))).toBe(false)
       if (before.status === 'ok') {
         expect(before.manifest.items.map(itemKey).sort()).toEqual([r.a1, r.b1].sort())
-        expect(before.manifest.owner?.shikimoriId).toBe(ME.id)
+        expect(before.manifest.owner).toMatchObject({ shikimoriId: ME.id })
       }
 
       // The restart: a new service on the same userData, with the real state step.
@@ -585,7 +585,7 @@ describe('With metadata: who and where', () => {
     const root = path.join(r.env.drive, 'Trip')
     const job = await startMeta(r, [r.a1])
     expect(job.status).toBe('completed')
-    expect((await pairOf(root)).manifest.owner?.shikimoriId).toBe(ME.id)
+    expect((await pairOf(root)).manifest.owner).toMatchObject({ shikimoriId: ME.id })
     await expectPairedWithBase(r, root)
   })
 
@@ -675,7 +675,7 @@ describe('With metadata: who and where', () => {
     )
     const p = await pairOf(root)
     expect(p).toMatchObject({ state: null, stateInitialized: false })
-    expect(p.manifest.owner?.shikimoriId).toBe(ME.id)
+    expect(p.manifest.owner).toMatchObject({ shikimoriId: ME.id })
     expect(baseOf(r, p.manifest.libraryId)).toBeNull()
   })
 
@@ -815,7 +815,13 @@ describe('With metadata: into this user’s own library', () => {
     await writeState(
       root,
       doc,
-      { installId: 'pc-other', appVersion: '5.0.47', shikimoriUserId: ME.id, claim: null },
+      {
+        installId: 'pc-other',
+        appVersion: '5.0.47',
+        shikimoriUserId: ME.id,
+        claim: null,
+        trackerAccounts: []
+      },
       p.manifest.stateGeneration
     )
 

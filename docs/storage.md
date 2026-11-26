@@ -71,7 +71,7 @@ An episode copied from a Shared Library carries `arrivedAt` (ms) on its `downloa
 
 An attached Shared Library on an unplugged drive still lists its titles after a restart from `userData/shared-library-cache/<libraryId>/` (`src/main/services/attached-library/snapshot-cache.ts`):
 
-- `snapshot.json`: `{ version: 1, manifest, metas }`, the manifest and every title's `meta/` snapshot (S5 caps each at 1 MB). Always kept. It holds no rate values.
+- `snapshot.json`: `{ version: 1, manifest, metas }`, the manifest and every title's `meta/` snapshot (S5 caps each at 1 MB). Always kept. It holds no rate values. A layout v2 manifest (#713) is saved under `version: 2`, and `load` accepts only version 1 with a v1 manifest and version 2 with a v2 one; 6.x's `load` rejects anything but `version: 1`, so a downgraded PC never renders a v2 snapshot as a v1 one. `index.json` stays at `version: 1`: it holds no owner.
 - `posters/<animeId>.jpg`: copied from the drive with a capped read; a poster over 2 MB isn't cached and its card shows the placeholder.
 - `index.json`: `{ version: 1, generation, posters, posterBytes, evicted? }`, so the cap below needs no directory walk.
 

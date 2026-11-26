@@ -66,8 +66,10 @@ function stubApi(): void {
       libraryIsDownloaded: vi.fn().mockResolvedValue(false),
       autoDlGetSubscription: vi.fn().mockResolvedValue(null),
       shikimoriGetUser: vi.fn().mockResolvedValue(null),
-      shikimoriGetSyncStatus: vi.fn().mockResolvedValue({ state: 'idle', queueLength: 0 }),
-      shikimoriGetOfflineQueueLength: vi.fn().mockResolvedValue(0)
+      trackerListAccounts: vi
+        .fn()
+        .mockResolvedValue({ accounts: [], primary: null, mirror: {}, featureSources: {} }),
+      trackerGetOfflineQueueLength: vi.fn().mockResolvedValue(0)
     } as Record<string, unknown>,
     {
       get: (t, p, r) => (p in t ? Reflect.get(t, p, r) : () => makeThenable())

@@ -3,8 +3,23 @@ import { ref, computed, type ComputedRef } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { useDownloadsStore } from '../../../src/renderer/src/stores/downloads'
 import { usePlayerStore } from '../../../src/renderer/src/stores/player'
-import { useEpisodeDownloads } from '../../../src/renderer/src/composables/use-episode-downloads'
+import {
+  useEpisodeDownloads,
+  type ResumeProgress
+} from '../../../src/renderer/src/composables/use-episode-downloads'
 import type { EpisodeRow } from '../../../src/renderer/src/composables/use-episode-list'
+
+/** The primary tracker's resume input; the defaults are "no account, checked". */
+function progress(over: Partial<ResumeProgress> = {}): ComputedRef<ResumeProgress> {
+  return computed(() => ({
+    checked: true,
+    hasAccount: false,
+    loading: false,
+    status: null,
+    episodes: 0,
+    ...over
+  }))
+}
 
 // `EpisodeFileEntry` is the ambient global from `src/shared/types/storage.d.ts`
 // (#429) — this file used to carry its own byte-identical copy.
@@ -118,11 +133,7 @@ function makeDeps(overrides: Partial<Parameters<typeof useEpisodeDownloads>[0]> 
     isPaginated: computed(() => false),
     goToPage: vi.fn().mockResolvedValue(undefined),
     loadingEpisodes: ref(false),
-    shikiRate: ref<ShikiUserRate | null>(null),
-    shikiUser: ref<ShikiUser | null>(null),
-    shikiEpisodes: ref(0),
-    shikiUserChecked: ref(true),
-    shikiLoading: ref(false),
+    resumeProgress: progress(),
     downloadsStore: useDownloadsStore(),
     playerStore: usePlayerStore(),
     playerMode: ref<'system' | 'builtin'>('system'),
@@ -162,11 +173,8 @@ describe('useEpisodeDownloads — watch progress', () => {
     expect(dl.episodeProgressPercent('2')).toBe(4)
   })
 
-  it('isEpisodeWatched honors shiki completed status', () => {
-    const shikiRate = ref<ShikiUserRate | null>({
-      status: 'completed'
-    } as unknown as ShikiUserRate)
-    const deps = makeDeps({ shikiRate })
+  it('isEpisodeWatched honors a completed tracker status', () => {
+    const deps = makeDeps({ resumeProgress: progress({ hasAccount: true, status: 'completed' }) })
     const dl = useEpisodeDownloads(deps)
     expect(dl.isEpisodeWatched('1')).toBe(true)
   })
@@ -192,21 +200,41 @@ describe('useEpisodeDownloads — continueTarget priority', () => {
     const dl = useEpisodeDownloads(
       makeDeps({
         filteredEpisodes: eps3(),
-        shikiRate: ref({ status: 'completed' } as unknown as ShikiUserRate)
+        resumeProgress: progress({ hasAccount: true, status: 'completed' })
       })
     )
     expect(dl.continueTarget.value?.episodeInt).toBe('1')
   })
 
-  it('priority 1: shikimori reports N completed → ep N+1', () => {
+  it('priority 1: the primary tracker reports N completed → ep N+1', () => {
     const dl = useEpisodeDownloads(
       makeDeps({
         filteredEpisodes: eps3(),
-        shikiUser: ref({ id: 1 } as unknown as ShikiUser),
-        shikiEpisodes: ref(2)
+        resumeProgress: progress({ hasAccount: true, episodes: 2 })
       })
     )
     expect(dl.continueTarget.value?.episodeInt).toBe('3')
+  })
+
+  // #704: the progress comes from the primary, whichever tracker it is. An
+  // AniList-only user's 2 episodes jump to episode 3.
+  it('priority 1: an AniList-only resume progress of 2 → ep 3', () => {
+    const dl = useEpisodeDownloads(
+      makeDeps({
+        anime: ref({ id: 1, myAnimeListId: 99 } as unknown as AnimeDetail),
+        filteredEpisodes: eps3(),
+        resumeProgress: progress({ hasAccount: true, status: 'watching', episodes: 2 })
+      })
+    )
+    expect(dl.continueTarget.value?.episodeInt).toBe('3')
+    expect(dl.continueReady.value).toBe(true)
+  })
+
+  it('priority 1 needs an account: episodes with no account fall through to local progress', () => {
+    const dl = useEpisodeDownloads(
+      makeDeps({ filteredEpisodes: eps3(), resumeProgress: progress({ episodes: 2 }) })
+    )
+    expect(dl.continueTarget.value?.episodeInt).toBe('1')
   })
 
   it('priority 2: unfinished saved position wins (most recent)', () => {
@@ -252,27 +280,37 @@ describe('useEpisodeDownloads — continueReady', () => {
     expect(dl.continueReady.value).toBe(false)
   })
 
-  it('false when MAL anime but shikiUser not yet checked', () => {
+  it('false when MAL anime but the accounts are not yet checked', () => {
     const dl = useEpisodeDownloads(
       makeDeps({
         anime: ref({ id: 1, myAnimeListId: 99 } as unknown as AnimeDetail),
         filteredEpisodes: computed(() => [mkEpisode(1, '1')]),
-        shikiUserChecked: ref(false)
+        resumeProgress: progress({ checked: false })
       })
     )
     expect(dl.continueReady.value).toBe(false)
   })
 
-  it('false while shiki is loading', () => {
+  it('false while the primary rate is loading', () => {
     const dl = useEpisodeDownloads(
       makeDeps({
         anime: ref({ id: 1, myAnimeListId: 99 } as unknown as AnimeDetail),
         filteredEpisodes: computed(() => [mkEpisode(1, '1')]),
-        shikiUser: ref({ id: 1 } as unknown as ShikiUser),
-        shikiLoading: ref(true)
+        resumeProgress: progress({ hasAccount: true, loading: true })
       })
     )
     expect(dl.continueReady.value).toBe(false)
+  })
+
+  it('loading with no account does not block', () => {
+    const dl = useEpisodeDownloads(
+      makeDeps({
+        anime: ref({ id: 1, myAnimeListId: 99 } as unknown as AnimeDetail),
+        filteredEpisodes: computed(() => [mkEpisode(1, '1')]),
+        resumeProgress: progress({ loading: true })
+      })
+    )
+    expect(dl.continueReady.value).toBe(true)
   })
 
   it('true once everything is settled', () => {

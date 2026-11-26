@@ -1,7 +1,7 @@
-// Each tracker's display name (#700, epic #688): the one place UI copy that
-// names a tracker takes it from. A value module, so main can read it too; the
-// ambient `types/trackers.d.ts` can't export a const.
-export const TRACKER_LABELS: Record<TrackerId, string> = {
+// Each tracker's display name (epic #688). A value module, since the ambient
+// `src/shared/types/trackers.d.ts` can't export a const; the renderer reads it
+// now and main can later.
+export const TRACKER_LABELS: Readonly<Record<TrackerId, string>> = {
   shikimori: 'Shikimori',
   anilist: 'AniList',
   mal: 'MyAnimeList'

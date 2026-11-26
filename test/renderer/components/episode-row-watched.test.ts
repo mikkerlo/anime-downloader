@@ -72,11 +72,13 @@ function mountRow(initial: Record<string, WatchProgressEntry>) {
     isPaginated: computed(() => false),
     goToPage: vi.fn(),
     loadingEpisodes: ref(false),
-    shikiRate: ref(null),
-    shikiUser: ref(null),
-    shikiEpisodes: ref(0),
-    shikiUserChecked: ref(true),
-    shikiLoading: ref(false),
+    resumeProgress: computed(() => ({
+      checked: true,
+      hasAccount: false,
+      loading: false,
+      status: null,
+      episodes: 0
+    })),
     downloadsStore: useDownloadsStore(),
     playerStore: usePlayerStore(),
     playerMode: ref<'system' | 'builtin'>('system'),

@@ -100,7 +100,7 @@ describe('shared-library-e2e workflow', () => {
       'src/renderer/src/components/shared-library/**',
       'src/renderer/src/components/sync/**',
       'src/renderer/src/components/views/PlayerView.vue',
-      'src/renderer/src/components/detail/ShikimoriPanel.vue',
+      'src/renderer/src/components/detail/TrackerPanel.vue',
       'src/renderer/src/components/detail/EpisodeRow.vue',
       'src/renderer/src/composables/use-episode-downloads.ts',
       'src/renderer/src/composables/use-play-from-drive.ts',

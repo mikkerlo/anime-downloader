@@ -46,7 +46,7 @@ today's replies.
 [Trackers › Accounts and sign-in](./trackers.md#accounts-and-sign-in) has the
 rules.
 
-Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `useSkipDetection`, `useMsePlayer`, `useSyncplayClient`) bind those subscriptions inside themselves and return disposers to the consumer; pure-logic composables defer lifecycle to the caller. The full composable inventory lives in [Renderer architecture](./renderer.md#composables).
+Renderer composables that own broadcast subscriptions (e.g. `useTrackerRate`, `useSkipDetection`, `useMsePlayer`, `useSyncplayClient`) bind those subscriptions inside themselves and return disposers to the consumer; pure-logic composables defer lifecycle to the caller. The full composable inventory lives in [Renderer architecture](./renderer.md#composables).
 
 ## Channel reference
 

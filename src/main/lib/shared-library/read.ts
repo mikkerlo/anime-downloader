@@ -287,7 +287,7 @@ const manifestOverItems = (raw: Record<string, unknown>): boolean =>
  * test sets 1 to read a tree as 6.x does (#713).
  */
 export interface ReadOptions {
-  readerMax?: number
+  readerMax?: LayoutMajor
 }
 
 export function classifyManifest(

@@ -112,7 +112,11 @@ export interface CredentialVault {
 export interface CredentialVaultDeps {
   store: StorageService
   safeStorage: SafeStorageHolder
-  /** A stored blob failed to decrypt. #696 (T3c) wires `notifyAccountsChanged()`. */
+  /**
+   * A stored blob failed to decrypt. Fires once per locked blob: again only
+   * when the key's stored bytes change, or after an empty or successful read.
+   * #696 (T3c) wires `notifyAccountsChanged()`.
+   */
   onLocked?: (key: VaultKey) => void
   warn?: (message: string) => void
 }
@@ -208,18 +212,31 @@ export function createCredentialVault(deps: CredentialVaultDeps): CredentialVaul
     return commitIf(key, blob, () => JSON.stringify(stored(key)) === readBytes)
   }
 
-  function locked(key: VaultKey, why: string): VaultRead<never> {
-    warn(`[vault] can't unlock ${key}: ${why}`)
-    deps.onLocked?.(key)
+  // Per key, the bytes of the blob `onLocked` last fired for. `onLocked` fires
+  // once per locked blob, not on every read: #696 (T3c) wires it to
+  // `notifyAccountsChanged()`, and a refetch that reads the key again must not
+  // turn a locked blob into a broadcast loop. New bytes fire again; an empty
+  // or successful read clears the entry.
+  const lockedBytes = new Map<VaultKey, string>()
+
+  function locked(key: VaultKey, readBytes: string, why: string): VaultRead<never> {
+    if (lockedBytes.get(key) !== readBytes) {
+      lockedBytes.set(key, readBytes)
+      warn(`[vault] can't unlock ${key}: ${why}`)
+      deps.onLocked?.(key)
+    }
     return { state: 'locked' }
   }
 
   async function read<T>(key: VaultKey): Promise<VaultRead<T>> {
     assertVaultKey(key)
     const raw = stored(key)
-    if (raw === null || raw === undefined) return { state: 'empty' }
-    if (!isBlob(raw)) return locked(key, 'not a vault blob')
+    if (raw === null || raw === undefined) {
+      lockedBytes.delete(key)
+      return { state: 'empty' }
+    }
     const readBytes = JSON.stringify(raw)
+    if (!isBlob(raw)) return locked(key, readBytes, 'not a vault blob')
     const safe = await deps.safeStorage.get()
 
     if (raw.enc === 'plain') {
@@ -227,8 +244,9 @@ export function createCredentialVault(deps: CredentialVaultDeps): CredentialVaul
       try {
         value = JSON.parse(raw.data) as T
       } catch (err) {
-        return locked(key, String(err))
+        return locked(key, readBytes, String(err))
       }
+      lockedBytes.delete(key)
       if (!safe.isEncryptionAvailable()) return { state: 'ok', value, mode: 'plain' }
       const upgraded = await writeBack(key, readBytes, value)
       return { state: 'ok', value, mode: upgraded ? 'safeStorage' : 'plain' }
@@ -248,8 +266,9 @@ export function createCredentialVault(deps: CredentialVaultDeps): CredentialVaul
       }
       value = JSON.parse(json) as T
     } catch (err) {
-      return locked(key, String(err))
+      return locked(key, readBytes, String(err))
     }
+    lockedBytes.delete(key)
     if (reEncrypt) await writeBack(key, readBytes, value)
     return { state: 'ok', value, mode: 'safeStorage' }
   }

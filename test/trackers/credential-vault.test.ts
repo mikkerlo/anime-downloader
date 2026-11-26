@@ -93,7 +93,53 @@ describe.each(BACKENDS)('credential vault on the %s backend', (_name, isAsync) =
     expect(await r.vault.read(KEY)).toEqual({ state: 'locked' })
     expect(bytes(r)).toBe(before)
     expect(r.set).not.toHaveBeenCalled()
-    expect(r.onLocked).toHaveBeenCalledTimes(3)
+    // Once per locked blob, not per read (review of #719): three reads of the
+    // same bytes are one call. Mutation check: fire per read and this reds.
+    expect(r.onLocked).toHaveBeenCalledTimes(1)
+  })
+
+  it('onLocked fires again for a new locked blob under the same key', async () => {
+    const r = rig({ async: isAsync })
+    await r.vault.write(KEY, TOKEN)
+    r.fake.key = 'another-user'
+    await r.vault.read(KEY)
+    await r.vault.read(KEY)
+    expect(r.onLocked).toHaveBeenCalledTimes(1)
+
+    // A sign-in under keyring B, then B lost too: different bytes, locked again.
+    r.fake.key = 'user-key-b'
+    await r.vault.write(KEY, { access_token: 'other' })
+    r.fake.key = 'another-user-c'
+    expect(await r.vault.read(KEY)).toEqual({ state: 'locked' })
+    await r.vault.read(KEY)
+    expect(r.onLocked).toHaveBeenCalledTimes(2)
+    expect(r.onLocked).toHaveBeenLastCalledWith(KEY)
+  })
+
+  it('a successful read in between resets it, so the same blob locking again fires again', async () => {
+    const r = rig({ async: isAsync })
+    await r.vault.write(KEY, TOKEN)
+    r.fake.key = 'another-user'
+    await r.vault.read(KEY)
+    expect(r.onLocked).toHaveBeenCalledTimes(1)
+
+    // The keyring comes back: the same bytes decrypt.
+    r.fake.key = 'user-key'
+    expect(await r.vault.read(KEY)).toMatchObject({ state: 'ok', value: TOKEN })
+    r.fake.key = 'another-user'
+    expect(await r.vault.read(KEY)).toEqual({ state: 'locked' })
+    expect(r.onLocked).toHaveBeenCalledTimes(2)
+  })
+
+  it('keys are tracked separately', async () => {
+    const r = rig({ async: isAsync })
+    await r.vault.write(KEY, TOKEN)
+    await r.vault.write('myanimelistCredentials', TOKEN)
+    r.fake.key = 'another-user'
+    await r.vault.read(KEY)
+    await r.vault.read('myanimelistCredentials')
+    await r.vault.read(KEY)
+    expect(r.onLocked.mock.calls).toEqual([[KEY], ['myanimelistCredentials']])
   })
 
   it('a stored value that is not a vault blob reads as locked and is left alone', async () => {

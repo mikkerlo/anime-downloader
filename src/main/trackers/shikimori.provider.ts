@@ -15,6 +15,7 @@ import type {
   ShikimoriSession,
   TrackerRateCacheCodec,
   TrackerRateEntry,
+  TrackerRateEntryPayload,
   TrackerSyncProvider
 } from './types'
 
@@ -69,6 +70,18 @@ export const shikimoriRateCache: TrackerRateCacheCodec<
         updated_at: new Date().toISOString()
       }
     }
+  },
+  // `malIdOf`'s match, so a row from before `target_id` was cached still reads.
+  entryOf(row) {
+    return {
+      trackerId: 'shikimori',
+      malId: (row.rate.target_id ?? row.shikiAnime?.id) as number,
+      remoteId: typeof row.rate.id === 'number' ? row.rate.id : null,
+      values: rateValues(row.rate),
+      updatedAt: parseUpdatedAt(row.rate.updated_at),
+      anime: animeOf(row.shikiAnime),
+      smotretAnime: row.smotretAnime ?? null
+    } satisfies TrackerRateEntryPayload
   }
 }
 
@@ -101,27 +114,33 @@ function toEntry(
   }
 }
 
+// A cached row from an older version can lack `shikiAnime`.
+function animeOf(
+  anime: shikimori.ShikiAnimeRateEntry['anime'] | undefined
+): TrackerRateEntryPayload['anime'] {
+  return {
+    // The app's display rule: the Russian title, else the romaji name.
+    title: anime?.russian || anime?.name || '',
+    poster: anime?.image?.original ?? null,
+    kind: anime?.kind ?? null,
+    episodes: anime?.episodes ?? null,
+    episodesAired: anime?.episodes_aired ?? null,
+    status: anime?.status ?? null
+  }
+}
+
 function toRateEntry(
   row: shikimori.ShikiAnimeRateEntry,
   smotretAnime: AnimeSearchResult | null
 ): TrackerRateEntry<shikimori.ShikiAnimeRateEntry> {
-  const anime = row.anime
   return {
     trackerId: 'shikimori',
     // As the rate cache derives `target_id` (`lib/shikimori-rate-cache.ts`).
-    malId: row.target_id ?? anime.id,
+    malId: row.target_id ?? row.anime.id,
     remoteId: row.id,
     values: rateValues(row),
     updatedAt: parseUpdatedAt(row.updated_at),
-    anime: {
-      // The app's display rule: the Russian title, else the romaji name.
-      title: anime.russian || anime.name,
-      poster: anime.image?.original ?? null,
-      kind: anime.kind ?? null,
-      episodes: anime.episodes ?? null,
-      episodesAired: anime.episodes_aired ?? null,
-      status: anime.status ?? null
-    },
+    anime: animeOf(row.anime),
     smotretAnime,
     native: row
   }

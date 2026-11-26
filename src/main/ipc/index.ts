@@ -8,6 +8,7 @@ import type { ColdStorageService } from '../services/cold-storage'
 import type { SkipAnalysisService } from '../services/skip-analysis'
 import type { ShikimoriSyncService } from '../services/shikimori-sync'
 import type { TrackerFanOut } from '../services/trackers/fan-out'
+import type { TrackerRates } from '../services/trackers/rates'
 import type { DownloadManager } from '../download-manager'
 import type { ShikiUserRateStatus } from '../shikimori'
 import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
@@ -28,6 +29,7 @@ import * as ffmpegRouter from './ffmpeg.ipc'
 import * as cleanupRouter from './cleanup.ipc'
 import * as downloadedAnimeRouter from './downloaded-anime.ipc'
 import * as shikimoriRouter from './shikimori.ipc'
+import * as trackersRouter from './trackers.ipc'
 import * as skipDetectorRouter from './skip-detector.ipc'
 import * as storageRouter from './storage.ipc'
 import * as fileRouter from './file.ipc'
@@ -104,6 +106,11 @@ export interface AppDeps {
    * `applyChange`. The Shikimori router sets Shikimori's primary branch on it.
    */
   trackers: TrackerFanOut
+  /**
+   * The reads and writes behind the `tracker:*` rate, status and queue channels
+   * (#694), shared with their `shikimori:*` aliases.
+   */
+  trackerRates: TrackerRates
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */
@@ -114,7 +121,11 @@ export interface AppDeps {
     prevStatus?: ShikiUserRateStatus
   ) => Promise<void>
   runAutoDownloadTick: (reason: AutoDlReason) => Promise<AutoDlTickResult>
-  /** Fan-out broadcaster to every renderer window (the index.ts `broadcastToAll`). */
+  /**
+   * Fan-out broadcaster to every renderer window: `index.ts`'s `broadcastToAll`
+   * through the Shikimori bridge (#694), which double-emits the four Shikimori
+   * rate, queue and status broadcasts as `tracker:*`.
+   */
   broadcast: (channel: string, ...args: unknown[]) => void
   /**
    * Episode-file scanner for `CHANNELS.FILE_CHECK_EPISODES` — cache-first, with
@@ -196,6 +207,7 @@ function registerAllRouters(deps: AppDeps): void {
   cleanupRouter.register(deps)
   downloadedAnimeRouter.register(deps)
   shikimoriRouter.register(deps)
+  trackersRouter.register(deps)
   skipDetectorRouter.register(deps)
   storageRouter.register(deps)
   fileRouter.register(deps)

@@ -95,7 +95,7 @@ export interface TrackerSyncServiceDeps {
   onNeedsSetupChanged?: (trackerId: TrackerId) => void
 }
 
-export interface TrackerSyncService<TRate, TRow> {
+export interface TrackerSyncService<TRate, TRow> extends TrackerSyncReads<TRate, TRow> {
   readonly trackerId: TrackerId
   /** This tracker's store keys: #692's fan-out reads its user, queue and parked queues. */
   readonly keys: TrackerStoreKeys
@@ -671,6 +671,11 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     return result
   }
 
+  async function fetchEntry(malId: number): Promise<TrackerEntry<TRate> | null> {
+    const session = await provider.auth()
+    return provider.getEntry(session, { malId, remoteId: cachedRate(malId)?.remoteId ?? null })
+  }
+
   return {
     trackerId,
     keys,
@@ -688,10 +693,34 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     refreshRates,
     patchCachedRate,
     cachedRate,
+    rateCache: codec,
+    fetchEntry,
+    isQueueableError: (err) =>
+      provider.classifyError(err) === 'network' || provider.isSessionGone(err),
     hasTitle: (malId) => provider.hasTitle?.(malId) ?? true,
     enqueue,
     broadcastQueueChanged,
     needsSetup: () => needsSetupFlag,
     clearNeedsSetup
   }
+}
+
+/** The reads the `tracker:*` handlers (#694) make through an instance. */
+export interface TrackerSyncReads<TRate, TRow> {
+  /** The codec's reads. */
+  readonly rateCache: Pick<
+    import('../../trackers/types').TrackerRateCacheCodec<unknown, TRow>,
+    'malIdOf' | 'read' | 'entryOf'
+  >
+  /**
+   * The signed-in user's live entry for `malId` (get-rate): one `auth()`, then
+   * `getEntry` with that session. Null when the user has none.
+   */
+  fetchEntry(malId: number): Promise<TrackerEntry<TRate> | null>
+  /**
+   * A failure a queued write would survive: a `network`-class error, or the
+   * session is gone (`isSessionGone`). Get-rate answers from the cache on one;
+   * for Shikimori this is its rate funnels' `isQueueableRateError`.
+   */
+  isQueueableError(err: unknown): boolean
 }

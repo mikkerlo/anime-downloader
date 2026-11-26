@@ -51,3 +51,10 @@ export const MYANIMELIST_KEYS = {
   animeDetails: 'myanimelistAnimeDetails',
   clientConfig: 'myanimelistClientConfig'
 } as const satisfies TrackerStoreKeys
+
+/** Every tracker's keys by id: a tracker with no sync instance yet still has its keys (#694). */
+export const TRACKER_KEYS: Readonly<Record<TrackerId, TrackerStoreKeys>> = {
+  shikimori: SHIKIMORI_KEYS,
+  anilist: ANILIST_KEYS,
+  mal: MYANIMELIST_KEYS
+}

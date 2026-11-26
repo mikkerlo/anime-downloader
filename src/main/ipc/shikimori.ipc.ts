@@ -19,24 +19,20 @@ import {
   type ParkedQueues,
   type QueuedShikimoriUpdate
 } from '../lib/shikimori-queue'
-import {
-  findRateEntry,
-  rateFromCacheEntry,
-  type StoredRateEntry
-} from '../lib/shikimori-rate-cache'
-import { OfflineError } from '../lib/net'
+import { rateFromCacheEntry, type StoredRateEntry } from '../lib/shikimori-rate-cache'
 import {
   CALENDAR_CACHE_TTL_MS,
   type CachedCalendar,
-  type CalendarEntry
+  type CalendarEntry,
+  type ShikiSyncStatus
 } from '../services/shikimori-sync'
 import {
   cachedShikimoriRate,
   createShikimoriPrimary,
-  isQueueableRateError,
   shikimoriRateReply,
   syntheticRate
 } from '../services/trackers/shikimori-primary'
+import type { TrackerStatus } from '../services/trackers/rates'
 import type { AppDeps } from './index'
 
 const SHIKI_BASE = SHIKIMORI_ORIGIN
@@ -45,6 +41,7 @@ export function register({
   store,
   shikimoriSyncService: sync,
   trackers,
+  trackerRates,
   lookupByMalIds,
   maybeBroadcastCleanupPrompt,
   runAutoDownloadTick,
@@ -62,20 +59,23 @@ export function register({
     return result ? result.entries : null
   }
 
+  // The shared refresh (#694): the calendar, recs and `SHIKIMORI_RATES_REFRESHED`
+  // go with the instance's `refreshRates`, and this tail runs after it.
+  trackerRates.setRefreshHooks('shikimori', {
+    afterBackgroundRefresh() {
+      void sync.syncShikimoriQueue()
+      void sync.prefetchShikimoriDetails()
+      void runAutoDownloadTick('rates-refreshed').catch((err) =>
+        console.warn('[auto-dl] rates-refreshed tick failed:', err)
+      )
+    },
+    afterFetch() {
+      void sync.prefetchShikimoriDetails()
+    }
+  })
+
   function refreshShikimoriRatesInBackground(): void {
-    if (offlineService?.isOffline()) return
-    // The calendar, recs and `SHIKIMORI_RATES_REFRESHED` go with the refresh.
-    sync
-      .refreshRates({ keepQueued: false })
-      .then((result) => {
-        if (!result) return
-        void sync.syncShikimoriQueue()
-        void sync.prefetchShikimoriDetails()
-        void runAutoDownloadTick('rates-refreshed').catch((err) =>
-          console.warn('[auto-dl] rates-refreshed tick failed:', err)
-        )
-      })
-      .catch((err) => console.warn('[shikimori] background refresh failed:', err))
+    trackerRates.refreshInBackground('shikimori')
   }
 
   // Friends page cards (#179): friend list joined with presence + per-friend
@@ -644,35 +644,19 @@ export function register({
     }
   })
 
-  // Offline, or when the live read fails the way a queued write would, the
-  // cached list answers (#570). The list is the whole list as of its last
-  // refresh, so a title missing from a non-empty list has no rate; an empty
-  // list was never loaded, and the error stands.
-  function rateFromCache(malId: number, err: unknown): ShikiUserRateResult | null {
-    const cached = store.get('shikimoriUserRates') as StoredRateEntry[]
-    if (cached.length === 0) throw err
-    const entry = findRateEntry(cached, malId)
-    return entry ? rateFromCacheEntry(entry) : null
-  }
+  // The nine handlers below are aliases of their `tracker:*` channels until
+  // v7.0 (#717): each calls the shared function in `services/trackers/rates.ts`
+  // with `'shikimori'` and replies in today's shape, signed out included.
 
+  // Offline, or when the live read fails the way a queued write would, the
+  // cached list answers (#570), as `ShikiUserRateResult` with `stale: true`.
   ipcMain.handle(
     CHANNELS.SHIKIMORI_GET_RATE,
     async (_event, malId: number): Promise<ShikiUserRateResult | null> => {
-      const userAtStart = currentUserId()
-      if (offlineService?.isOffline()) {
-        if (userAtStart === undefined) throw new Error('Not logged in to Shikimori')
-        return rateFromCache(malId, new OfflineError())
-      }
-      try {
-        const accessToken = await shikimori.ensureFreshToken(store)
-        const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-        if (!user) throw new Error('Not logged in to Shikimori')
-        return await shikimori.getUserRate(accessToken, user.id, malId)
-      } catch (err) {
-        // After an account switch the cache is the new account's list.
-        if (!isQueueableRateError(err) || currentUserId() !== userAtStart) throw err
-        return rateFromCache(malId, err)
-      }
+      const read = await trackerRates.readRate('shikimori', malId)
+      if (!read) return null
+      if (read.stale) return read.row ? rateFromCacheEntry(read.row as StoredRateEntry) : null
+      return (read.entry?.native as shikimori.ShikiUserRate | undefined) ?? null
     }
   )
 
@@ -687,11 +671,7 @@ export function register({
       rewatches: number
     ): Promise<shikimori.ShikiUserRate> => {
       const values = { episodes, status, score, rewatches }
-      const outcome = await trackers.applyChange(
-        malId,
-        { kind: 'set', values },
-        { target: 'shikimori', cause: 'user' }
-      )
+      const outcome = await trackerRates.updateRate(malId, values, 'shikimori')
       // An equal copy queued nothing: `values` already match the projection.
       return shikimoriRateReply(malId, outcome, () =>
         syntheticRate(malId, cachedShikimoriRate(store, malId)?.id ?? null, values)
@@ -703,16 +683,10 @@ export function register({
   // fallback are Shikimori's primary branch (`services/trackers`).
   ipcMain.handle(
     CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED,
-    async (_event, malId: number, epNum: number): Promise<shikimori.ShikiUserRate | null> =>
-      shikimoriRateReply(
-        malId,
-        await trackers.applyChange(
-          malId,
-          { kind: 'mark-watched', episode: epNum },
-          { target: 'shikimori', cause: 'user' }
-        ),
-        () => null
-      )
+    async (_event, malId: number, epNum: number): Promise<shikimori.ShikiUserRate | null> => {
+      const outcome = await trackerRates.markEpisodeWatched(malId, epNum, 'shikimori')
+      return outcome ? shikimoriRateReply(malId, outcome, () => null) : null
+    }
   )
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS_RATES, async (_event, malId: number) => {
@@ -722,19 +696,14 @@ export function register({
     return shikimori.getFriendsRatesForAnime(accessToken, user.id, malId)
   })
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_ANIME_RATES, async (_event, status?: string) => {
-    if (!status) {
-      const cached = store.get('shikimoriUserRates') as unknown[]
-      if (cached.length > 0) {
-        refreshShikimoriRatesInBackground()
-        return cached
-      }
-    }
-    const entries = await fetchAndCacheShikimoriRates(status)
-    if (!entries) return status ? [] : (store.get('shikimoriUserRates') as unknown[])
-    if (!status) void sync.prefetchShikimoriDetails()
-    return entries
-  })
+  ipcMain.handle(
+    CHANNELS.SHIKIMORI_GET_ANIME_RATES,
+    async (_event, status?: string) =>
+      (await trackerRates.getRates(
+        'shikimori',
+        (status || undefined) as shikimori.ShikiUserRateStatus | undefined
+      )) ?? []
+  )
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_ANIME_DETAILS, (_event, malId: number) => {
     const cache = store.get('shikimoriAnimeDetails') as Record<
@@ -754,28 +723,29 @@ export function register({
     void sync.prefetchShikimoriDetails()
   })
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH, () => {
-    return (store.get('shikimoriUpdateQueue') as unknown[]).length
-  })
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH, () =>
+    trackerRates.getOfflineQueueLength('shikimori')
+  )
 
+  // The store key, signed in or not: logout is what fills it (#694).
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_PARKED_QUEUES, (): ShikiParkedQueueSummary[] =>
-    Object.entries(getParkedQueues()).map(([key, bucket]) => ({
-      ownerId: key === UNKNOWN_OWNER ? null : Number(key),
-      nickname: bucket.nickname,
-      count: bucket.entries.length,
-      parkedAt: bucket.parkedAt
+    trackerRates.getParkedQueues('shikimori').map((bucket) => ({
+      ...bucket,
+      ownerId: bucket.ownerId === null ? null : Number(bucket.ownerId)
     }))
   )
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, (_event, ownerId: number | null) => {
-    const key = ownerId === null ? UNKNOWN_OWNER : String(ownerId)
-    store.set('shikimoriParkedQueues', takeParked(getParkedQueues(), key).parked)
-  })
+  ipcMain.handle(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, (_event, ownerId: number | null) =>
+    trackerRates.discardParkedQueue('shikimori', ownerId === null ? null : String(ownerId))
+  )
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_SYNC_STATUS, () => sync.getSyncStatus())
+  // Today's five fields: "Needs setup" is the `tracker:*` status's only.
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_SYNC_STATUS, () =>
+    legacyStatus(trackerRates.getSyncStatus('shikimori'))
+  )
 
   ipcMain.handle(CHANNELS.SHIKIMORI_TRIGGER_SYNC, () => {
-    void sync.syncShikimoriQueue()
+    trackerRates.triggerSync('shikimori')
   })
 
   // Offline (#568) both lists come from the sync service's snapshot, whatever
@@ -1033,4 +1003,9 @@ export function register({
   // The rate funnels, for a caller that writes with `stamp: false` and supplies
   // its own clocks (the Shared Library merge, #584).
   return { sendRate: primary.sendRate, queueRate: primary.queueRate }
+}
+
+function legacyStatus(status: TrackerStatus): ShikiSyncStatus {
+  const { state, queueLength, lastSyncAt, lastSyncError, sessionExpired } = status
+  return { state, queueLength, lastSyncAt, lastSyncError, sessionExpired }
 }

@@ -164,6 +164,18 @@ export const CHANNELS = {
   SHIKIMORI_TRIGGER_SYNC: 'shikimori:trigger-sync',
   SHIKIMORI_UPDATE_RATE: 'shikimori:update-rate',
 
+  // Trackers (#694): rates, sync status and queues, per `trackerId`. The nine
+  // `SHIKIMORI_*` counterparts above are aliases of these until v7.0 (#717).
+  TRACKER_DISCARD_PARKED_QUEUE: 'tracker:discard-parked-queue',
+  TRACKER_GET_OFFLINE_QUEUE_LENGTH: 'tracker:get-offline-queue-length',
+  TRACKER_GET_PARKED_QUEUES: 'tracker:get-parked-queues',
+  TRACKER_GET_RATE: 'tracker:get-rate',
+  TRACKER_GET_RATES: 'tracker:get-rates',
+  TRACKER_GET_SYNC_STATUS: 'tracker:get-sync-status',
+  TRACKER_MARK_EPISODE_WATCHED: 'tracker:mark-episode-watched',
+  TRACKER_TRIGGER_SYNC: 'tracker:trigger-sync',
+  TRACKER_UPDATE_RATE: 'tracker:update-rate',
+
   // Skip detection
   SKIP_DETECTOR_ANALYZE_SHOW: 'skip-detector:analyze-show',
   SKIP_DETECTOR_BACKFILL_ALL: 'skip-detector:backfill-all',
@@ -309,6 +321,13 @@ export const EVENT_CHANNELS = {
   SHIKIMORI_RATES_REFRESHED: 'shikimori:rates-refreshed',
   SHIKIMORI_RECOMMENDATIONS_REFRESHED: 'shikimori:recommendations-refreshed',
   SHIKIMORI_SYNC_STATUS: 'shikimori:sync-status',
+
+  // Trackers (#694): each Shikimori rate, queue and status broadcast above is
+  // double-emitted as one of these with `trackerId: 'shikimori'` (#717 ends it).
+  TRACKER_OFFLINE_QUEUE_CHANGED: 'tracker:offline-queue-changed',
+  TRACKER_RATE_UPDATED: 'tracker:rate-updated',
+  TRACKER_RATES_REFRESHED: 'tracker:rates-refreshed',
+  TRACKER_SYNC_STATUS: 'tracker:sync-status',
 
   // Skip detection
   SKIP_DETECTOR_ANALYZE_PROGRESS: 'skip-detector:analyze-progress',

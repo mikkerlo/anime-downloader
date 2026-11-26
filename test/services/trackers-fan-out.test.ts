@@ -24,7 +24,8 @@ import {
 import { createTrackerFanOut, type PrimaryWriter } from '../../src/main/services/trackers/fan-out'
 import { createShikimoriPrimary } from '../../src/main/services/trackers/shikimori-primary'
 import { ANILIST_KEYS, MYANIMELIST_KEYS } from '../../src/main/trackers/keys'
-import type { TrackerRateCacheCodec } from '../../src/main/trackers/types'
+import { testRateCodec } from '../helpers/test-rate-codec'
+import { createTrackerRates } from '../../src/main/services/trackers/rates'
 import { NO_RATE_BEFORE, type RateValues } from '../../src/main/lib/shikimori-rate'
 import type { QueuedTrackerUpdate } from '../../src/main/lib/shikimori-queue'
 
@@ -38,32 +39,8 @@ const rv = (
   rewatches = 0
 ): RateValues => ({ episodes, status, score, rewatches })
 
-interface TestRow {
-  malId: number
-  remoteId: number | null
-  values: RateValues
-  updated_at: string
-}
-
 /** The rate cache the AniList and MAL personalities use here; T6/T7 bring the real ones. */
-const testCodec: TrackerRateCacheCodec<unknown, TestRow> = {
-  fromEntries: (entries) =>
-    entries.map((e) => ({
-      malId: e.malId,
-      remoteId: e.remoteId,
-      values: { ...e.values },
-      updated_at: 'listed'
-    })),
-  malIdOf: (row) => row.malId,
-  indexOf: (rows, malId) => rows.findIndex((r) => r.malId === malId),
-  read: (row) => ({ remoteId: row.remoteId, values: { ...row.values } }),
-  patch: (row, values, remoteId) => ({
-    ...row,
-    ...(remoteId !== undefined ? { remoteId } : {}),
-    values: { ...values },
-    updated_at: new Date().toISOString()
-  })
-}
+const testCodec = testRateCodec()
 
 const shikiRow = (malId: number, v: RateValues) => ({
   rate: { id: malId * 10, target_id: malId, ...v, updated_at: iso(T0) },
@@ -932,6 +909,7 @@ describe('the Shikimori handlers own their reply shape (#692 review)', () => {
       store: r.store,
       shikimoriSyncService: r.shiki,
       trackers: r.fan,
+      trackerRates: createTrackerRates({ store: r.store as never, trackers: r.fan }),
       lookupByMalIds: vi.fn(async () => ({})),
       maybeBroadcastCleanupPrompt: r.cleanup,
       runAutoDownloadTick: vi.fn(async () => ({})),

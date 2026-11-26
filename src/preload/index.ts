@@ -459,6 +459,53 @@ const api = {
     EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
   ),
 
+  // Trackers (#694): flat names, so `check:subscription-contract` sees every `on*`.
+  trackerGetRate: (trackerId: TrackerId, malId: number) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_GET_RATE,
+      trackerId,
+      malId
+    ) as Promise<TrackerRateResult | null>,
+  trackerGetRates: (trackerId: TrackerId, status?: ShikiUserRateStatus) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_GET_RATES,
+      trackerId,
+      status
+    ) as Promise<TrackerRatesSnapshot>,
+  trackerUpdateRate: (malId: number, change: TrackerRateValues, opts?: TrackerUpdateRateOptions) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_UPDATE_RATE,
+      malId,
+      change,
+      opts
+    ) as Promise<TrackerRateValues>,
+  trackerMarkEpisodeWatched: (malId: number, epNum: number) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_MARK_EPISODE_WATCHED,
+      malId,
+      epNum
+    ) as Promise<TrackerRateValues | null>,
+  trackerGetSyncStatus: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_SYNC_STATUS, trackerId) as Promise<TrackerSyncStatus>,
+  trackerGetOfflineQueueLength: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_OFFLINE_QUEUE_LENGTH, trackerId) as Promise<number>,
+  trackerTriggerSync: (trackerId?: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_TRIGGER_SYNC, trackerId) as Promise<void>,
+  trackerGetParkedQueues: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_PARKED_QUEUES, trackerId) as Promise<
+      TrackerParkedQueueSummary[]
+    >,
+  trackerDiscardParkedQueue: (trackerId: TrackerId, ownerId: string | null) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_DISCARD_PARKED_QUEUE, trackerId, ownerId) as Promise<void>,
+  onTrackerRateUpdated: subscribe<TrackerRateUpdatedEvent>(EVENT_CHANNELS.TRACKER_RATE_UPDATED),
+  onTrackerRatesRefreshed: subscribe<TrackerRatesRefreshedEvent>(
+    EVENT_CHANNELS.TRACKER_RATES_REFRESHED
+  ),
+  onTrackerSyncStatus: subscribe<TrackerSyncStatusEvent>(EVENT_CHANNELS.TRACKER_SYNC_STATUS),
+  onTrackerOfflineQueueChanged: subscribe<TrackerOfflineQueueChangedEvent>(
+    EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
+  ),
+
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: {
     host: string

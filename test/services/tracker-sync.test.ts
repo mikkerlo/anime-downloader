@@ -30,12 +30,9 @@ import {
   shikimoriRateCache
 } from '../../src/main/trackers/shikimori.provider'
 import { TRACKER_ERROR_POLICY, TrackerApiError } from '../../src/main/trackers/errors'
-import {
-  TRACKER_LABELS,
-  type TrackerRateCacheCodec,
-  type TrackerSyncProvider
-} from '../../src/main/trackers/types'
+import { TRACKER_LABELS, type TrackerSyncProvider } from '../../src/main/trackers/types'
 import type { RateValues } from '../../src/main/lib/shikimori-rate'
+import { testRateCodec, type TestRow } from '../helpers/test-rate-codec'
 
 const T = Date.UTC(2026, 10, 1)
 const MIN = 60_000
@@ -47,31 +44,7 @@ const KEYS: Record<TrackerId, TrackerStoreKeys> = {
 }
 
 /** The rate cache the AniList and MAL personalities use here; T6/T7 bring the real ones. */
-interface TestRow {
-  malId: number
-  remoteId: number | null
-  values: RateValues
-  updated_at: string
-}
-
-const testCodec: TrackerRateCacheCodec<unknown, TestRow> = {
-  fromEntries: (entries) =>
-    entries.map((e) => ({
-      malId: e.malId,
-      remoteId: e.remoteId,
-      values: { ...e.values },
-      updated_at: 'listed'
-    })),
-  malIdOf: (row) => row.malId,
-  indexOf: (rows, malId) => rows.findIndex((r) => r.malId === malId),
-  read: (row) => ({ remoteId: row.remoteId, values: { ...row.values } }),
-  patch: (row, values, remoteId) => ({
-    ...row,
-    ...(remoteId !== undefined ? { remoteId } : {}),
-    values: { ...values },
-    updated_at: new Date().toISOString()
-  })
-}
+const testCodec = testRateCodec()
 
 const vals = (episodes: number, score = 7): RateValues => ({
   episodes,

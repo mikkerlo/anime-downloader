@@ -29,6 +29,8 @@ import {
   vals,
   type Pc
 } from '../helpers/sync-runner'
+import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
+import { expectQueueTwin, expectRateTwin, onlyTwin } from '../helpers/tracker-events'
 
 const ID = String(ANIME)
 const titleDoc = (title: SyncTitleState, extra: Partial<SyncDoc> = {}) =>
@@ -184,10 +186,13 @@ async function ownerSetup(o: {
   server: RateV
   shikiBase?: RateV
   cache?: RateV
+  /** `makePc`'s `index.ts` wiring through the Shikimori bridge (#694). */
+  bridge?: boolean
 }) {
   server.set(MAL, o.server, T0)
   const { root, libraryId } = await makeLibrary({ doc: titleDoc({ rate: r(o.drive, T0 + 500) }) })
   const pc = makePc({
+    bridge: o.bridge,
     store: { shikimoriUserRates: [cacheEntry(MAL, ANIME, o.cache ?? o.server, T0)] }
   })
   await pc.attach(root)
@@ -1775,5 +1780,56 @@ describe('a re-watch on a claim PC reaches the drive (#645)', () => {
     expect(run).toMatchObject({ kind: 'run', raises: [] })
     expect(queue(a)).toEqual([])
     expect(await pending(a)).toEqual({})
+  })
+})
+
+// The double-emit table (#694), two of the runner's rows. With `index.ts`'s
+// wiring (`makePc({ bridge })`) each emit goes through the Shikimori bridge, so
+// its `tracker:*` twin follows it, exactly once.
+describe('the runner double-emits through the Shikimori bridge (#694)', () => {
+  it("patchCache: the library leg's display patch, then its tracker:rate-updated twin", async () => {
+    const { pc } = await ownerSetup({
+      base: { score: 6 },
+      drive: { score: 8 },
+      server: { score: 6 },
+      shikiBase: { score: 6 },
+      bridge: true
+    })
+    pc.offline.value = true
+    pc.broadcast.mockClear()
+
+    await pc.runner.runAll('manual')
+
+    const patch = onlyTwin(pc.broadcast.mock.calls, EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED)
+    expect(patch.legacy).toEqual(
+      (pc.store.get('shikimoriUserRates') as any[]).find((e) => e.rate.target_id === MAL)
+    )
+    expect((patch.legacy as any).rate.score).toBe(8)
+    expectRateTwin(patch)
+  })
+
+  it("the merge leg: its queue write's offline-queue-changed, then the twin with the overlay", async () => {
+    const { pc } = await ownerSetup({
+      base: { score: 6 },
+      drive: { score: 8 },
+      server: { score: 6 },
+      shikiBase: { score: 6 },
+      bridge: true
+    })
+    pc.offline.value = true
+    await pc.runner.runAll('manual')
+    pc.offline.value = false
+    vi.spyOn(pc.sync, 'syncShikimoriQueue').mockResolvedValue(undefined)
+    pc.broadcast.mockClear()
+
+    await pc.runner.runAll('manual')
+
+    expect(queue(pc)).toHaveLength(1)
+    const changed = onlyTwin(
+      pc.broadcast.mock.calls,
+      EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED
+    )
+    expect(changed.legacy).toEqual({ length: 1 })
+    expectQueueTwin(changed, { [MAL]: vals({ score: 8 }) })
   })
 })

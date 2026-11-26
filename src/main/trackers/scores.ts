@@ -78,7 +78,7 @@ export function anilistQuantize(raw: number, format: AnilistScoreFormat): number
  * rounding never counts as a change or as a reconcile diff. True when the raw
  * score reads as that app score (a `POINT_100` 85 read as 9 and left at 9), or
  * when writing the app score would land on the same value in the user's
- * format.
+ * format. Never for a clear to 0 or a set from 0.
  */
 export function anilistScoreUnchanged(
   appScore: number,
@@ -86,6 +86,9 @@ export function anilistScoreUnchanged(
   format: AnilistScoreFormat
 ): boolean {
   if (appScoreFromAnilistRaw(storedRaw) === appScore) return true
+  // 0 is "no score" and a positive raw is a score: a clear, or a set from no
+  // score, is always a change, however the format rounds.
+  if (appScore === 0 || storedRaw <= 0) return false
   return (
     anilistQuantize(anilistRawFromAppScore(appScore), format) === anilistQuantize(storedRaw, format)
   )

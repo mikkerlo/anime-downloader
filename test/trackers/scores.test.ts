@@ -53,6 +53,22 @@ describe('AniList scores', () => {
     expect(anilistRawToStore(0, 3, 'POINT_10_DECIMAL')).toBe(0)
   })
 
+  it('clearing a stale low raw under a coarse format writes 0 (POINT_10 raw 3, POINT_5 raw 1–9)', () => {
+    expect(anilistScoreUnchanged(0, 3, 'POINT_10')).toBe(false)
+    expect(anilistRawToStore(0, 3, 'POINT_10')).toBe(0)
+    for (let raw = 1; raw <= 9; raw++) {
+      expect(anilistScoreUnchanged(0, raw, 'POINT_5'), `raw ${raw}`).toBe(false)
+      expect(anilistRawToStore(0, raw, 'POINT_5'), `raw ${raw}`).toBe(0)
+    }
+  })
+
+  it.each(ANILIST_SCORE_FORMATS)('setting a score from 0 is always a change (%s)', (format) => {
+    for (let s = 1; s <= 10; s++) {
+      expect(anilistScoreUnchanged(s, 0, format), `app ${s}`).toBe(false)
+      expect(anilistRawToStore(s, 0, format), `app ${s}`).toBe(s * 10)
+    }
+  })
+
   describe.each(ANILIST_SCORE_FORMATS)('%s', (format) => {
     it.each(APP_STATUSES)(
       'the round trip is the identity under the unchanged predicate (%s)',

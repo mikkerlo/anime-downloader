@@ -202,5 +202,7 @@ The drain's drift ranking, `STATUS_ORDER`, lives beside `RateValues` in
   format)` is true when the stored raw still reads as that app score (a
   `POINT_100` 85 read as 9 and left at 9), or when writing the app score would
   land on the same value in the user's format (a `POINT_5` user at 4 stars and
-  an app 7). Then the stored raw is kept (`anilistRawToStore`), so it is never
-  part of `changedFields` and never a reconcile diff.
+  an app 7). A clear to 0, or a set from 0, is always a change, even where the
+  format would round a stale low raw to 0. Otherwise the stored raw is kept
+  (`anilistRawToStore`), so it is never part of `changedFields` and never a
+  reconcile diff.

@@ -11,6 +11,12 @@
 // switch, the credential commit, the user, the expired flag and the session
 // generation bump, then the restore. That way a drain tick can never send one
 // account's queue with another's token.
+//
+// #696 (T3c) keeps `trackerPrimary` non-null whenever 2 or more trackers are
+// connected: a second connect writes the existing primary with the commit, and
+// a logout of the primary writes its successor in the step that clears the
+// user. Every accounts-state change reaches the renderer through
+// `notifyAccountsChanged()`.
 
 import {
   mergeQueues,
@@ -26,6 +32,7 @@ import type { StorageService } from '../store/types'
 import { getClientConfig } from './client-config'
 import { VAULT_KEYS, type CredentialVault, type VaultKey } from './credential-vault'
 import { TRACKER_KEYS } from './keys'
+import { resolvePrimary, storedPrimary as readStoredPrimary } from './primary'
 
 /** `shikimori`, `anilist`, `mal`: the primary fallback's and the accounts list's order. */
 const ORDER = TRACKER_IDS
@@ -98,6 +105,10 @@ export interface TrackerLifecycleDeps {
   /** Drops any attempt held for the tracker (`auth-session.ts`'s `cancel`). */
   cancelAttempt?: (trackerId: TrackerId) => void
   now?: () => number
+  /** With `accountsChangedChannel`, what `notifyAccountsChanged()` emits on; without both it emits nothing. */
+  broadcast?: (channel: string, ...args: unknown[]) => void
+  /** `EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED`, passed in by `index.ts` (#696). */
+  accountsChangedChannel?: string
 }
 
 export interface TrackerLifecycle {
@@ -115,8 +126,12 @@ export interface TrackerLifecycle {
     load: () => Promise<{ credentials: unknown; user: TrackerUser }>,
     opts?: { attempt?: LoginAttempt }
   ): Promise<LoginOutcome>
-  /** Signs out. Synchronous: a vault credential is cleared with a null commit, never decrypted. */
-  logout(trackerId: TrackerId, opts?: TrackerLogoutRequest): void
+  /**
+   * Signs out. Synchronous: a vault credential is cleared with a null commit,
+   * never decrypted. Logging out the primary writes its successor in the step
+   * that clears the user, and asks for a choice when 2 or more remain (#696).
+   */
+  logout(trackerId: TrackerId, opts?: TrackerLogoutRequest): TrackerLogoutResult
   /**
    * The tracker's session generation, in memory: bumped by every committed
    * login and every logout that had something to clear. T6's refresh
@@ -124,8 +139,19 @@ export interface TrackerLifecycle {
    */
   generation(trackerId: TrackerId): number
   account(trackerId: TrackerId): TrackerAccount
-  /** The one builder behind `tracker:list-accounts` (and T3c's broadcast). */
+  /** The one builder behind `tracker:list-accounts` and `tracker:accounts-changed`. */
   accountsState(): TrackerAccountsState
+  /**
+   * The stored primary if connected, else the first connected tracker in
+   * `shikimori`, `anilist`, `mal` order, else null (#696 § 0).
+   */
+  primary(): TrackerId | null
+  /**
+   * Broadcasts `tracker:accounts-changed` with `accountsState()`: the one seam
+   * every emit site calls (#696 § 6), this module's own and the session-expiry,
+   * vault and "Needs setup" hooks `index.ts` and the providers wire to it.
+   */
+  notifyAccountsChanged(): void
   setSteps(trackerId: TrackerId, steps: TrackerSessionSteps): void
 }
 
@@ -203,13 +229,17 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     // ---- One synchronous block from here: no await below. ----
     // The head checks. The stale-attempt check refuses an overtaken sign-in;
     // T5b's second-tracker check (#701) goes beside it, so a refusal also
-    // parks nothing, and T3c's primary write (#696) goes with the commit.
+    // parks nothing, and #696's primary write goes with the commit.
     if (attempt && (!attempt.isCurrent() || generation(id) !== startGeneration)) {
       return { status: 'cancelled' }
     }
 
     const steps = stepsOf(id)
     const prev = userOf(id)
+    // #696 § 5: a tracker joining one already connected, with no primary
+    // stored, keeps that one primary; the fallback order would otherwise hand
+    // the role to the newcomer. Read before this tracker's user is written.
+    const keepPrimary = prev === null && storedPrimary() === null ? primary() : null
     const live = liveQueue(id)
     const switched = prev !== null && prev.id !== user.id
     if (switched || (!prev && live.length > 0)) {
@@ -223,6 +253,7 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
 
     if (credKey) vault.commit(credKey, blob)
     else store.set(keys.credentials, credentials)
+    if (keepPrimary) store.set('trackerPrimary', keepPrimary)
     store.set(keys.user, user)
     // A fresh session ends the expired state, and the queue the expiry
     // retained can drain now (#244).
@@ -242,16 +273,31 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     steps.drain()
     steps.broadcastStatus()
     steps.afterLogin?.()
+    notifyAccountsChanged()
     return { status: 'connected', user }
   }
 
-  function logout(id: TrackerId, opts: TrackerLogoutRequest = {}): void {
+  /**
+   * #696 § 4: the logged-out primary's successor, written right after its
+   * user is cleared, in the same synchronous step: the first remaining
+   * connected tracker, or null when none is left (written only if it isn't
+   * already, so a Shikimori-only logout writes nothing).
+   */
+  function succeedPrimary(): TrackerLogoutResult {
+    const remaining = ORDER.filter((t) => userOf(t) !== null)
+    const next = remaining[0] ?? null
+    if (storedPrimary() !== next) store.set('trackerPrimary', next)
+    return remaining.length >= 2 ? { needsPrimaryChoice: { candidates: remaining } } : {}
+  }
+
+  function logout(id: TrackerId, opts: TrackerLogoutRequest = {}): TrackerLogoutResult {
     const keys = TRACKER_KEYS[id]
     deps.cancelAttempt?.(id)
     const user = userOf(id)
     const connected = user !== null || store.get(keys.credentials) != null
     // Never connected: nothing to clear, no vault, no generation bump.
-    if (!connected && !opts.clearWhenSignedOut) return
+    if (!connected && !opts.clearWhenSignedOut) return {}
+    const wasPrimary = user !== null && primary() === id
 
     if (user && opts.pending !== 'discard') {
       store.set(keys.parkedQueues, parkEntries(parked(id), ownerKey(user), liveQueue(id), now()))
@@ -260,6 +306,7 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     if (credKey) vault.commit(credKey, null)
     else store.set(keys.credentials, null)
     store.set(keys.user, null)
+    const result = wasPrimary ? succeedPrimary() : {}
     store.set(keys.updateQueue, [])
     resetUserScopedState(id)
     // Or disconnecting while expired would leave a sticky flag with no user.
@@ -269,6 +316,8 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     steps.stopTimer()
     steps.broadcastQueue(0)
     steps.broadcastStatus()
+    notifyAccountsChanged()
+    return result
   }
 
   function account(id: TrackerId): TrackerAccount {
@@ -290,12 +339,9 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     }
   }
 
-  // T3c's §0 rule: the stored primary if connected, else the first connected.
-  function primary(): TrackerId | null {
-    const stored = store.get('trackerPrimary') as TrackerId | null | undefined
-    if (stored && ORDER.includes(stored) && userOf(stored)) return stored
-    return ORDER.find((id) => userOf(id) !== null) ?? null
-  }
+  const storedPrimary = (): TrackerId | null => readStoredPrimary(store)
+  // #696's § 0 rule, shared with the fan-out through `index.ts`.
+  const primary = (): TrackerId | null => resolvePrimary(store)
 
   function accountsState(): TrackerAccountsState {
     return {
@@ -308,12 +354,21 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     }
   }
 
-  return {
+  function notifyAccountsChanged(): void {
+    if (!deps.broadcast || !deps.accountsChangedChannel) return
+    // Through the returned object, so a field added over the builder reaches it.
+    deps.broadcast(deps.accountsChangedChannel, lifecycle.accountsState())
+  }
+
+  const lifecycle: TrackerLifecycle = {
     completeLogin,
     logout,
     generation,
     account,
     accountsState,
+    primary,
+    notifyAccountsChanged,
     setSteps: (id, steps) => void registered.set(id, steps)
   }
+  return lifecycle
 }

@@ -183,6 +183,9 @@ export const CHANNELS = {
   TRACKER_LOGOUT: 'tracker:logout',
   TRACKER_MARK_EPISODE_WATCHED: 'tracker:mark-episode-watched',
   TRACKER_SET_CLIENT_CONFIG: 'tracker:set-client-config',
+  TRACKER_SET_FEATURE_SOURCE: 'tracker:set-feature-source',
+  TRACKER_SET_MIRROR: 'tracker:set-mirror',
+  TRACKER_SET_PRIMARY: 'tracker:set-primary',
   TRACKER_TRIGGER_SYNC: 'tracker:trigger-sync',
   TRACKER_UPDATE_RATE: 'tracker:update-rate',
 
@@ -334,6 +337,8 @@ export const EVENT_CHANNELS = {
 
   // Trackers (#694): each Shikimori rate, queue and status broadcast above is
   // double-emitted as one of these with `trackerId: 'shikimori'` (#717 ends it).
+  // `TRACKER_ACCOUNTS_CHANGED` is the accounts state (#696).
+  TRACKER_ACCOUNTS_CHANGED: 'tracker:accounts-changed',
   TRACKER_OFFLINE_QUEUE_CHANGED: 'tracker:offline-queue-changed',
   TRACKER_RATE_UPDATED: 'tracker:rate-updated',
   TRACKER_RATES_REFRESHED: 'tracker:rates-refreshed',

@@ -1,5 +1,6 @@
-// The `tracker:*` account, auth and logout channels (#695) and the rate,
-// sync-status and queue channels (#694, epic #688). Each handler validates its
+// The `tracker:*` account, auth and logout channels (#695), the primary,
+// mirror and feature-source setters (#696), and the rate, sync-status and
+// queue channels (#694, epic #688). Each handler validates its
 // arguments, calls the shared function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
@@ -11,6 +12,7 @@ import { CHANNELS } from '@shared/ipc/channels'
 import type { RateValues } from '../lib/shikimori-rate'
 import { STATUS_ORDER } from '../lib/shikimori-rate'
 import { isTrackerId } from '../services/trackers/rates'
+import { isTrackerFeature } from '../services/trackers/choices'
 import type { ApplyOutcome } from '../services/trackers/fan-out'
 import { getClientConfig, setClientConfig } from '../trackers/client-config'
 import { TRACKER_LABELS } from '../trackers/types'
@@ -87,12 +89,26 @@ function logoutArg(value: unknown): TrackerLogoutOptions {
   return { pending }
 }
 
+function featureArg(value: unknown): TrackerFeature {
+  if (!isTrackerFeature(value)) throw new Error(`Unknown feature: ${String(value)}`)
+  return value
+}
+
+function mirrorOptionsArg(value: unknown): TrackerSetMirrorOptions {
+  if (value === undefined || value === null) return {}
+  const confirm = (value as { confirm?: unknown }).confirm
+  if (confirm === undefined) return {}
+  if (typeof confirm !== 'boolean') throw new Error(`Invalid confirm: ${String(confirm)}`)
+  return { confirm }
+}
+
 export function register({
   store,
   credentialVault,
   trackerRates: rates,
   trackerLifecycle: lifecycle,
-  trackerAuth: auth
+  trackerAuth: auth,
+  trackerChoices: choices
 }: AppDeps): void {
   // Accounts, auth and logout (#695). `docs/trackers.md` § Accounts and sign-in.
   ipcMain.handle(
@@ -118,9 +134,37 @@ export function register({
     auth.cancel(trackerIdArg(trackerId))
   })
 
-  ipcMain.handle(CHANNELS.TRACKER_LOGOUT, (_event, trackerId: unknown, opts?: unknown): void => {
-    lifecycle.logout(trackerIdArg(trackerId), logoutArg(opts))
-  })
+  ipcMain.handle(
+    CHANNELS.TRACKER_LOGOUT,
+    (_event, trackerId: unknown, opts?: unknown): TrackerLogoutResult =>
+      lifecycle.logout(trackerIdArg(trackerId), logoutArg(opts))
+  )
+
+  // The primary, the mirror toggles and the feature sources (#696).
+  // `docs/trackers.md` § Primary, mirrors and feature sources.
+  ipcMain.handle(
+    CHANNELS.TRACKER_SET_PRIMARY,
+    (_event, trackerId: unknown): TrackerAccountsState =>
+      choices.setPrimary(trackerIdArg(trackerId))
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_SET_MIRROR,
+    (_event, trackerId: unknown, enabled: unknown, opts?: unknown) => {
+      const id = trackerIdArg(trackerId)
+      if (typeof enabled !== 'boolean') throw new Error(`Invalid enabled: ${String(enabled)}`)
+      return choices.setMirror(id, enabled, mirrorOptionsArg(opts))
+    }
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_SET_FEATURE_SOURCE,
+    (_event, feature: unknown, trackerId: unknown): TrackerAccountsState =>
+      choices.setFeatureSource(
+        featureArg(feature),
+        trackerId === null ? null : trackerIdArg(trackerId)
+      )
+  )
 
   ipcMain.handle(
     CHANNELS.TRACKER_GET_CLIENT_CONFIG,
@@ -132,12 +176,15 @@ export function register({
 
   // The only writer of `myanimelistClientConfig` and `myanimelistClientSecret`:
   // the settings guard refuses both (#690). It doesn't clear the instance's
-  // "Needs setup"; T6 (#702) wires that.
+  // "Needs setup"; T6 (#702) wires that. A saved client ID can end MAL's
+  // missing-client-ID "Needs setup", which the accounts state reports (#696).
   ipcMain.handle(
     CHANNELS.TRACKER_SET_CLIENT_CONFIG,
     async (_event, trackerId: unknown, input: unknown): Promise<TrackerClientConfig> => {
-      malOnly(trackerId)
+      const id = malOnly(trackerId)
+      const needsSetup = lifecycle.account(id).needsSetup
       await setClientConfig(store, credentialVault, clientConfigArg(input))
+      if (lifecycle.account(id).needsSetup !== needsSetup) lifecycle.notifyAccountsChanged()
       return getClientConfig(store)
     }
   )

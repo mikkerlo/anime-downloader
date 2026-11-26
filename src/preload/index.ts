@@ -519,7 +519,7 @@ const api = {
   trackerCancelAuth: (trackerId: TrackerId) =>
     ipcRenderer.invoke(CHANNELS.TRACKER_CANCEL_AUTH, trackerId) as Promise<void>,
   trackerLogout: (trackerId: TrackerId, opts?: TrackerLogoutOptions) =>
-    ipcRenderer.invoke(CHANNELS.TRACKER_LOGOUT, trackerId, opts) as Promise<void>,
+    ipcRenderer.invoke(CHANNELS.TRACKER_LOGOUT, trackerId, opts) as Promise<TrackerLogoutResult>,
   trackerGetClientConfig: (trackerId: TrackerId) =>
     ipcRenderer.invoke(
       CHANNELS.TRACKER_GET_CLIENT_CONFIG,
@@ -531,6 +531,25 @@ const api = {
       trackerId,
       config
     ) as Promise<TrackerClientConfig>,
+  // The primary, mirrors and feature sources (#696).
+  trackerSetPrimary: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_SET_PRIMARY, trackerId) as Promise<TrackerAccountsState>,
+  trackerSetMirror: (trackerId: TrackerId, enabled: boolean, opts?: TrackerSetMirrorOptions) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_SET_MIRROR,
+      trackerId,
+      enabled,
+      opts
+    ) as Promise<TrackerSetMirrorResult>,
+  trackerSetFeatureSource: (feature: TrackerFeature, trackerId: TrackerId | null) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_SET_FEATURE_SOURCE,
+      feature,
+      trackerId
+    ) as Promise<TrackerAccountsState>,
+  onTrackerAccountsChanged: subscribe<TrackerAccountsState>(
+    EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED
+  ),
 
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: {

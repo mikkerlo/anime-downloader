@@ -366,12 +366,24 @@ interface Api {
   trackerBeginAuth: (trackerId: TrackerId) => Promise<TrackerAuthResult>
   trackerCompleteAuth: (trackerId: TrackerId, urlOrToken: string) => Promise<TrackerAuthResult>
   trackerCancelAuth: (trackerId: TrackerId) => Promise<void>
-  trackerLogout: (trackerId: TrackerId, opts?: TrackerLogoutOptions) => Promise<void>
+  trackerLogout: (trackerId: TrackerId, opts?: TrackerLogoutOptions) => Promise<TrackerLogoutResult>
   trackerGetClientConfig: (trackerId: TrackerId) => Promise<TrackerClientConfig>
   trackerSetClientConfig: (
     trackerId: TrackerId,
     config: TrackerClientConfigInput
   ) => Promise<TrackerClientConfig>
+  // The primary, mirrors and feature sources (#696)
+  trackerSetPrimary: (trackerId: TrackerId) => Promise<TrackerAccountsState>
+  trackerSetMirror: (
+    trackerId: TrackerId,
+    enabled: boolean,
+    opts?: TrackerSetMirrorOptions
+  ) => Promise<TrackerSetMirrorResult>
+  trackerSetFeatureSource: (
+    feature: TrackerFeature,
+    trackerId: TrackerId | null
+  ) => Promise<TrackerAccountsState>
+  onTrackerAccountsChanged: (callback: (data: TrackerAccountsState) => void) => Unsubscribe
 
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>

@@ -8,9 +8,9 @@ import type { AppDeps } from './index'
  * credential keys and `myanimelistClientSecret` hold the credential vault's
  * blob, so a renderer `autoSave` would store a secret in plain text over it;
  * `myanimelistClientConfig` is written with its secret by one call; and the
- * three choices have side effects their setters run. The channels named for
- * them arrive in #695 (T3b) and #696 (T3c); until then the names are plain
- * strings, and T3c switches them to the `CHANNELS` constants.
+ * three choices have side effects their setters run. `OWNING_CHANNEL` names
+ * their channels by the `CHANNELS` constants (#695, #696), so a rename can't
+ * leave the refusal message stale.
  */
 const TRACKER_SET_DENIED = [
   'anilistCredentials',
@@ -34,7 +34,7 @@ const GET_DENIED_KEYS = [
   'myanimelistClientSecret'
 ] as const
 
-const TRACKER_AUTH_CHANNELS = 'tracker:begin-auth and tracker:complete-auth, or tracker:logout'
+const TRACKER_AUTH_CHANNELS = `${CHANNELS.TRACKER_BEGIN_AUTH} and ${CHANNELS.TRACKER_COMPLETE_AUTH}, or ${CHANNELS.TRACKER_LOGOUT}`
 
 /**
  * The keys `set-setting` refuses, derived from `ROOT_KEYS` rather than re-typed
@@ -84,11 +84,11 @@ const OWNING_CHANNEL: Readonly<Record<(typeof DENIED_KEYS)[number], string>> = {
   storageMode: 'storage:set-mode',
   anilistCredentials: TRACKER_AUTH_CHANNELS,
   myanimelistCredentials: TRACKER_AUTH_CHANNELS,
-  myanimelistClientConfig: 'tracker:set-client-config',
-  myanimelistClientSecret: 'tracker:set-client-config',
-  trackerPrimary: 'tracker:set-primary',
-  trackerMirror: 'tracker:set-mirror',
-  trackerFeatureSource: 'tracker:set-feature-source'
+  myanimelistClientConfig: CHANNELS.TRACKER_SET_CLIENT_CONFIG,
+  myanimelistClientSecret: CHANNELS.TRACKER_SET_CLIENT_CONFIG,
+  trackerPrimary: CHANNELS.TRACKER_SET_PRIMARY,
+  trackerMirror: CHANNELS.TRACKER_SET_MIRROR,
+  trackerFeatureSource: CHANNELS.TRACKER_SET_FEATURE_SOURCE
 }
 
 /**

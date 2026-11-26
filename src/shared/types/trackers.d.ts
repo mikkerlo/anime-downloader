@@ -141,15 +141,16 @@ interface TrackerAccount {
   sessionExpiresAt?: number
 }
 
-// `tracker:list-accounts`. `primary` is resolved: the stored `trackerPrimary`
-// when that tracker is connected, else the first connected one in
-// `shikimori`, `anilist`, `mal` order, else null. `mirror` and
-// `featureSources` are as stored (`trackerMirror`, `trackerFeatureSource`).
+// `tracker:list-accounts`, and the `tracker:accounts-changed` payload (#696).
+// `primary` is resolved: the stored `trackerPrimary` when that tracker is
+// connected, else the first connected one in `shikimori`, `anilist`, `mal`
+// order, else null. `mirror` and `featureSources` are as stored
+// (`trackerMirror`, `trackerFeatureSource`).
 interface TrackerAccountsState {
   accounts: TrackerAccount[]
   primary: TrackerId | null
   mirror: Partial<Record<TrackerId, boolean>>
-  featureSources: Record<string, TrackerId>
+  featureSources: Partial<Record<TrackerFeature, TrackerId>>
 }
 
 // What `tracker:begin-auth` and `tracker:complete-auth` resolve to.
@@ -180,4 +181,36 @@ interface TrackerClientConfigInput {
 interface TrackerLogoutOptions {
   // The live queue: `keep` (the default) parks it under the user, `discard` drops it.
   pending?: 'keep' | 'discard'
+}
+
+// ---- Primary, mirrors and feature sources (#696) -----------------------------
+
+// `tracker:logout`. `needsPrimaryChoice` when the primary logged out and 2 or
+// more trackers remain: `candidates` are the remaining connected ones in
+// `shikimori`, `anilist`, `mal` order, and the first is already the primary.
+interface TrackerLogoutResult {
+  needsPrimaryChoice?: { candidates: TrackerId[] }
+}
+
+// A feature whose tracker `tracker:set-feature-source` can override (#706
+// resolves it).
+type TrackerFeature = 'calendar' | 'chronology' | 'forYou' | 'details' | 'airing'
+
+interface TrackerSetMirrorOptions {
+  // Switching off: without it nothing changes and the count comes back.
+  confirm?: boolean
+}
+
+// `tracker:set-mirror`. `applied` is whether the toggle was written; a call
+// that matches the stored toggle is `{ applied: false }`. Off without
+// `confirm`: `pendingMirrorChanges`, the live `via: 'mirror'` count. Off with
+// `confirm`: `discarded`, the count actually removed, which can be smaller or
+// larger than the count shown; a discard that failed after the toggle was
+// written is `{ applied: true, discarded: 0 }`, since the toggle is off either
+// way. On: `offerReconcile: true`.
+interface TrackerSetMirrorResult {
+  applied: boolean
+  pendingMirrorChanges?: number
+  discarded?: number
+  offerReconcile?: boolean
 }

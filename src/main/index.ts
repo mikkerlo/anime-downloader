@@ -80,6 +80,7 @@ import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createTrackerFanOut } from './services/trackers/fan-out'
 import { createTrackerRates } from './services/trackers/rates'
+import { createTrackerChoices } from './services/trackers/choices'
 import { createShikimoriEventBridge } from './trackers/events'
 import { createTrackerLifecycle } from './trackers/lifecycle'
 import { createTrackerAuthSessions } from './trackers/auth-session'
@@ -125,9 +126,15 @@ const store = openStorageOrExit()
 
 // The AniList / MyAnimeList credential vault (#690). `safeStorage` is attached
 // in `bootstrap()`, after `ready`, and is first used only for a non-null
-// AniList or MAL credential, so a Shikimori-only profile never reaches it.
+// AniList or MAL credential, so a Shikimori-only profile never reaches it. A
+// blob it can't decrypt is an accounts-state change (#696); `trackerLifecycle`
+// is declared below, and nothing reads the vault while this module is set up.
 const safeStorageHolder = createSafeStorageHolder()
-const credentialVault = createCredentialVault({ store, safeStorage: safeStorageHolder })
+const credentialVault = createCredentialVault({
+  store,
+  safeStorage: safeStorageHolder,
+  onLocked: () => trackerLifecycle.notifyAccountsChanged()
+})
 
 function openStorageOrExit(): MainStorageService<typeof STORE_DEFAULTS> {
   const cwd = app.getPath('userData')
@@ -386,31 +393,50 @@ const shikimoriSyncService = createShikimoriSyncService({
 // `ensureFreshToken` is where a dead refresh token is detected, but that module
 // only knows about the store. Give it a way to push the transition out so the
 // banner appears wherever expiry is discovered — including the fire-and-forget
-// background refreshes that would otherwise swallow it (#244).
-shikimori.setOnSessionExpired(() => shikimoriSyncService.broadcastSyncStatus())
+// background refreshes that would otherwise swallow it (#244). The cleared
+// credentials are also an accounts-state change (#696).
+shikimori.setOnSessionExpired(() => {
+  shikimoriSyncService.broadcastSyncStatus()
+  trackerLifecycle.notifyAccountsChanged()
+})
 // The fan-out writer (#692): one entry per tracker whose sync service has
 // landed, Shikimori only for now. The Shikimori router sets its primary branch.
+// Its primary is the lifecycle's (#696 § 0), read at call time: the lifecycle
+// is declared below, and nothing writes a rate while this module is set up.
 const trackerFanOut = createTrackerFanOut({
   store,
-  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }]
+  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }],
+  primary: () => trackerLifecycle.primary()
 })
 // The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
 const trackerRates = createTrackerRates({ store, trackers: trackerFanOut, isOffline })
 // The account lifecycle per tracker and the sign-in attempts (#695). Each
 // refers to the other only at call time: a logout cancels the held attempt,
-// and an attempt completes through the lifecycle.
+// and an attempt completes through the lifecycle. Every accounts-state change
+// is broadcast through the lifecycle's `notifyAccountsChanged()` (#696).
 const trackerLifecycle = createTrackerLifecycle({
   store,
   vault: credentialVault,
   trackerRates,
-  cancelAttempt: (id) => trackerAuth.cancel(id)
+  cancelAttempt: (id) => trackerAuth.cancel(id),
+  broadcast: broadcastToAll,
+  accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED
 })
+// AniList (#703) and MyAnimeList (#702) add their providers here: the sign-in
+// flows, and the capabilities `tracker:set-feature-source` checks (#696).
+const trackerProviders = { shikimori: createShikimoriProvider({ store }) }
 const trackerAuth = createTrackerAuthSessions({
   lifecycle: trackerLifecycle,
-  // AniList (#703) and MyAnimeList (#702) add their providers here.
-  providers: { shikimori: createShikimoriProvider({ store }) },
+  providers: trackerProviders,
   isOffline,
   openExternal: (url) => shell.openExternal(url)
+})
+// The primary, mirror and feature-source setters (#696).
+const trackerChoices = createTrackerChoices({
+  store,
+  trackers: trackerFanOut,
+  lifecycle: trackerLifecycle,
+  providers: trackerProviders
 })
 let downloadManager: DownloadManager
 
@@ -827,6 +853,7 @@ function registerIpcHandlers(): void {
     trackerRates,
     trackerLifecycle,
     trackerAuth,
+    trackerChoices,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

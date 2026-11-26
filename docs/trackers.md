@@ -285,7 +285,10 @@ row behind) or null (mark-watched).
 
 - **The primary** is the stored `trackerPrimary` if that tracker is connected,
   else the first connected tracker in `shikimori`, `anilist`, `mal` order, else
-  null. Connected means `<provider>User` is set.
+  null. Connected means `<provider>User` is set. This is #696's read rule
+  ([Primary, mirrors and feature sources](#primary-mirrors-and-feature-sources)),
+  `resolvePrimary` in `trackers/primary.ts`; `index.ts` passes the fan-out
+  `trackerLifecycle.primary()` as its `primary` getter.
 - **A user change to the primary** runs that tracker's own primary branch,
   unchanged. Shikimori's is `services/trackers/shikimori-primary.ts`: 6.x's
   `sendRate` / `queueRate` and the two handler bodies, moved verbatim, with the
@@ -298,7 +301,10 @@ row behind) or null (mark-watched).
   is stamped. The fan-out then reads each other connected tracker's mirror
   toggle (`trackerMirror[id]`, missing means on) in the same synchronous step
   as its append, after every await, and skips a title the provider's optional
-  `hasTitle(malId)` says isn't there.
+  `hasTitle(malId)` says isn't there. That read position is a contract #696's
+  mirror-off relies on: a user change still waiting on the primary's request
+  when the mirror is switched off appends nothing once it resumes. Reading the
+  toggle before the primary's `await` would let it append after the discard.
 - **A mirror entry is built from the mirror's own projection**: its cached row
   with each live queued entry for the title laid over it in queue order, each
   entry's `intendedFields` only (a title that is only queued starts from the
@@ -360,12 +366,13 @@ row behind) or null (mark-watched).
 
 ### `discardQueue(trackerId)`
 
-Called by T3c / T5b after the user confirms switching a mirror off. Under that
-tracker's `withQueueLock`, in one synchronous step, it removes every live
-`via: 'mirror'` entry (owner-leg entries, copies, reconcile winners and parked
-buckets stay), rebases the later `via` survivors, reverts the dropped fields in
-the cache locally (no refresh), broadcasts the queue and returns the count.
-`mirrorQueueCount(trackerId)` counts those entries for T3c's warning.
+Called by `tracker:set-mirror` (#696) after the user confirms switching a
+mirror off. Under that tracker's `withQueueLock`, in one synchronous step, it
+removes every live `via: 'mirror'` entry (owner-leg entries, copies, reconcile
+winners and parked buckets stay), rebases the later `via` survivors, reverts
+the dropped fields in the cache locally (no refresh), broadcasts the queue and
+returns the count. `mirrorQueueCount(trackerId)` counts those entries for the
+setter's "N changes won't be sent".
 
 The revert and the rebase are one pure helper, `revertAndRebase(slots, opts)`
 in `lib/shikimori-queue.ts`, shared with Forget (#716 § 5 adds its cache step).
@@ -534,9 +541,10 @@ pending-verifier key exists.
   `await`, must be unchanged, or the login writes nothing, bumps nothing and
   resolves `cancelled`. That stops a sign-in the user cancelled, logged out of
   or restarted while it was exchanging, reading the user or encrypting. #701
-  (T5b)'s second-tracker check goes beside it, and #696 (T3c)'s primary write
-  goes with the commit after both. The `SHIKIMORI_EXCHANGE_CODE` alias passes
-  no attempt and stays unguarded, as in 6.x.
+  (T5b)'s second-tracker check goes beside it, and #696's second-connect
+  primary write goes with the commit after both, so a refused login writes no
+  primary. The `SHIKIMORI_EXCHANGE_CODE` alias passes no attempt and stays
+  unguarded, as in 6.x.
 - **A switch.** A different user is an account switch for every tracker: the
   live queue is parked under the previous owner (`parkEntries`), or under
   `UNKNOWN_OWNER` when there was no user, and the tracker's user-scoped state
@@ -557,7 +565,9 @@ pending-verifier key exists.
   and broadcasts the queue and the status. A tracker never connected
   (credentials and user both null) is a no-op: no vault, no bump, but its held
   attempt is still cancelled. The `SHIKIMORI_LOGOUT` alias clears even then,
-  as 6.x does.
+  as 6.x does. Logging out the primary also reassigns `trackerPrimary` in the
+  same synchronous block that clears the user (#696, below), and
+  `tracker:logout` resolves `{ needsPrimaryChoice? }`.
 - **The session generation** is per tracker and in memory: bumped by every
   committed login and every logout that had something to clear, never by a
   refused or failed login, and never by another tracker's. #702 (T6)'s refresh
@@ -573,7 +583,7 @@ pending-verifier key exists.
   (they describe the user's MAL app registration, not the session).
 
 **The accounts state.** One builder, `accountsState()`, answers
-`tracker:list-accounts` (T3c's `tracker:accounts-changed` reuses it). It reads
+`tracker:list-accounts` and builds `tracker:accounts-changed` (#696). It reads
 the store only: `hasCredentials` is whether the credential key is non-null,
 `credentialState` is `'locked'` only when the vault's `isLocked(key)` says the
 last read failed on the blob still stored (asked only when one is stored), and
@@ -585,6 +595,115 @@ vault.
 `tracker:set-client-config` are the only reader and writer of
 `myanimelistClientConfig` and `myanimelistClientSecret` for the renderer
 (`setClientConfig`, [Storage](./storage.md)). The secret is never returned.
+
+## Primary, mirrors and feature sources
+
+#696 (T3c) adds the three setters (`tracker:set-primary`, `tracker:set-mirror`,
+`tracker:set-feature-source`), the primary's reassignment on a disconnect and
+on a second connect, and `tracker:accounts-changed`; [IPC](./ipc.md) has the
+payloads. The setters live in `src/main/services/trackers/choices.ts`
+(`AppDeps.trackerChoices`); the reassignments and the broadcast live in
+`trackers/lifecycle.ts`. `set-setting` refuses `trackerPrimary`,
+`trackerMirror` and `trackerFeatureSource`, naming these channels, so a setter
+is the only writer and its side effects always run.
+
+**How the stored primary is read.** The stored `trackerPrimary` if that tracker
+is connected (`<provider>User` set); otherwise the first connected tracker in
+`TrackerId` order (`shikimori`, `anilist`, `mal`, the order #706's resolver
+uses); `null` when none is connected. With one connected tracker this is #690's
+"the only connected tracker" rule. It lives in one function, `resolvePrimary`
+(`src/main/trackers/primary.ts`): `trackerLifecycle.primary()` and the
+accounts state's `primary` answer with it, and `index.ts` hands the fan-out
+`() => trackerLifecycle.primary()`, read at call time, so the writes and the
+accounts state can't disagree. Connected never depends on a sync instance.
+
+**The invariant: 2 or more connected means `trackerPrimary` is non-null.** The
+two reassignments below maintain it, so with 2 or more trackers connected the
+fallback order never picks the primary. A Shikimori-only profile never has 2
+connected, so its login, switch and logout leave all three keys at their
+defaults and its `config.json` doesn't change.
+
+- **A disconnect of the primary** (the resolved one) writes the new
+  `trackerPrimary` in the same synchronous block that clears its
+  `<provider>User`, with no `await` between them, so a fan-out or a resolver
+  tick never sees it naming a disconnected tracker. With 2 or more left it
+  writes the first of them in `TrackerId` order at once and `tracker:logout`
+  resolves `{ needsPrimaryChoice: { candidates } }` (every remaining connected
+  tracker, in that order); #701 (T5b) asks which becomes primary, defaulting to
+  that one, and dismissing the dialog keeps it. With exactly one left that one
+  is written. With none left `trackerPrimary` goes back to `null`, written only
+  if it isn't already. A disconnect of any other tracker leaves it alone.
+- **A second connect keeps the existing primary.** When a login connects a
+  tracker that had no user while another is connected and `trackerPrimary` is
+  still `null`, the already-connected primary (the first connected in
+  `TrackerId` order) is written, so an AniList-only user who connects
+  Shikimori keeps AniList. The write sits with the credential commit, after the
+  head checks (the stale-attempt check, and #701's second-tracker check beside
+  it), so a refused or overtaken login writes no primary.
+
+**`setPrimary(trackerId)`** rejects a tracker that isn't connected and accepts
+one whose session expired or that needs setup: connected means the user is
+set, and writes to it queue until it can drain. It writes `trackerPrimary` and
+broadcasts. The current (resolved) primary again is a no-op: no write, no
+broadcast. No queue moves: each tracker keeps its own, and every reader takes
+the primary at call or tick time. The old primary becomes a mirror under its
+stored toggle.
+
+**`setMirror(trackerId, enabled, { confirm })`** rejects a tracker that isn't
+connected, and the current primary in both directions, leaving its stored
+toggle for when it stops being primary. A missing toggle reads as on. A call
+that matches the stored toggle is a no-op (`{ applied: false }`: no write, no
+broadcast and no `offerReconcile`).
+
+- **Off without `confirm`** writes nothing and returns `pendingMirrorChanges`,
+  that tracker's live `via: 'mirror'` count (`mirrorQueueCount`).
+- **Off with `confirm`** writes `trackerMirror[id] = false` first, broadcasts,
+  then runs `discardQueue(trackerId)`, which takes the tracker's
+  `withQueueLock` itself, and returns `discarded`, the count it removed. The
+  flag is written before the lock is even awaited, so a drain in flight
+  finishes its item (sent, not discarded) and no new mirror entry can be
+  appended once the flag is down: the fan-out reads the toggle in the step
+  that appends, after the primary's `await`. `discarded` can be smaller or
+  larger than the `pendingMirrorChanges` shown earlier: the drain can send some
+  while the dialog is open, and the user's changes keep adding them until the
+  confirm. #701 reports `discarded`. A discard that rejects is logged and
+  returns `{ applied: true, discarded: 0 }`: the toggle is already off and
+  broadcast, so an error would read as a revert that never happened, and the
+  entries it didn't remove stay queued.
+- **On** writes `trackerMirror[id] = true`, broadcasts and returns
+  `offerReconcile: true` for #708 (T10)'s reconcile review.
+
+**`setFeatureSource(feature, trackerId | null)`** takes a feature in
+`calendar`, `chronology`, `forYou`, `details`, `airing` and a connected,
+capable tracker, or `null` to clear the override. Capable reads the tracker
+provider's `TrackerCapabilities`: `calendar` → `getCalendar`, `chronology` →
+`getRelated`, `forYou` → `getRecommendations`, `details` → `getDetails`,
+`airing` → `getAiringInfo`. Until #706 (T11a) or #701 (T5b) moves the check
+onto the static matrix in `src/shared/trackers/feature-source.ts`, no provider
+declares a capability yet, so every override is refused in a build today. It
+writes `trackerFeatureSource` and broadcasts; the stored value again is a
+no-op. An override naming a tracker that later disconnects is kept, and #706's
+resolver skips it, so a reconnect restores it. Resolution is #706's.
+
+**`tracker:accounts-changed`** carries the same `TrackerAccountsState` as
+`tracker:list-accounts`, built by the same `accountsState()`, so a field added
+to the builder (#701's `secondTrackerEnabled`, #702 and #703's
+`newTrackerCardsEnabled`) reaches both. Every emit goes through one seam,
+`trackerLifecycle.notifyAccountsChanged()`; `index.ts` passes the lifecycle
+`broadcast` and the channel. It fires once after:
+
+- a committed login (a switch included) and every logout but the
+  never-connected no-op, an automatic primary reassignment included;
+- each applied setter;
+- a Shikimori session expiry (credentials cleared, user kept), from the
+  `setOnSessionExpired` hook beside `broadcastSyncStatus`;
+- a vault read that finds a blob it can't decrypt (`credentialState:
+  'locked'`), from the vault's `onLocked`;
+- a `tracker:set-client-config` that changes MAL's "Needs setup".
+
+Shikimori's classifier never returns `config`, so its "Needs setup" never
+changes. #702 (T6) and #703 (T7) pass `notifyAccountsChanged()` as their
+instances' `onNeedsSetupChanged` and call it from their expiry handling.
 
 ## Boot, the online edge and Prepare
 

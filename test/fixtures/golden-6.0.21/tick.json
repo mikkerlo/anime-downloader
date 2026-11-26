@@ -1,0 +1,77 @@
+{
+  "result": {
+    "ranAt": 1793548800000,
+    "reason": "manual",
+    "enqueued": 1,
+    "skipped": 0,
+    "errors": 0,
+    "details": [
+      {
+        "animeId": 202,
+        "animeName": "Beta Show",
+        "episodeInt": "3",
+        "outcome": "enqueued"
+      }
+    ]
+  },
+  "broadcasts": [
+    {
+      "channel": "shikimori:anime-details-updated",
+      "args": [
+        {
+          "malId": 9202,
+          "details": {
+            "id": 9202,
+            "russian": "",
+            "genres": [],
+            "name": "Beta Show",
+            "episodes": 12,
+            "episodes_aired": 3
+          }
+        }
+      ]
+    },
+    {
+      "channel": "auto-dl:enqueued",
+      "args": [
+        {
+          "animeId": 202,
+          "episodeInt": "3",
+          "animeName": "Beta Show"
+        }
+      ]
+    },
+    {
+      "channel": "auto-dl:tick-result",
+      "args": [
+        {
+          "ranAt": 1793548800000,
+          "reason": "manual",
+          "enqueued": 1,
+          "skipped": 0,
+          "errors": 0,
+          "details": [
+            {
+              "animeId": 202,
+              "animeName": "Beta Show",
+              "episodeInt": "3",
+              "outcome": "enqueued"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "translationId": 2102,
+      "height": 720,
+      "animeName": "Beta Show",
+      "episodeLabel": "3 серия",
+      "episodeInt": "3",
+      "animeId": 202,
+      "translationType": "subRu",
+      "author": "Studio"
+    }
+  ]
+}

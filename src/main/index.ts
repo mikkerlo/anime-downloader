@@ -4,7 +4,7 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { createStorageService, type MainStorageService } from './store'
 import { unreadableConfigMessage } from './store/config-recovery'
-import { type PersistedStoreKey } from './store/keys'
+import { STORE_DEFAULTS } from './store/defaults'
 import { DownloadManager, sanitizeFilename } from './download-manager'
 import {
   initAutoDownloader,
@@ -29,7 +29,6 @@ import { parseEpisodeFromFilename } from './lib/filename'
 import { createEpisodeCompletionHandlers, isMergeExpected } from './lib/episode-completion'
 import { createFfmpegStatus } from './lib/ffmpeg-status'
 import { installShikimoriReferer } from './lib/shikimori-images'
-import type { ParkedQueues } from './lib/shikimori-queue'
 import {
   applyApiBaseOverrides,
   rewriteLegacySmotretUrl,
@@ -58,12 +57,10 @@ import {
   createLibrarySyncStep
 } from './services/prepare-offline/steps/library-sync'
 import { probeDuration } from './lib/probe-duration'
-import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
 import { registerSyncplayBroadcasts } from './ipc/syncplay-broadcasts'
-import type { Mp4StreamingStats } from './mp4-faststart'
 
-import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
+import { createAnimeCacheService } from './services/anime-cache'
 import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
@@ -100,117 +97,6 @@ export interface AutoDownloadSubscription {
   initialEpisodesAired?: number
 }
 
-const STORE_DEFAULTS = {
-  token: '',
-  translationType: 'subRu',
-  downloadDir: '',
-  library: {} as Record<string, AnimeSearchResult>,
-  autoMerge: false,
-  videoCodec: 'copy' as string,
-  downloadedAnime: {} as Record<string, AnimeSearchResult>,
-  downloadedEpisodes: {} as Record<
-    string,
-    { translationType: string; author: string; quality: number; translationId: number }
-  >,
-  animeCache: {} as Record<string, AnimeCacheEntry>,
-  lastUpdateCheck: 0,
-  notificationMode: 'off' as string,
-  downloadSpeedLimit: 0,
-  concurrentDownloads: 2,
-  keyboardShortcuts: {
-    back: 'Escape',
-    focusSearch: 'CmdOrCtrl+F',
-    goDownloads: 'CmdOrCtrl+D',
-    playerPrevEpisode: 'Shift+ArrowLeft',
-    playerNextEpisode: 'Shift+ArrowRight',
-    shaderModeA: 'CmdOrCtrl+1',
-    shaderModeB: 'CmdOrCtrl+2',
-    shaderModeC: 'CmdOrCtrl+3',
-    shaderOff: 'CmdOrCtrl+Backquote'
-  } as Record<string, string>,
-  shikimoriCredentials: null as shikimori.ShikiCredentials | null,
-  shikimoriUser: null as shikimori.ShikiUser | null,
-  storageMode: 'simple' as 'simple' | 'advanced',
-  hotStorageDir: '' as string,
-  coldStorageDir: '' as string,
-  autoMoveToCold: false,
-  malIdMap: {} as Record<string, AnimeSearchResult>,
-  playerMode: 'system' as 'system' | 'builtin',
-  playerVolume: 1 as number,
-  playerMuted: false,
-  anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
-  hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
-  prefetchNextEpisode: 'progress-50' as 'off' | 'open' | 'time-5min' | 'progress-50',
-  watchProgress: {} as Record<string, WatchProgressEntry>,
-  watchProgressMigrationV2: false,
-  autoCleanupWatchedDays: 0,
-  autoCleanupConfirm: true,
-  autoCleanupLastRun: null as { ranAt: number; deletedCount: number; freedBytes: number } | null,
-  cleanupLog: [] as {
-    ranAt: number
-    animeId: number
-    animeName: string
-    episodeInt: string
-    bytes: number
-  }[],
-  shikimoriUserRates: [] as unknown[],
-  shikimoriUpdateQueue: [] as unknown[],
-  shikimoriParkedQueues: {} as ParkedQueues,
-  shikimoriSessionExpired: false,
-  shikimoriAnimeDetails: {} as Record<
-    string,
-    { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
-  >,
-  autoDownloadSubscriptions: {} as Record<string, AutoDownloadSubscription>,
-  autoDownloadEnabled: true,
-  recentAnimeMeta: {} as Record<string, AnimeSearchResult>,
-  skipDetections: {} as Record<string, ShowSkipDetections>,
-  skipFingerprintCache: {} as Record<string, CachedFingerprint>,
-  enableLocalSkipDetection: true,
-  calendarView: 'week' as 'week' | 'month',
-  syncplay: {
-    lastHost: 'syncplay.pl',
-    lastPort: 8999,
-    lastRoom: '',
-    username: '',
-    autoReconnect: true
-  } as {
-    lastHost: string
-    lastPort: number
-    lastRoom: string
-    username: string
-    autoReconnect: boolean
-  },
-  // Deliberately outside the `syncplay` object: the renderer overwrites that
-  // wholesale on every settings save and would drop it (#216).
-  syncplayPassword: '',
-  mp4StreamingStats: {
-    totalChecked: 0,
-    faststartCount: 0,
-    nonFaststartSamples: [] as {
-      animeId: number
-      animeName: string
-      episodeInt: string
-      episodeLabel: string
-      filePath: string
-      firstNonFtypBox: string
-      checkedAt: number
-    }[]
-  } as Mp4StreamingStats,
-  autoCleanupSnoozedAnimeIds: {} as Record<string, true>,
-  dismissedContinueWatching: [] as string[],
-  shikimoriProfile: null as ShikimoriProfile | null,
-  shikimoriFriends: [] as ShikiFriendCard[],
-  shikimoriRecommendations: [] as RecommendationEntry[],
-  priorityAnimeIds: [] as string[],
-  installId: '',
-  syncMeta: { titles: {}, rates: {} } as SyncMeta,
-  workOffline: false,
-  attachedLibraries: {} as Record<string, AttachedLibraryRecord>,
-  sharedLibraryPromptDismissed: [] as string[],
-  prepareOfflineLastRun: null as PrepareOfflineLastRun | null
-}
-
 applyApiBaseOverrides(process.env, app.isPackaged)
 
 const store = openStorageOrExit()
@@ -243,13 +129,6 @@ function exitOnUnreadableConfig(err: unknown, cwd: string): never {
   dialog.showErrorBox('Anime DL', unreadableConfigMessage(err, cwd))
   process.exit(1)
 }
-
-// Compile-time guard: `STORE_DEFAULTS` keys must equal `PERSISTED_STORE_KEYS`.
-// Renaming a default key without updating the tuple breaks this assertion,
-// stopping the build before a release silently orphans user data.
-type _AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
-const _storeKeysInSync: _AssertExact<keyof typeof STORE_DEFAULTS & string, PersistedStoreKey> = true
-void _storeKeysInSync
 
 function broadcastToAll(channel: string, ...args: unknown[]): void {
   for (const win of BrowserWindow.getAllWindows()) {

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "ownerId": 4242,
+  "rates": {
+    "9101": {
+      "episodes": {
+        "value": 6,
+        "clock": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        },
+        "provenance": {
+          "libraryId": "00000000-0000-4000-8000-0000000000a1"
+        },
+        "prePatch": {
+          "value": 3,
+          "serverUpdatedAt": "2026-10-01T00:16:41.000Z"
+        }
+      }
+    }
+  }
+}

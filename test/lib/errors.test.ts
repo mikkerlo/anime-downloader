@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { errorCode, isNetworkError, isTransportError } from '../../src/main/lib/errors'
 import { ShikiApiError } from '../../src/main/shikimori'
+import { TrackerApiError } from '../../src/main/trackers/errors'
 
 describe('errorCode', () => {
   it('reads a string code off the error', () => {
@@ -22,6 +23,18 @@ describe('errorCode', () => {
 describe('isNetworkError', () => {
   it('treats a ShikiApiError as a non-network (application) error', () => {
     expect(isNetworkError(new ShikiApiError('server error', 500))).toBe(false)
+  })
+
+  it('treats a TrackerApiError as a non-network error, even with a network code in its cause (#689)', () => {
+    expect(isNetworkError(new TrackerApiError('AniList API error: 500', 'anilist', 500))).toBe(
+      false
+    )
+    const wrapped = new TrackerApiError('MAL API error: 502', 'mal', 502, '', {
+      cause: { code: 'ECONNRESET' }
+    })
+    // `errorCode` walks the cause, so without the exclusion this would be `network`.
+    expect(errorCode(wrapped)).toBe('ECONNRESET')
+    expect(isNetworkError(wrapped)).toBe(false)
   })
 
   it('treats a bare TypeError (fetch failure) as a network error', () => {

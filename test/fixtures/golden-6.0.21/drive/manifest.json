@@ -1,0 +1,63 @@
+{
+  "layoutVersion": 1,
+  "layoutMinor": 1,
+  "libraryId": "00000000-0000-4000-8000-0000000000a1",
+  "name": "Trip",
+  "owner": {
+    "shikimoriId": 4242,
+    "nickname": "golden-a"
+  },
+  "mode": "metadata",
+  "generation": 5,
+  "stateGeneration": 3,
+  "lastWriter": {
+    "installId": "golden-pc-0000-4000-8000-000000000001",
+    "appVersion": "6.0.21",
+    "at": 1793549040000
+  },
+  "titles": [
+    {
+      "animeId": 101,
+      "name": "Alpha Show"
+    }
+  ],
+  "items": [
+    {
+      "animeId": 101,
+      "episodeInt": "1",
+      "translationId": 11,
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "path": "Alpha Show/Alpha Show - 01 [Studio].mkv",
+      "size": 11,
+      "sha256": "b724300505837e0c04f756000de4f4fcec7dcc5c4eeee37ea68e262e728d0d7a"
+    },
+    {
+      "animeId": 101,
+      "episodeInt": "2",
+      "translationId": 11,
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "path": "Alpha Show/Alpha Show - 02 [Studio].mkv",
+      "size": 11,
+      "sha256": "9d30fd76abefc345d57b4a9715cfdb32d17eadef48a4d04a5854e7d51bbcbe01"
+    },
+    {
+      "animeId": 101,
+      "episodeInt": "3",
+      "translationId": 11,
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "path": "Alpha Show/Alpha Show - 03 [Studio].mkv",
+      "size": 11,
+      "sha256": "81bc9bf90b081183a00d31a7726320bd3ac6d2d16a0a1ca3432a9c856cc08624"
+    }
+  ],
+  "naming": {
+    "rule": "v1",
+    "renamed": []
+  }
+}

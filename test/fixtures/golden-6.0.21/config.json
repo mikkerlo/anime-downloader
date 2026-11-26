@@ -1,0 +1,460 @@
+{
+  "token": "",
+  "translationType": "subRu",
+  "downloadDir": "<root>/hot",
+  "library": {},
+  "autoMerge": false,
+  "videoCodec": "copy",
+  "downloadedAnime": {
+    "101": {
+      "id": 101,
+      "title": "Alpha Show",
+      "titles": {
+        "romaji": "Alpha Show"
+      },
+      "posterUrlSmall": "https://poster.invalid/101.jpg",
+      "numberOfEpisodes": 12,
+      "type": "tv",
+      "typeTitle": "TV Series",
+      "year": 2026,
+      "season": "fall"
+    },
+    "202": {
+      "id": 202,
+      "title": "Beta Show",
+      "titles": {
+        "romaji": "Beta Show"
+      },
+      "posterUrlSmall": "https://poster.invalid/202.jpg",
+      "numberOfEpisodes": 12,
+      "type": "tv",
+      "typeTitle": "TV Series",
+      "year": 2026,
+      "season": "fall"
+    }
+  },
+  "downloadedEpisodes": {
+    "101:1:11": {
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "translationId": 11
+    },
+    "101:2:11": {
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "translationId": 11
+    },
+    "101:3:11": {
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "translationId": 11
+    },
+    "202:1:21": {
+      "translationType": "subRu",
+      "author": "Studio",
+      "quality": 720,
+      "translationId": 21
+    }
+  },
+  "animeCache": {
+    "101": {
+      "animeDetail": {
+        "id": 101,
+        "title": "Alpha Show",
+        "titles": {
+          "romaji": "Alpha Show"
+        },
+        "posterUrlSmall": "https://poster.invalid/101.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV Series",
+        "year": 2026,
+        "season": "fall",
+        "posterUrl": "https://poster.invalid/101.jpg",
+        "descriptions": [],
+        "genres": [],
+        "episodes": [
+          {
+            "id": 10100,
+            "episodeInt": "1",
+            "episodeFull": "1 серия",
+            "episodeType": "tv",
+            "isActive": 1
+          },
+          {
+            "id": 10101,
+            "episodeInt": "2",
+            "episodeFull": "2 серия",
+            "episodeType": "tv",
+            "isActive": 1
+          },
+          {
+            "id": 10102,
+            "episodeInt": "3",
+            "episodeFull": "3 серия",
+            "episodeType": "tv",
+            "isActive": 1
+          }
+        ]
+      },
+      "episodes": {},
+      "qualityProbes": {},
+      "cachedAt": 1793524020000,
+      "posterCached": true
+    },
+    "202": {
+      "animeDetail": {
+        "id": 202,
+        "title": "Beta Show",
+        "titles": {
+          "romaji": "Beta Show"
+        },
+        "posterUrlSmall": "https://poster.invalid/202.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV Series",
+        "year": 2026,
+        "season": "fall",
+        "posterUrl": "https://poster.invalid/202.jpg",
+        "descriptions": [],
+        "genres": [],
+        "episodes": [
+          {
+            "id": 20200,
+            "episodeInt": "1",
+            "episodeFull": "1 серия",
+            "episodeType": "tv",
+            "isActive": 1
+          },
+          {
+            "id": 20201,
+            "episodeInt": "2",
+            "episodeFull": "2 серия",
+            "episodeType": "tv",
+            "isActive": 1
+          },
+          {
+            "id": 20202,
+            "episodeInt": "3",
+            "episodeFull": "3 серия",
+            "episodeType": "tv",
+            "isActive": 1
+          }
+        ]
+      },
+      "episodes": {},
+      "qualityProbes": {},
+      "cachedAt": 1793524020000,
+      "posterCached": true
+    }
+  },
+  "lastUpdateCheck": 0,
+  "notificationMode": "off",
+  "downloadSpeedLimit": 0,
+  "concurrentDownloads": 2,
+  "keyboardShortcuts": {
+    "back": "Escape",
+    "focusSearch": "CmdOrCtrl+F",
+    "goDownloads": "CmdOrCtrl+D",
+    "playerPrevEpisode": "Shift+ArrowLeft",
+    "playerNextEpisode": "Shift+ArrowRight",
+    "shaderModeA": "CmdOrCtrl+1",
+    "shaderModeB": "CmdOrCtrl+2",
+    "shaderModeC": "CmdOrCtrl+3",
+    "shaderOff": "CmdOrCtrl+Backquote"
+  },
+  "shikimoriCredentials": {
+    "access_token": "fake-access-token-777",
+    "refresh_token": "fake-refresh-token-777",
+    "token_type": "Bearer",
+    "expires_in": 86400,
+    "created_at": 1793549100
+  },
+  "shikimoriUser": {
+    "id": 777,
+    "nickname": "golden-b",
+    "avatar": "/system/users/x160/777.png"
+  },
+  "storageMode": "simple",
+  "hotStorageDir": "",
+  "coldStorageDir": "",
+  "autoMoveToCold": false,
+  "malIdMap": {},
+  "playerMode": "system",
+  "playerVolume": 1,
+  "playerMuted": false,
+  "anime4kPreset": "off",
+  "hevcTranscodeOnPlay": "ask",
+  "prefetchNextEpisode": "progress-50",
+  "watchProgress": {
+    "101:1": {
+      "position": 1400,
+      "duration": 1440,
+      "updatedAt": 1793523600000,
+      "watched": true,
+      "watchedAt": 1793523600000,
+      "sync": {
+        "position": {
+          "at": 1793523600000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        },
+        "watched": {
+          "at": 1793523600000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    "101:2": {
+      "position": 1400,
+      "duration": 1440,
+      "updatedAt": 1793523600000,
+      "watched": true,
+      "watchedAt": 1793523600000,
+      "sync": {
+        "position": {
+          "at": 1793523600000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        },
+        "watched": {
+          "at": 1793523600000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    "101:3": {
+      "position": 1400,
+      "duration": 1440,
+      "updatedAt": 1793523780000,
+      "watched": true,
+      "watchedAt": 1793523780000,
+      "sync": {
+        "position": {
+          "at": 1793523780000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        },
+        "watched": {
+          "at": 1793523780000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    "101:4": {
+      "position": 1400,
+      "duration": 1440,
+      "updatedAt": 1793548980000,
+      "watched": true,
+      "watchedAt": 1793548980000,
+      "sync": {
+        "position": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        },
+        "watched": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        }
+      }
+    },
+    "101:5": {
+      "position": 1400,
+      "duration": 1440,
+      "updatedAt": 1793548980000,
+      "watched": true,
+      "watchedAt": 1793548980000,
+      "sync": {
+        "position": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        },
+        "watched": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        }
+      }
+    },
+    "101:6": {
+      "position": 1400,
+      "duration": 1440,
+      "updatedAt": 1793548980000,
+      "watched": true,
+      "watchedAt": 1793548980000,
+      "sync": {
+        "position": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        },
+        "watched": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        }
+      }
+    }
+  },
+  "watchProgressMigrationV2": false,
+  "autoCleanupWatchedDays": 0,
+  "autoCleanupConfirm": true,
+  "autoCleanupLastRun": null,
+  "cleanupLog": [],
+  "shikimoriUserRates": [],
+  "shikimoriUpdateQueue": [],
+  "shikimoriParkedQueues": {
+    "4242": {
+      "nickname": "golden-a",
+      "entries": [
+        {
+          "malId": 9101,
+          "rateId": 91010,
+          "before": {
+            "episodes": 3,
+            "status": "watching",
+            "score": 6,
+            "rewatches": 0
+          },
+          "after": {
+            "episodes": 3,
+            "status": "watching",
+            "score": 7,
+            "rewatches": 0
+          },
+          "queuedAt": 1793548860000
+        },
+        {
+          "malId": 9202,
+          "rateId": 92020,
+          "before": {
+            "episodes": 1,
+            "status": "watching",
+            "score": 0,
+            "rewatches": 0
+          },
+          "after": {
+            "episodes": 2,
+            "status": "watching",
+            "score": 0,
+            "rewatches": 0
+          },
+          "queuedAt": 1793548920000
+        }
+      ],
+      "parkedAt": 1793549100000
+    }
+  },
+  "shikimoriSessionExpired": false,
+  "shikimoriAnimeDetails": {},
+  "autoDownloadSubscriptions": {
+    "202": {
+      "animeId": 202,
+      "malId": 9202,
+      "animeName": "Beta Show",
+      "subscribedAt": 1793523840000,
+      "lastEnqueuedEpisodeInt": 3,
+      "lastCheckedAt": 1793548800000,
+      "initialEpisodesAired": 2
+    }
+  },
+  "autoDownloadEnabled": true,
+  "recentAnimeMeta": {},
+  "skipDetections": {},
+  "skipFingerprintCache": {},
+  "enableLocalSkipDetection": true,
+  "calendarView": "week",
+  "syncplay": {
+    "lastHost": "syncplay.pl",
+    "lastPort": 8999,
+    "lastRoom": "",
+    "username": "",
+    "autoReconnect": true
+  },
+  "syncplayPassword": "",
+  "mp4StreamingStats": {
+    "totalChecked": 0,
+    "faststartCount": 0,
+    "nonFaststartSamples": []
+  },
+  "autoCleanupSnoozedAnimeIds": {},
+  "dismissedContinueWatching": [],
+  "shikimoriProfile": null,
+  "shikimoriFriends": [],
+  "shikimoriRecommendations": [],
+  "priorityAnimeIds": [],
+  "installId": "golden-pc-0000-4000-8000-000000000001",
+  "syncMeta": {
+    "titles": {},
+    "rates": {
+      "4242:9101": {
+        "episodes": {
+          "value": 3,
+          "at": 1793523780000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        },
+        "score": {
+          "value": 7,
+          "at": 1793548860000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        }
+      },
+      "4242:9202": {
+        "episodes": {
+          "value": 2,
+          "at": 1793548920000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "workOffline": false,
+  "attachedLibraries": {
+    "00000000-0000-4000-8000-0000000000a1": {
+      "root": "<root>/drive/Trip",
+      "name": "Trip",
+      "mode": "metadata",
+      "owner": {
+        "shikimoriId": 4242,
+        "nickname": "golden-a"
+      },
+      "access": "read-write",
+      "lastSeenAt": 1793549040000,
+      "lastSyncAt": 1793549040000
+    }
+  },
+  "sharedLibraryPromptDismissed": [],
+  "prepareOfflineLastRun": {
+    "finishedAt": 1793524020000,
+    "cancelled": false,
+    "steps": [
+      {
+        "id": "binaries",
+        "label": "ffmpeg, ffprobe and fpcalc",
+        "status": "ok"
+      },
+      {
+        "id": "shikimori-rates",
+        "label": "Shikimori rates",
+        "status": "ok"
+      },
+      {
+        "id": "metadata",
+        "label": "Library metadata",
+        "status": "ok"
+      },
+      {
+        "id": "local-integrity",
+        "label": "Downloaded episodes",
+        "status": "ok"
+      },
+      {
+        "id": "attached-integrity",
+        "label": "Shared Libraries",
+        "status": "ok"
+      },
+      {
+        "id": "library-sync",
+        "label": "Sync owned or claimed libraries",
+        "status": "ok"
+      }
+    ]
+  }
+}

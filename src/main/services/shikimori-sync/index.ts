@@ -18,6 +18,7 @@ import {
   keepQueuedEntries,
   type CachedRateEntry
 } from '../../lib/shikimori-rate-cache'
+import { STATUS_ORDER } from '../../lib/shikimori-rate'
 import type { AnimeSearchResult } from '../../smotret-api'
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
 
@@ -84,15 +85,6 @@ const PREFETCH_PRIORITY_STATUSES = new Set<shikimori.ShikiUserRateStatus>([
 ])
 
 export const CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000
-
-const STATUS_ORDER: Record<shikimori.ShikiUserRateStatus, number> = {
-  planned: 0,
-  watching: 1,
-  rewatching: 1,
-  on_hold: 2,
-  dropped: 2,
-  completed: 3
-}
 
 export interface ShikimoriSyncServiceDeps {
   store: StorageService

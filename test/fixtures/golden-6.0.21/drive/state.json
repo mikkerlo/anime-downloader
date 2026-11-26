@@ -1,0 +1,143 @@
+{
+  "stateVersion": 1,
+  "stateMinor": 0,
+  "libraryId": "00000000-0000-4000-8000-0000000000a1",
+  "generation": 3,
+  "manifestGeneration": 5,
+  "doc": {
+    "stateVersion": 1,
+    "stateMinor": 0,
+    "installId": "golden-pc-0000-4000-8000-000000000001",
+    "titles": {
+      "101": {
+        "watch": {
+          "1": {
+            "position": {
+              "value": {
+                "position": 1400,
+                "duration": 1440
+              },
+              "at": 1793523600000,
+              "origin": "golden-pc-0000-4000-8000-000000000001"
+            },
+            "watched": {
+              "value": true,
+              "at": 1793523600000,
+              "origin": "golden-pc-0000-4000-8000-000000000001"
+            },
+            "watchedAt": 1793523600000
+          },
+          "2": {
+            "position": {
+              "value": {
+                "position": 1400,
+                "duration": 1440
+              },
+              "at": 1793523600000,
+              "origin": "golden-pc-0000-4000-8000-000000000001"
+            },
+            "watched": {
+              "value": true,
+              "at": 1793523600000,
+              "origin": "golden-pc-0000-4000-8000-000000000001"
+            },
+            "watchedAt": 1793523600000
+          },
+          "3": {
+            "position": {
+              "value": {
+                "position": 1400,
+                "duration": 1440
+              },
+              "at": 1793523780000,
+              "origin": "golden-pc-0000-4000-8000-000000000001"
+            },
+            "watched": {
+              "value": true,
+              "at": 1793523780000,
+              "origin": "golden-pc-0000-4000-8000-000000000001"
+            },
+            "watchedAt": 1793523780000
+          },
+          "4": {
+            "position": {
+              "value": {
+                "position": 1400,
+                "duration": 1440
+              },
+              "at": 1793548980000,
+              "origin": "golden-other-pc"
+            },
+            "watched": {
+              "value": true,
+              "at": 1793548980000,
+              "origin": "golden-other-pc"
+            },
+            "watchedAt": 1793548980000
+          },
+          "5": {
+            "position": {
+              "value": {
+                "position": 1400,
+                "duration": 1440
+              },
+              "at": 1793548980000,
+              "origin": "golden-other-pc"
+            },
+            "watched": {
+              "value": true,
+              "at": 1793548980000,
+              "origin": "golden-other-pc"
+            },
+            "watchedAt": 1793548980000
+          },
+          "6": {
+            "position": {
+              "value": {
+                "position": 1400,
+                "duration": 1440
+              },
+              "at": 1793548980000,
+              "origin": "golden-other-pc"
+            },
+            "watched": {
+              "value": true,
+              "at": 1793548980000,
+              "origin": "golden-other-pc"
+            },
+            "watchedAt": 1793548980000
+          }
+        },
+        "rate": {
+          "malId": 9101,
+          "episodes": {
+            "value": 6,
+            "at": 1793548980000,
+            "origin": "golden-other-pc"
+          },
+          "status": {
+            "value": "watching",
+            "at": 1793523600000,
+            "origin": "shikimori"
+          },
+          "score": {
+            "value": 8,
+            "at": 1793548980000,
+            "origin": "golden-other-pc"
+          },
+          "rewatches": {
+            "value": 0,
+            "at": 1793523600000,
+            "origin": "shikimori"
+          }
+        }
+      }
+    },
+    "priorityOrder": {
+      "value": [],
+      "at": 0,
+      "origin": "legacy"
+    },
+    "tombstones": {}
+  }
+}

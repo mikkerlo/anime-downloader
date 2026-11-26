@@ -1,7 +1,7 @@
 /**
  * Canonical list of persisted `electron-store` keys.
  *
- * This is a rename guard: `index.ts` asserts at compile time that the keys of
+ * This is a rename guard: `defaults.ts` asserts at compile time that the keys of
  * its `STORE_DEFAULTS` exactly equal this tuple, and a unit test pins the tuple
  * itself. Silently renaming a persisted key would orphan users' existing data,
  * so both ends must change together and deliberately.

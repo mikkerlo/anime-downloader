@@ -1,4 +1,5 @@
 import * as shikimori from '../shikimori'
+import { TrackerApiError } from '../trackers/errors'
 
 const NETWORK_ERROR_CODES = new Set([
   'ENOTFOUND',
@@ -31,6 +32,7 @@ export function errorCode(err: unknown): string | undefined {
 
 export function isNetworkError(err: unknown): boolean {
   if (err instanceof shikimori.ShikiApiError) return false
+  if (err instanceof TrackerApiError) return false
   if (err instanceof TypeError) return true
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError'))
     return true

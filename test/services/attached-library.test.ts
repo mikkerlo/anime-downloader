@@ -214,23 +214,29 @@ function v2Library(): string {
   return root
 }
 
-describe('a v2 library (#713): foreign to every PC on this version', () => {
+describe('a v2 library (#713): foreign to every Shikimori-only PC', () => {
   const recordOf = (m: Made): AttachedLibraryRecord =>
     m.store.get<Record<string, AttachedLibraryRecord>>('attachedLibraries')![FIXTURE_LIBRARY_ID]
 
-  it('an account-less PC is offered no claim: identity foreign, not choose, with the library to attach', async () => {
+  // #714 replaced #713's "an account-less PC can't claim a v2 library": the
+  // claim is recorded as `trackerClaim`, by the owner's `(provider, userId)`.
+  it('an account-less PC gets the choice; a claim is recorded as trackerClaim', async () => {
     const m = make()
     const [candidate] = await m.svc.discover(v2Library())
     expect(candidate).toMatchObject({
       libraryId: FIXTURE_LIBRARY_ID,
-      identity: 'foreign',
+      identity: 'choose',
       ownerNickname: 'alice',
+      ownerProvider: 'anilist',
       mode: 'metadata'
     })
     expect(candidate.readOnly).toBeUndefined()
     const res = await m.svc.attach(candidate.libraryId!, 'claim')
-    expect(res.ok).toBe(false)
-    expect(m.store.get('attachedLibraries')).toEqual({})
+    if (!res.ok) throw new Error(res.error)
+    expect(res.library).toMatchObject({ role: 'claim', ownerProvider: 'anilist', layoutVersion: 2 })
+    const rec = recordOf(m)
+    expect(rec.trackerClaim).toEqual({ provider: 'anilist', userId: String(OWNER_ID), at: 1_000 })
+    expect(rec).not.toHaveProperty('claim')
   })
 
   it('a Shikimori user whose id equals the v2 userId is foreign too', async () => {
@@ -243,7 +249,8 @@ describe('a v2 library (#713): foreign to every PC on this version', () => {
   it('attaching writes owner: null plus trackerOwner; a v1 record keeps exactly today’s keys', async () => {
     const v2 = make()
     const { res } = await attachAt(v2, v2Library(), 'videos')
-    expect(res.library).toMatchObject({ role: 'foreign', ownerNickname: 'alice' })
+    // No account and no claim: videos, as for a v1 library (#714).
+    expect(res.library).toMatchObject({ role: 'videos', ownerNickname: 'alice' })
     const rec = recordOf(v2)
     expect(rec.owner).toBeNull()
     expect(rec.trackerOwner).toEqual({
@@ -252,7 +259,8 @@ describe('a v2 library (#713): foreign to every PC on this version', () => {
       nickname: 'alice'
     })
     expect(rec.claim).toBeUndefined()
-    expect(v2.svc.list()[0].role).toBe('foreign')
+    expect(rec.trackerClaim).toBeUndefined()
+    expect(v2.svc.list()[0].role).toBe('videos')
 
     const v1 = make({ shikimoriUser: OWNER })
     await attachAt(v1, copyFixtureLibrary())
@@ -300,6 +308,165 @@ describe('a v2 library (#713): foreign to every PC on this version', () => {
     expect(again.svc.list()[0]).toMatchObject({ role: 'foreign', available: true })
     expect(writes()).toEqual([])
     expect(mtimeSnapshot(root)).toEqual(before)
+  })
+})
+
+/** The fixture library as a v2 library owned by `owner` (#713's envelope). */
+function v2LibraryOf(owner: SharedLibraryTrackerOwner): string {
+  const root = copyFixtureLibrary()
+  const file = path.join(root, '.anime-dl', 'manifest.json')
+  const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+  fs.writeFileSync(file, JSON.stringify({ ...m, layoutVersion: 2, owner }, null, 2) + '\n')
+  return root
+}
+
+describe('"mine" for any connected account, claims only with no tracker (#714)', () => {
+  const recordOf = (m: Made): AttachedLibraryRecord =>
+    m.store.get<Record<string, AttachedLibraryRecord>>('attachedLibraries')![FIXTURE_LIBRARY_ID]
+  const ALICE = { id: OWNER_ID, nickname: 'alice', avatar: null }
+
+  it('a numerically equal AniList id is not the owner: foreign, and the claim is refused', async () => {
+    // The fixture is owned by Shikimori user OWNER_ID; this PC has only AniList user OWNER_ID.
+    const m = make({ anilistUser: ALICE })
+    const [candidate] = await m.svc.discover(copyFixtureLibrary())
+    expect(candidate).toMatchObject({ identity: 'foreign', ownerProvider: 'shikimori' })
+    const claim = await m.svc.attach(candidate.libraryId!, 'claim')
+    expect(claim).toEqual({
+      ok: false,
+      error: 'Only a PC without a tracker account can claim a library.'
+    })
+    const res = await m.svc.attach(candidate.libraryId!)
+    if (!res.ok) throw new Error(res.error)
+    expect(res.library.role).toBe('foreign')
+    expect(recordOf(m).claim).toBeUndefined()
+  })
+
+  it('Shikimori as someone else and AniList as the numerically equal id: foreign', async () => {
+    const m = make({ shikimoriUser: STRANGER, anilistUser: ALICE })
+    const { candidate, res } = await attachAt(m, copyFixtureLibrary())
+    expect(candidate.identity).toBe('foreign')
+    expect(res.library.role).toBe('foreign')
+  })
+
+  it('a Shikimori-owned library on a Shikimori + AniList PC (AniList primary) is mine', async () => {
+    const m = make({
+      shikimoriUser: OWNER,
+      anilistUser: { id: 9, nickname: 'al', avatar: null },
+      trackerPrimary: 'anilist'
+    })
+    const { candidate, res } = await attachAt(m, copyFixtureLibrary())
+    expect(candidate.identity).toBe('owner')
+    expect(res.library).toMatchObject({ role: 'owner', ownerProvider: 'shikimori' })
+  })
+
+  it('an AniList-owned v2 library is mine for that AniList account; an expired session stays owner', async () => {
+    const root = v2LibraryOf({ provider: 'anilist', userId: '9', nickname: 'al' })
+    const m = make({
+      shikimoriUser: OWNER,
+      anilistUser: { id: 9, nickname: 'al', avatar: null },
+      anilistCredentials: null
+    })
+    const { candidate, res } = await attachAt(m, root)
+    expect(candidate.identity).toBe('owner')
+    expect(res.library).toMatchObject({ role: 'owner', ownerProvider: 'anilist', layoutVersion: 2 })
+  })
+
+  it('a hand-written v2 provider: shikimori library matches the same Shikimori account', async () => {
+    const root = v2LibraryOf({ provider: 'shikimori', userId: String(OWNER_ID), nickname: 'o' })
+    const m = make({ shikimoriUser: OWNER })
+    const { res } = await attachAt(m, root)
+    expect(res.library).toMatchObject({
+      role: 'owner',
+      ownerProvider: 'shikimori',
+      layoutVersion: 2
+    })
+  })
+
+  it('ownerProvider / layoutVersion: v1 owner shikimori / 1, v2 AniList anilist / 2, Videos only null / 1', async () => {
+    const m = make({ shikimoriUser: OWNER })
+    const v1 = (await attachAt(m, copyFixtureLibrary())).res.library
+    expect([v1.ownerProvider, v1.layoutVersion]).toEqual(['shikimori', 1])
+    const v2 = (await attachAt(make(), v2Library(), 'videos')).res.library
+    expect([v2.ownerProvider, v2.layoutVersion]).toEqual(['anilist', 2])
+    const videos = (await attachAt(make(), videosOnly())).res.library
+    expect([videos.ownerProvider, videos.layoutVersion]).toEqual([null, 1])
+  })
+
+  it.each([
+    ['shikimoriUser', STRANGER],
+    ['anilistUser', { id: 9, nickname: 'al', avatar: null }],
+    ['myanimelistUser', { id: 9, nickname: 'mal', avatar: null }]
+  ])('a claim is refused with %s set, for a v1 and a v2 library', async (key, user) => {
+    for (const root of [copyFixtureLibrary(), v2Library()]) {
+      const m = make({ [key]: user })
+      const [candidate] = await m.svc.discover(root)
+      expect(candidate.identity).not.toBe('choose')
+      const res = await m.svc.attach(candidate.libraryId!, 'claim')
+      expect(res).toEqual({
+        ok: false,
+        error: 'Only a PC without a tracker account can claim a library.'
+      })
+      expect(m.store.get('attachedLibraries')).toEqual({})
+    }
+  })
+
+  it('with no tracker a Shikimori claim stays exactly { ownerId, at }', async () => {
+    const m = make()
+    await attachAt(m, copyFixtureLibrary(), 'claim')
+    const rec = recordOf(m)
+    expect(Object.keys(rec.claim!)).toEqual(['ownerId', 'at'])
+    expect(rec).not.toHaveProperty('trackerClaim')
+  })
+
+  it.each([
+    ['anilistUser', { id: 9, nickname: 'al', avatar: null }],
+    ['myanimelistUser', { id: 9, nickname: 'mal', avatar: null }]
+  ])('a claim is dropped on a %s login: foreign, claim gone', async (key, user) => {
+    for (const [root, field] of [
+      [copyFixtureLibrary(), 'claim'],
+      [v2Library(), 'trackerClaim']
+    ] as const) {
+      const m = make()
+      await attachAt(m, root, 'claim')
+      expect(recordOf(m)[field]).toBeDefined()
+      m.onChanged.mockClear()
+      m.store.set(key, user)
+      expect(m.svc.list()[0].role).toBe('foreign')
+      expect(recordOf(m)).not.toHaveProperty('claim')
+      expect(recordOf(m)).not.toHaveProperty('trackerClaim')
+      expect(m.onChanged).toHaveBeenCalledTimes(1)
+      // A logout doesn't bring it back.
+      m.store.set(key, null)
+      expect(m.svc.list()[0].role).toBe('videos')
+    }
+  })
+
+  it('a v2 claim never matches a v1 owner, and the reverse', () => {
+    const base = {
+      name: 'Lib',
+      mode: 'metadata' as const,
+      access: 'read-write' as const,
+      lastSeenAt: 0,
+      lastSyncAt: null
+    }
+    const m = make({
+      attachedLibraries: {
+        [LIB]: {
+          ...base,
+          root: '/nowhere/a',
+          owner: { shikimoriId: OWNER_ID },
+          trackerClaim: { provider: 'shikimori', userId: String(OWNER_ID), at: 1 }
+        },
+        [FIXTURE_LIBRARY_ID]: {
+          ...base,
+          root: '/nowhere/b',
+          owner: null,
+          trackerOwner: { provider: 'anilist', userId: String(OWNER_ID) },
+          claim: { ownerId: OWNER_ID, at: 1 }
+        }
+      }
+    })
+    expect(m.svc.list().map((l) => l.role)).toEqual(['videos', 'videos'])
   })
 })
 

@@ -364,16 +364,21 @@ async function reread(
   return insp as Inspection & { manifest: NonNullable<Inspection['manifest']> }
 }
 
-/** A claim only ever matches a v1 owner: a v2 owner has no Shikimori id. */
+/**
+ * Only a v1 claim matches, and only a v1 owner: a v2 owner has no Shikimori
+ * id, and a v2 claim (#714) is refused until #715 runs v2 legs.
+ */
 function ownsOrClaims(m: SharedLibraryManifest, actor: SharedLibraryActor): boolean {
   if (m.mode !== 'metadata' || m.owner === null) return false
   if (isOwnedBy(m.owner, actor)) return true
   const ownerId = shikimoriOwnerId(m.owner)
+  const claim = actor.claim
   return (
     ownerId !== null &&
-    actor.claim !== null &&
-    actor.claim.libraryId === m.libraryId &&
-    actor.claim.ownerId === ownerId
+    claim !== null &&
+    'ownerId' in claim &&
+    claim.libraryId === m.libraryId &&
+    claim.ownerId === ownerId
   )
 }
 

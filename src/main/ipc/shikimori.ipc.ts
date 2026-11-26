@@ -469,7 +469,8 @@ export function register({
   // Shikimori's steps in the account lifecycle (#695), which runs login,
   // switch and logout for every tracker: today's `sync.*` calls, the
   // user-scoped reset's prefetch abort and snapshots, and the Shared Library
-  // login run (#584), which stays on the Shikimori login only.
+  // login run (#584). An AniList or MAL login runs it through the lifecycle's
+  // own `afterLogin` (#714).
   trackerLifecycle.setSteps('shikimori', {
     resetExtra() {
       sync.abortPrefetch()

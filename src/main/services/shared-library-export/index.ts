@@ -8,6 +8,7 @@ import { promises as fsp } from 'fs'
 import * as path from 'path'
 import {
   LOG_IN_FOR_METADATA,
+  OWNER_NOT_OFFERED,
   fitsFreeSpace,
   mergedBytes,
   metadataLibraryName,
@@ -24,8 +25,10 @@ import {
   createMountCandidates,
   type MountCandidates
 } from '../../lib/shared-library/mount-candidates'
+import { ownerAccountsOf, ownerOf } from '../../lib/shared-library/owner'
 import type { absoluteOverflow } from '../../lib/shared-library/paths'
 import { createLibrary, writeManifest } from '../../lib/shared-library/write'
+import { connectedAccounts, resolvePrimary, type ConnectedAccount } from '../../trackers/primary'
 import type { PlayerPresenceService } from '../player-presence'
 import { TOO_LARGE_REASON, nodeFs, type ExportFs } from './copy'
 import { createFsTypeProbe, type FsTypeProbe } from './fs-type-probe'
@@ -56,6 +59,7 @@ import {
   presence,
   presentKeys,
   STALE_EPISODE_LIST,
+  type ManifestOwner,
   type PlanCacheEntry,
   type PlanSource,
   type ResolvedItem
@@ -129,6 +133,11 @@ export interface SharedLibraryExportDeps {
   /** S5's `absoluteOverflow`; injectable so a test can spy on the call. */
   overflow?: typeof absoluteOverflow
   platform?: NodeJS.Platform
+  /**
+   * The trackers the owner picker offers (#714): Shikimori only until #715
+   * lifts the gate. A test seam: production passes nothing.
+   */
+  ownerProviders?: readonly TrackerId[]
   checkpointEvery?: number
   retryMs?: number
   throttleMs?: number
@@ -199,31 +208,62 @@ export function createSharedLibraryExportService(
     }
   }
   const pathExists = async (p: string): Promise<boolean> => (await fileSize(p)) !== null
-  const userId = (): number | null =>
-    get<{ id?: number } | null>('shikimoriUser')?.id ?? deps.actor().shikimoriUserId
-  // With metadata needs a Shikimori account (S6e #586): `shikimoriUser`, which
-  // an expired session keeps and only logout clears.
-  const account = (): (SharedLibraryOwner & { nickname: string }) | null => {
-    const u = get<{ id?: number; nickname?: string } | null>('shikimoriUser')
-    return typeof u?.id === 'number' ? { shikimoriId: u.id, nickname: u.nickname ?? '' } : null
+  // With metadata needs an account the picker offers (S6e #586, #714):
+  // `<provider>User`, which an expired session keeps and only logout clears.
+  // Shikimori only until #715.
+  const offered: readonly TrackerId[] = deps.ownerProviders ?? ['shikimori']
+  const owners = (): ConnectedAccount[] =>
+    connectedAccounts(deps.store).filter((a) => offered.includes(a.provider))
+  /** The primary when it is offered, else the first offered account. */
+  const defaultOwner = (list: ConnectedAccount[]): ConnectedAccount | null => {
+    const primary = resolvePrimary(deps.store)
+    return list.find((a) => a.provider === primary) ?? list[0] ?? null
   }
-  const claimed = (libraryId: string): boolean =>
-    !!get<Record<string, AttachedLibraryRecord> | undefined>('attachedLibraries')?.[libraryId]
-      ?.claim
-  /** The request's mode, and its name with the With metadata default. */
+  /** The request's owner when it is offered, else the default. */
+  const pickOf = (req: { owner?: TrackerId }, list: ConnectedAccount[]): ConnectedAccount | null =>
+    list.find((a) => a.provider === req.owner) ?? defaultOwner(list)
+  // A Shikimori owner is written as v1, as before; any other as v2 (#713).
+  const asOwner = (a: ConnectedAccount): ManifestOwner =>
+    a.provider === 'shikimori'
+      ? { shikimoriId: Number(a.userId), nickname: a.nickname }
+      : { provider: a.provider, userId: a.userId, nickname: a.nickname }
+  const claimed = (libraryId: string): boolean => {
+    const rec = get<Record<string, AttachedLibraryRecord> | undefined>('attachedLibraries')?.[
+      libraryId
+    ]
+    return !!(rec?.claim || rec?.trackerClaim)
+  }
+  /** The request's mode, and its name with the With metadata default: the picked owner's. */
   const modeAndName = (req: {
     mode?: ExportMode
     name: string
+    owner?: TrackerId
   }): { mode: ExportMode; name: string } => {
     const mode = req.mode ?? 'videos'
-    const a = account()
+    const nickname = pickOf(req, owners())?.nickname
     const fallback =
-      mode === 'metadata' && a?.nickname ? metadataLibraryName(a.nickname) : DEFAULT_LIBRARY_NAME
+      mode === 'metadata' && nickname ? metadataLibraryName(nickname) : DEFAULT_LIBRARY_NAME
     return { mode, name: req.name.trim() || fallback }
   }
-  const classify = (dir: string, req: { mode?: ExportMode; name: string }) => {
+  const classify = (
+    dir: string,
+    req: { mode?: ExportMode; name: string; owner?: TrackerId; sibling?: boolean }
+  ) => {
     const { mode, name } = modeAndName(req)
-    return classifyTarget(dir, name, userId(), pathExists, { mode, claimed })
+    const list = owners()
+    const pick = pickOf(req, list)
+    return classifyTarget(
+      dir,
+      name,
+      {
+        accounts: ownerAccountsOf(connectedAccounts(deps.store)),
+        owner: pick ? asOwner(pick) : null,
+        // No explicit pick: an own library keeps its owner, when it's offered.
+        ...(req.owner === undefined ? { keep: list.map(asOwner) } : {})
+      },
+      pathExists,
+      { mode, claimed, ...(req.sibling === true ? { sibling: true } : {}) }
+    )
   }
 
   // Pre-fetch (#577): online, with a token, and with a download queue to enqueue into.
@@ -569,12 +609,21 @@ export function createSharedLibraryExportService(
     const { titles, resolved } = await buildTree(source, req.animeIds)
     const merge = await mergeSupport()
     const hot = hotRoot()
-    const a = account()
+    const list = owners()
+    const def = defaultOwner(list)
     const prefetch = {
       prefetch: gate(),
       localFree: hot === null ? null : await freeBytes(hot),
-      canExportMetadata: a !== null,
-      nickname: a?.nickname ?? null
+      canExportMetadata: list.length > 0,
+      nickname: def?.nickname ?? null,
+      owners: list.map(
+        (a): ExportOwnerOption => ({
+          provider: a.provider,
+          nickname: a.nickname,
+          olderVersions: a.provider === 'shikimori'
+        })
+      ),
+      defaultOwner: def?.provider ?? null
     }
     if (!req.target) return { titles, target: null, preflight: null, merge, ...prefetch }
     const t = await classify(req.target, req)
@@ -608,6 +657,15 @@ export function createSharedLibraryExportService(
         mode: t.mode,
         libraryName: t.libraryName,
         ...(t.ownerNickname !== undefined ? { ownerNickname: t.ownerNickname } : {}),
+        ...(t.targetOwner
+          ? {
+              owner: {
+                provider: ownerOf(t.targetOwner)!.provider,
+                nickname: t.targetOwner.nickname ?? null
+              }
+            }
+          : {}),
+        ...(t.separateReason ? { separateReason: t.separateReason } : {}),
         blocked: t.blocked,
         free: await freeBytes(req.target),
         present,
@@ -648,10 +706,14 @@ export function createSharedLibraryExportService(
     const other = busyJob()
     if (other) return { ok: false, reason: `Another export is running (${other.rec.libraryName}).` }
     const ids = [...new Set([...req.selection, ...(req.prefetch ?? [])].map((s) => s.animeId))]
+    // The picked owner must be connected and offered (#714).
+    if (req.owner !== undefined && !owners().some((a) => a.provider === req.owner)) {
+      return { ok: false, reason: OWNER_NOT_OFFERED }
+    }
     const { titles, resolved } = await buildTree(source, ids)
     const t = await classify(req.target, req)
     if (t.blocked) return { ok: false, reason: t.blocked }
-    const owner = account()
+    const owner = t.writeOwner
     if (t.mode === 'metadata' && owner === null) return { ok: false, reason: LOG_IN_FOR_METADATA }
     if (t.kind === 'upgrade' && !req.confirmTakeover) {
       return { ok: false, reason: takeoverUnconfirmed(t.libraryName) }
@@ -872,7 +934,9 @@ export function createSharedLibraryExportService(
             ? `This drive has ${t.ownerNickname}'s library; this export went into a new library next to it.`
             : t.kind === 'claimed'
               ? `You use ${t.ownerNickname}'s library on this drive through a claim; this export went into a new library next to it.`
-              : `This drive has ${t.ownerNickname}'s library; this export added to '${t.libraryName}' next to it.`,
+              : t.kind === 'other-owner'
+                ? `Your library owned by ${t.ownerNickname} is on this drive; this export went into a new library next to it.`
+                : `This drive has ${t.ownerNickname}'s library; this export added to '${t.libraryName}' next to it.`,
       error: null,
       ...(t.mode === 'metadata' ? { mode: 'metadata' as const, phase: 'copy' as const } : {})
     }

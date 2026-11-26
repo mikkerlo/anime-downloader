@@ -1181,16 +1181,17 @@ describe('a layout v2 library (#713): foreign, never written', () => {
   // The v2 `userId` equals OWNER's Shikimori id numerically: still foreign.
   const ANILIST = { provider: 'anilist', userId: String(OWNER.id) }
 
+  // With no account and no claim it is `videos`, as a v1 library is (#714).
   it.each([
-    ['logged in as the numerically equal Shikimori user', OWNER],
-    ['with no account', null]
-  ] as const)('%s: runAll skips it as foreign', async (_l, user) => {
+    ['logged in as the numerically equal Shikimori user', OWNER, 'foreign'],
+    ['with no account', null, 'videos']
+  ] as const)('%s: runAll skips it as foreign', async (_l, user, role) => {
     const { fsWritesUnder } = await import('../helpers/attached-library')
     const v2 = await makeLibrary({ libraryId: LIBS[0], tracker: ANILIST })
     const pc = makePc({ user, store: { watchProgress: localRows([1, 2], T0) } })
     pc.offline.value = true
     await pc.attach(v2.root)
-    expect(pc.attached.get(v2.libraryId)?.role).toBe('foreign')
+    expect(pc.attached.get(v2.libraryId)?.role).toBe(role)
     const seen = fsWritesUnder(v2.root)
     const r = await pc.runner.runAll('manual')
     expect(r.libraries.find((l) => l.libraryId === v2.libraryId)).toMatchObject({
@@ -1213,6 +1214,166 @@ describe('a layout v2 library (#713): foreign, never written', () => {
     expect(r).toMatchObject({ drive: 'skipped', driveReason: 'foreign' })
     expect(seen()).toEqual([])
   })
+})
+
+// --- "mine" for any connected account (#714) ---------------------------------------------------
+
+describe('"mine" for any connected account (#714): the leg stays the owner’s tracker', () => {
+  const AL = { id: 9, nickname: 'al', avatar: null }
+  const ALIST_9 = { provider: 'anilist', userId: '9' }
+
+  /** A v1 library rewritten by hand as v2 with a `provider: 'shikimori'` owner (the writer never makes one). */
+  async function handV2Shikimori(libraryId: string): Promise<{ root: string; libraryId: string }> {
+    const lib = await makeLibrary({ libraryId })
+    const file = path.join(lib.root, '.anime-dl', 'manifest.json')
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const owner = { provider: 'shikimori', userId: String(OWNER.id), nickname: 'o' }
+    fs.writeFileSync(file, JSON.stringify({ ...m, layoutVersion: 2, layoutMinor: 0, owner }))
+    return lib
+  }
+
+  it('a Shikimori-owned library on a Shikimori + AniList PC (AniList primary): owner, one Shikimori leg, nothing queued to AniList', async () => {
+    const { fakeApi } = await import('../helpers/fake-shikimori')
+    server.set(MAL, { score: 6 }, T0)
+    const lib = await makeLibrary({ libraryId: LIBS[0] })
+    const pc = makePc({ store: { anilistUser: AL, trackerPrimary: 'anilist' } })
+    await pc.attach(lib.root)
+    expect(pc.attached.get(lib.libraryId)).toMatchObject({
+      role: 'owner',
+      ownerProvider: 'shikimori'
+    })
+    const r = await pc.runner.runAll('manual')
+    await settleDrain(pc)
+    expect(r.libraries).toEqual([
+      expect.objectContaining({ libraryId: lib.libraryId, drive: 'ok', shikimori: 'ok' })
+    ])
+    expect(fakeApi.getUserAnimeRates).toHaveBeenCalledTimes(1)
+    expect(pc.store.get('anilistUpdateQueue') ?? []).toEqual([])
+  })
+
+  it('the owner’s tracker absent (only AniList connected): foreign, and its bases and pending raises stay byte-identical', async () => {
+    const lib = await makeLibrary({ libraryId: LIBS[0], doc: titleDoc({ rate: r({ score: 8 }) }) })
+    // AniList user OWNER.id: numerically the library's Shikimori owner, still not it.
+    const pc = makePc({ user: null, store: { anilistUser: { ...AL, id: OWNER.id } } })
+    await pc.attach(lib.root)
+    await seedBase(pc, lib.libraryId, lib.root, titleDoc({ rate: r({ score: 6 }) }))
+    await seedShikiBase(pc, { score: 6 })
+    seedPending(pc, { [MAL]: { score: pend(8, T0, lib.libraryId, [6, T0]) } })
+    const files = [
+      path.join(pc.userData, 'sync-bases', `library-${lib.libraryId}.json`),
+      path.join(pc.userData, 'sync-bases', `shikimori-${OWNER.id}.json`),
+      path.join(pc.userData, 'sync-pending', `${OWNER.id}.json`)
+    ]
+    const before = files.map((f) => fs.readFileSync(f))
+    expect(pc.attached.get(lib.libraryId)?.role).toBe('foreign')
+    const res = await pc.runner.runAll('manual')
+    expect(res.libraries[0]).toMatchObject({ drive: 'skipped', driveReason: 'foreign' })
+    expect(files.map((f) => fs.readFileSync(f))).toEqual(before)
+  })
+
+  it.each([
+    ['an AniList-owned v2 library', 'anilist'],
+    ['a hand-written v2 provider: shikimori library', 'shikimori']
+  ] as const)('%s with role owner adds nothing to the Shikimori leg', async (_l, provider) => {
+    const { fakeApi } = await import('../helpers/fake-shikimori')
+    const v2 =
+      provider === 'anilist'
+        ? await makeLibrary({ libraryId: LIBS[0], tracker: ALIST_9 })
+        : await handV2Shikimori(LIBS[0])
+    const pc = makePc({ store: { anilistUser: AL } })
+    await pc.attach(v2.root)
+    expect(pc.attached.get(v2.libraryId)).toMatchObject({
+      role: 'owner',
+      ownerProvider: provider,
+      layoutVersion: 2
+    })
+    const res = await pc.runner.runAll('manual')
+    expect(res.libraries).toEqual([
+      expect.objectContaining({
+        libraryId: v2.libraryId,
+        drive: 'skipped',
+        driveReason: 'foreign',
+        shikimori: 'skipped'
+      })
+    ])
+    // No Shikimori leg ran: nothing was in its scope.
+    expect(fakeApi.getUserAnimeRates).not.toHaveBeenCalled()
+  })
+
+  it('next to a v1 library whose Shikimori leg runs, the v2 library’s result carries no Shikimori leg', async () => {
+    server.set(MAL, { score: 6 }, T0)
+    const v1 = await makeLibrary({ libraryId: LIBS[0] })
+    const v2 = await makeLibrary({ libraryId: LIBS[1], tracker: ALIST_9 })
+    const pc = makePc({ store: { anilistUser: AL } })
+    await pc.attach(v1.root)
+    await pc.attach(v2.root)
+    const res = await pc.runner.runAll('manual')
+    await settleDrain(pc)
+    const of = (id: string) => res.libraries.find((l) => l.libraryId === id)
+    expect(of(v1.libraryId)).toMatchObject({ shikimori: 'ok' })
+    expect(of(v2.libraryId)).toMatchObject({ drive: 'skipped', shikimori: 'skipped' })
+  })
+
+  it('a v2 owner library holding the title is picked by neither runTitle nor the conflicts list', async () => {
+    const v2 = await makeLibrary({ libraryId: LIBS[0], tracker: ALIST_9 })
+    const pc = makePc({ store: { anilistUser: AL } })
+    pc.offline.value = true
+    await pc.attach(v2.root)
+    expect(pc.attached.get(v2.libraryId)?.role).toBe('owner')
+    const run = await pc.runner.runTitle(ANIME, 'manual')
+    expect(run.libraries).toEqual([])
+    const dir = path.join(pc.userData, 'sync-state')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'conflicts.json'),
+      JSON.stringify({
+        version: 1,
+        records: [
+          {
+            id: 'c1',
+            ownerScope: OWNER.id,
+            animeId: ID,
+            fieldPath: 'rate.score',
+            parties: { local: 7, shikimori: 8 },
+            bases: {},
+            at: {},
+            suggestion: null,
+            reason: 'changed on both sides, to different values',
+            firstSeenRunId: 'r1',
+            lastSeenRunId: 'r1'
+          }
+        ]
+      })
+    )
+    const [item] = await pc.runner.listConflicts()
+    expect(item.libraries).toEqual([])
+  })
+
+  it.each([
+    ['anilistUser', AL],
+    ['myanimelistUser', { ...AL, nickname: 'mal' }]
+  ])(
+    'a claim is dropped on a %s login: the next run sees foreign, and the library base is untouched',
+    async (key, user) => {
+      const lib = await makeLibrary({
+        libraryId: LIBS[0],
+        doc: titleDoc({ rate: r({ score: 8 }) })
+      })
+      const pc = makePc({ user: null, installId: 'pc-claim' })
+      await pc.attach(lib.root, { claim: true })
+      await seedBase(pc, lib.libraryId, lib.root, titleDoc({ rate: r({ score: 6 }) }))
+      const base = path.join(pc.userData, 'sync-bases', `library-${lib.libraryId}.json`)
+      const before = fs.readFileSync(base)
+      pc.store.set(key, user)
+      const res = await pc.runner.runAll('login')
+      expect(res.libraries[0]).toMatchObject({ drive: 'skipped', driveReason: 'foreign' })
+      expect(pc.attached.get(lib.libraryId)?.role).toBe('foreign')
+      expect(
+        (pc.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>)[lib.libraryId]
+      ).not.toHaveProperty('claim')
+      expect(fs.readFileSync(base)).toEqual(before)
+    }
+  )
 })
 
 // --- Forget (owner decision 8) -----------------------------------------------------------------

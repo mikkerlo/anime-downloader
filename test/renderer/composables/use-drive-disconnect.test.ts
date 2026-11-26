@@ -26,6 +26,8 @@ function lib(): AttachedLibraryInfo {
     name: 'Fixture library',
     mode: 'metadata',
     ownerNickname: 'owner',
+    ownerProvider: 'shikimori',
+    layoutVersion: 1,
     role: 'owner',
     access: 'read-write',
     available,

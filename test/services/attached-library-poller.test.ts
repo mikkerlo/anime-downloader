@@ -45,6 +45,7 @@ function world(known: Record<string, { root: string; available: boolean }>) {
     libraryId: drive.get(root)!,
     name: `Lib ${drive.get(root)!.slice(0, 4)}`,
     ownerNickname: 'nick',
+    ownerProvider: 'shikimori',
     mode: 'metadata',
     titleCount: 1,
     identity: 'choose'

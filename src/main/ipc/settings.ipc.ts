@@ -4,6 +4,39 @@ import { ROOT_KEYS } from '@shared/storage-roots'
 import type { AppDeps } from './index'
 
 /**
+ * Tracker keys (#690, epic #688) that only their own channels may write. The
+ * credential keys and `myanimelistClientSecret` hold the credential vault's
+ * blob, so a renderer `autoSave` would store a secret in plain text over it;
+ * `myanimelistClientConfig` is written with its secret by one call; and the
+ * three choices have side effects their setters run. The channels named for
+ * them arrive in #695 (T3b) and #696 (T3c); until then the names are plain
+ * strings, and T3c switches them to the `CHANNELS` constants.
+ */
+const TRACKER_SET_DENIED = [
+  'anilistCredentials',
+  'myanimelistCredentials',
+  'myanimelistClientConfig',
+  'myanimelistClientSecret',
+  'trackerPrimary',
+  'trackerMirror',
+  'trackerFeatureSource'
+] as const
+
+/**
+ * Tracker keys `get-setting` refuses too: the vault's blobs. With the plain
+ * fallback (no keyring) a blob holds the token in clear, so an open read would
+ * hand the renderer the AniList token. `myanimelistClientConfig` (only the
+ * client ID) and the three choices stay readable.
+ */
+const GET_DENIED_KEYS = [
+  'anilistCredentials',
+  'myanimelistCredentials',
+  'myanimelistClientSecret'
+] as const
+
+const TRACKER_AUTH_CHANNELS = 'tracker:begin-auth and tracker:complete-auth, or tracker:logout'
+
+/**
  * The keys `set-setting` refuses, derived from `ROOT_KEYS` rather than re-typed
  * (#450).
  *
@@ -20,7 +53,7 @@ import type { AppDeps } from './index'
  * one. Spread from `ROOT_KEYS` so a fourth root key cannot be added to the
  * pickers' list and miss this one.
  */
-const DENIED_KEYS = [...ROOT_KEYS, 'storageMode'] as const
+const DENIED_KEYS = [...ROOT_KEYS, 'storageMode', ...TRACKER_SET_DENIED] as const
 
 /**
  * The channel that owns each refused write, named in the error so the mistake
@@ -48,7 +81,14 @@ const OWNING_CHANNEL: Readonly<Record<(typeof DENIED_KEYS)[number], string>> = {
   coldStorageDir: 'storage:pick-cold-dir, or storage:clear-root to clear it',
   // Refused outright while the manager has root-bound work, then re-synced
   // (#443) — the mode is an input to `getDownloadDir()`.
-  storageMode: 'storage:set-mode'
+  storageMode: 'storage:set-mode',
+  anilistCredentials: TRACKER_AUTH_CHANNELS,
+  myanimelistCredentials: TRACKER_AUTH_CHANNELS,
+  myanimelistClientConfig: 'tracker:set-client-config',
+  myanimelistClientSecret: 'tracker:set-client-config',
+  trackerPrimary: 'tracker:set-primary',
+  trackerMirror: 'tracker:set-mirror',
+  trackerFeatureSource: 'tracker:set-feature-source'
 }
 
 /**
@@ -71,8 +111,19 @@ const REFUSED: ReadonlyMap<string, string> = new Map(
   DENIED_KEYS.map((key): [string, string] => [key, OWNING_CHANNEL[key]])
 )
 
+/**
+ * The read-side refusals, looked up by the first path segment for the same
+ * reason as `REFUSED`: `get('anilistCredentials.data')` would read the blob's
+ * payload.
+ */
+const READ_REFUSED: ReadonlyMap<string, string> = new Map(
+  GET_DENIED_KEYS.map((key): [string, string] => [key, OWNING_CHANNEL[key]])
+)
+
 export function register({ store, coldStorageService }: AppDeps): void {
   ipcMain.handle(CHANNELS.GET_SETTING, (_event, key: string) => {
+    const owner = READ_REFUSED.get(key.split('.')[0])
+    if (owner) throw new Error(`get-setting refuses '${key}' — it holds a secret owned by ${owner}`)
     if (key === 'downloadDir') return coldStorageService.getDownloadDir()
     return store.get(key)
   })
@@ -83,10 +134,10 @@ export function register({ store, coldStorageService }: AppDeps): void {
     // and staying invisible is how the `autoSave('downloadDir')` echo survived
     // until #449. Throwing rejects the `invoke`, which surfaces as an
     // unhandled rejection at the `void` call sites and throws into the `await`
-    // ones. Only these four keys — and the dot paths that land *on* them, see
-    // `REFUSED` — ever throw, so no unrelated setting changes behaviour, and
-    // the write side alone: `get-setting` still reads them all (the Storage
-    // tab reads `storageMode` through it).
+    // ones. Only these four keys and the tracker keys — and the dot paths that
+    // land *on* them, see `REFUSED` — ever throw, so no unrelated setting
+    // changes behaviour. `get-setting` still reads the four (the Storage tab
+    // reads `storageMode` through it); it refuses only the vault's blobs.
     const owner = REFUSED.get(key.split('.')[0])
     if (owner) throw new Error(`set-setting refuses '${key}' — use ${owner}`)
     store.set(key, value)

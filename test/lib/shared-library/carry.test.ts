@@ -615,7 +615,15 @@ describe('paths are checked at use, not at read', () => {
 })
 
 describe('the allow-list', () => {
-  const FORBIDDEN = ['token', 'syncplayPassword', 'shikimoriCredentials']
+  const FORBIDDEN = [
+    'token',
+    'syncplayPassword',
+    'shikimoriCredentials',
+    'anilistCredentials',
+    'myanimelistCredentials',
+    'myanimelistClientConfig',
+    'myanimelistClientSecret'
+  ]
   const scan = (root: string): void => {
     for (const f of ['manifest.json', 'state.json']) {
       const bytes = readText(root, f)
@@ -658,6 +666,42 @@ describe('the allow-list', () => {
     await writeState(root, r.state!.doc, OWNER, 4)
     scan(root)
     expect(readJson(root, 'state.json').doc.deviceNames).toEqual({ a: 1 })
+  })
+
+  // Red on 6.1.0, where `copyUnknown` carried these names as unknown fields (#690).
+  it('carried plain keys: the tracker secrets planted in the drive’s doc and title levels don’t reach the bytes', async () => {
+    const s = state(4, 7) as any
+    s.doc.anilistCredentials = { v: 1, enc: 'plain', data: '{"access_token":"al"}' }
+    s.doc.myanimelistClientConfig = { clientId: 'cid' }
+    s.doc.titles['101'].myanimelistCredentials = { v: 1, enc: 'plain', data: 'mal' }
+    s.doc.titles['101'].watch['1'].myanimelistClientSecret = 'secret'
+    s.doc.deviceNames = { a: 1 }
+    const root = tree({ 'manifest.json': manifest(7, 4), 'state.json': s })
+    const r = await ok(root)
+    await writeState(root, r.state!.doc, OWNER, 4)
+    scan(root)
+    expect(readJson(root, 'state.json').doc.deviceNames).toEqual({ a: 1 })
+  })
+
+  it('a store holding the tracker secrets never yields them', async () => {
+    const root = fixture('golden-metadata')
+    const r = await ok(root)
+    const store = new InMemoryStorage({
+      installId: 'pc-owner',
+      anilistCredentials: { v: 1, enc: 'plain', data: '{"access_token":"al"}' },
+      myanimelistCredentials: { v: 1, enc: 'plain', data: '{"access_token":"mal"}' },
+      myanimelistClientConfig: { clientId: 'cid' },
+      myanimelistClientSecret: { v: 1, enc: 'plain', data: '"secret"' },
+      syncMeta: { titles: {}, rates: {} }
+    })
+    const doc = projectSyncDoc(store, ['101'], { resolveEpisodeFile: () => null })
+    await writeState(root, { ...doc, anilistCredentials: 'again' }, OWNER, 4)
+    const m = (await ok(root)).manifest
+    ;(m as unknown as Record<string, unknown>).myanimelistClientSecret = 'secret'
+    ;(m.items[0] as unknown as Record<string, unknown>).myanimelistClientConfig = 'cid'
+    ;(m.owner as unknown as Record<string, unknown>).anilistCredentials = 'x'
+    await writeManifest(root, m, OWNER, r.manifest.generation + 1)
+    scan(root)
   })
 })
 

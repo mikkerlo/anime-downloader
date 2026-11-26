@@ -66,16 +66,29 @@ export function stampMembership(
 }
 
 /**
- * Stamps a rate clock for each field whose `after` differs from `before`, keyed
- * `"<ownerId>:<malId>"`. `ownerId` is the Shikimori user the caller captured
- * with its request, never the store's user at stamp time: an account switch
- * during the request's awaits must not move the clock to the new account. With
- * nothing changed it writes nothing.
+ * The `syncMeta.rates` key for one tracker account's rate of one title.
+ * Shikimori keeps its 6.x key, `"<userId>:<malId>"`; AniList and MAL use
+ * `"<provider>:<userId>:<malId>"`. The two can't collide, because a Shikimori
+ * key always starts with a digit (#690).
+ */
+export function rateClockKey(
+  trackerId: TrackerId,
+  userId: number | string,
+  malId: number | string
+): string {
+  return trackerId === 'shikimori' ? `${userId}:${malId}` : `${trackerId}:${userId}:${malId}`
+}
+
+/**
+ * Stamps a rate clock for each field whose `after` differs from `before`,
+ * under `rateKey` (`rateClockKey`). The caller builds the key from the user it
+ * captured with its request, never the store's user at stamp time: an account
+ * switch during the request's awaits must not move the clock to the new
+ * account. With nothing changed it writes nothing.
  */
 export function stampRateClocks(
   store: StorageService,
-  ownerId: number,
-  malId: number,
+  rateKey: string,
   before: RateFieldValues,
   after: RateFieldValues,
   now = Date.now()
@@ -86,7 +99,7 @@ export function stampRateClocks(
   updateSyncMeta(
     store,
     (meta) => {
-      const clocks = (meta.rates[`${ownerId}:${malId}`] ??= {})
+      const clocks = (meta.rates[rateKey] ??= {})
       for (const field of changed) {
         const { at, origin } = advanceClock(clock, clocks[field])
         clocks[field] = { value: after[field], at, origin }

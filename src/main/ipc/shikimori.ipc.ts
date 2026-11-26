@@ -27,7 +27,7 @@ import {
 } from '../lib/shikimori-rate-cache'
 import { NO_RATE_BEFORE, nextWatchedRate, rateValues, type RateValues } from '../lib/shikimori-rate'
 import { OfflineError } from '../lib/net'
-import { stampRateClocks } from '../store/sync-meta'
+import { rateClockKey, stampRateClocks } from '../store/sync-meta'
 import {
   CALENDAR_CACHE_TTL_MS,
   type CachedCalendar,
@@ -558,7 +558,12 @@ export function register({
           rewatches
         )
     if (stamp)
-      stampRateClocks(store, userId, malId, existing ? rateValues(existing) : NO_RATE_BEFORE, after)
+      stampRateClocks(
+        store,
+        rateClockKey('shikimori', userId, malId),
+        existing ? rateValues(existing) : NO_RATE_BEFORE,
+        after
+      )
 
     // The write landed on the previous account; the cache is the new one's.
     if (currentUserId() !== userId) return updatedRate
@@ -623,7 +628,8 @@ export function register({
     } satisfies shikimori.ShikiUserRate
     const entry = { malId, rateId: basis.rateId, before: basis.before, after, queuedAt: Date.now() }
     // Keyed by the owner the edit was made for, parked or live.
-    if (stamp) stampRateClocks(store, owner.id, malId, basis.before, after)
+    if (stamp)
+      stampRateClocks(store, rateClockKey('shikimori', owner.id, malId), basis.before, after)
 
     if (currentUserId() !== owner.id) {
       store.set(

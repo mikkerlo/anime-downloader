@@ -66,7 +66,27 @@ export const PERSISTED_STORE_KEYS = [
   'workOffline',
   'attachedLibraries',
   'sharedLibraryPromptDismissed',
-  'prepareOfflineLastRun'
+  'prepareOfflineLastRun',
+  'anilistCredentials',
+  'anilistUser',
+  'anilistSessionExpired',
+  'anilistUserRates',
+  'anilistUpdateQueue',
+  'anilistParkedQueues',
+  'anilistAnimeDetails',
+  'anilistIdMap',
+  'myanimelistCredentials',
+  'myanimelistUser',
+  'myanimelistSessionExpired',
+  'myanimelistUserRates',
+  'myanimelistUpdateQueue',
+  'myanimelistParkedQueues',
+  'myanimelistAnimeDetails',
+  'myanimelistClientConfig',
+  'myanimelistClientSecret',
+  'trackerPrimary',
+  'trackerMirror',
+  'trackerFeatureSource'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

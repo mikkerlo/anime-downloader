@@ -32,7 +32,13 @@ export const CAPS = {
 export const FORBIDDEN_FIELDS: ReadonlySet<string> = new Set([
   'token',
   'shikimoriCredentials',
-  'syncplayPassword'
+  'syncplayPassword',
+  // The tracker secrets (#690). Exact names only: a generic name would strip
+  // a future minor's legitimate field.
+  'anilistCredentials',
+  'myanimelistCredentials',
+  'myanimelistClientConfig',
+  'myanimelistClientSecret'
 ])
 
 export const READ_ONLY_MESSAGES: Record<SharedLibraryReadOnlyReason, string> = {

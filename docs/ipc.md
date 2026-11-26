@@ -16,7 +16,7 @@ other subscriber on the channel. There are no `off*` methods on `window.api`.
 
 | Subscription kind | Owner | Disposal |
 |---|---|---|
-| Cross-view (download/scan-merge/fix-metadata progress, Shikimori rate/refresh/sync/details/offline-queue, ffmpeg/fpcalc/update status, syncplay connection-status/room-users) | Pinia store (`useDownloadsStore`, `useShikimoriStore`, `useSettingsStore`, `useSyncplayStore`) | Lifetime-scoped — singleton, never disposed |
+| Cross-view (download/scan-merge/fix-metadata progress, tracker rate/refresh/sync/offline-queue/accounts, Shikimori profile/friends/recommendations/details, ffmpeg/fpcalc/update status, syncplay connection-status/room-users) | Pinia store (`useDownloadsStore`, `useTrackersStore`, `useShikimoriStore`, `useSettingsStore`, `useSyncplayStore`) | Lifetime-scoped — singleton, never disposed |
 | Anime-specific (file-episodes-changed, skip-detector progress/signature, chapter-inject progress, cleanup-prompt toast) | The consuming component | `onBeforeUnmount` / `onUnmounted` |
 | Player-instance (player-stream chunks/end/error/progress/subtitles, syncplay remote-state/room-event/trace/remote-episode-change) | `PlayerView.vue` | `onBeforeUnmount` |
 

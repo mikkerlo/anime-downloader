@@ -28,6 +28,10 @@ type Api = {
   onShikimoriAnimeDetailsUpdated: (cb: (data: unknown) => void) => Unsubscribe
   onShikimoriOfflineQueueChanged: (cb: (data: unknown) => void) => Unsubscribe
   onShikimoriSyncStatus: (cb: (data: unknown) => void) => Unsubscribe
+  onTrackerRateUpdated: (cb: (data: unknown) => void) => Unsubscribe
+  onTrackerRatesRefreshed: (cb: (data: unknown) => void) => Unsubscribe
+  onTrackerOfflineQueueChanged: (cb: (data: unknown) => void) => Unsubscribe
+  onTrackerSyncStatus: (cb: (data: unknown) => void) => Unsubscribe
 }
 
 function noopSub(): Unsubscribe {
@@ -42,7 +46,11 @@ const STORE_BROADCAST_STUBS: Partial<Api> = {
   onShikimoriRecommendationsRefreshed: noopSub,
   onShikimoriAnimeDetailsUpdated: noopSub,
   onShikimoriOfflineQueueChanged: noopSub,
-  onShikimoriSyncStatus: noopSub
+  onShikimoriSyncStatus: noopSub,
+  onTrackerRateUpdated: noopSub,
+  onTrackerRatesRefreshed: noopSub,
+  onTrackerOfflineQueueChanged: noopSub,
+  onTrackerSyncStatus: noopSub
 }
 
 function setApi(api: Partial<Api>): void {

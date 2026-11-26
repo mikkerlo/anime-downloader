@@ -849,6 +849,41 @@ describe('the export owner picker (#714)', () => {
     })
   })
 
+  // PR #730 review: gated on the library, not the request. A Videos only
+  // export at an own v2 library went to `own-metadata`: written on a
+  // Shikimori + AniList PC, refused ("Log in to Shikimori…") on an AniList-only one.
+  it.each([
+    ['Shikimori + AniList', {}],
+    ['AniList only', { shikimori: false }]
+  ] as const)(
+    '%s PC, Videos only at an own v2 AniList library: other-owner next to it, the v2 library byte-identical',
+    async (_l, users) => {
+      pc(false, users)
+      const v2 = path.join(env.drive, 'Trip')
+      await seedLibrary(v2, {
+        libraryId: OTHER_LIB,
+        name: 'Trip',
+        owner: { provider: 'anilist', userId: String(AL.id), nickname: 'al' }
+      })
+      const before = scan(v2)
+      const p = await plan({ target: v2, mode: 'videos' })
+      expect(p.target).toMatchObject({
+        kind: 'other-owner',
+        mode: 'videos',
+        root: path.join(env.drive, 'Trip (2)'),
+        ownerNickname: 'al',
+        owner: { provider: 'anilist', nickname: 'al' }
+      })
+      await startOk({ target: v2, mode: 'videos' })
+      expect(scan(v2)).toEqual(before)
+      expect(manifestAt(path.join(env.drive, 'Trip (2)'))).toMatchObject({
+        layoutVersion: 1,
+        mode: 'videos',
+        owner: null
+      })
+    }
+  )
+
   it('start refuses an owner that isn’t offered, or isn’t connected', async () => {
     pc(false)
     const res = await env.svc.start({

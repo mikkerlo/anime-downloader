@@ -159,6 +159,9 @@ export const SEPARATE_NEWER_MINOR =
 /** `other-owner`: the user's own library under another account is at the picked folder. */
 export const otherOwnerTarget = (tracker: string | null, picked: string): string =>
   `Your ${tracker ? `${tracker} ` : ''}library is here; this creates a separate library owned by ${picked} next to it.`
+/** `other-owner` with a Videos only export: no owner is picked, the export just goes next to it. */
+export const otherOwnerVideosTarget = (tracker: string | null): string =>
+  `Your ${tracker ? `${tracker} ` : ''}library is here. Your export goes into a new library next to it.`
 /** The With metadata help for an owner's tracker; Shikimori's is `METADATA_HELP`. */
 export const metadataHelp = (tracker: string): string =>
   `Includes watch progress, ${tracker} status, stars and priority for these titles only. Never includes passwords or tokens.`

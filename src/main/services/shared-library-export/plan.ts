@@ -539,16 +539,11 @@ export async function classifyTarget(
     const kind = opts.claimed?.(m.libraryId) ? 'claimed' : 'foreign'
     return search(kind, { ownerNickname: m.owner.nickname || 'another user' })
   }
-  if (
-    m !== null &&
-    m.mode === 'metadata' &&
-    m.owner !== null &&
-    mode === 'metadata' &&
-    pick !== null &&
-    !isPicked(m)
-  ) {
+  if (m !== null && m.mode === 'metadata' && m.owner !== null && !isPicked(m)) {
     // Another of this PC's accounts owns it (#714): never written, and its
-    // owner never changed; the picked owner's library goes next to it.
+    // owner never changed; the export goes into a library next to it. Gated on
+    // the library, not the request: a Videos only export would otherwise be
+    // routed into it as `own-metadata`, and a v2 one written before #715.
     return search('other-owner', {
       ownerNickname: m.owner.nickname || 'another account',
       targetOwner: m.owner

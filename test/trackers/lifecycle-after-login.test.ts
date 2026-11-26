@@ -55,6 +55,25 @@ describe('afterLogin (#714)', () => {
     expect(dep).not.toHaveBeenCalled()
   })
 
+  // PR #730 review: once #703 / #702 register AniList's or MAL's steps, the
+  // login run must not go silent with them.
+  it('a tracker with registered steps but no afterLogin of its own still runs it', async () => {
+    const dep = vi.fn()
+    const r = rig(dep)
+    const drain = vi.fn()
+    r.lifecycle.setSteps('anilist', {
+      startTimer: () => {},
+      drain,
+      stopTimer: () => {},
+      broadcastStatus: () => {},
+      broadcastQueue: () => {}
+    })
+    await r.lifecycle.completeLogin('anilist', load(9))
+    expect(drain).toHaveBeenCalledTimes(1)
+    expect(dep).toHaveBeenCalledTimes(1)
+    expect(dep).toHaveBeenCalledWith('anilist')
+  })
+
   it('a logout never runs it', () => {
     const dep = vi.fn()
     const r = rig(dep)

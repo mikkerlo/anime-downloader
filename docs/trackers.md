@@ -556,9 +556,11 @@ pending-verifier key exists.
   `sync.*` calls, the prefetch abort and snapshots in the reset, and the Shared
   Library login run). Any other tracker uses its sync instance, looked up
   through `services/trackers` at call time; with no instance every step is
-  skipped, never thrown. Its `afterLogin` is the lifecycle's `afterLogin` dep,
-  which `index.ts` sets to the same Shared Library login run (#714), so an
-  AniList or MAL login drops a claim and merges that account's libraries too.
+  skipped, never thrown. Steps that set no `afterLogin`, registered or not,
+  get the lifecycle's `afterLogin` dep, which `index.ts` sets to the same
+  Shared Library login run (#714), so an AniList or MAL login drops a claim
+  and merges that account's libraries too, also once their routers register
+  steps; a registered `afterLogin` (Shikimori's) wins.
 - **Logout** cancels any attempt held for the tracker, parks the live queue
   under the user (`pending: 'keep'`, the default) or drops it (`'discard'`),
   clears the credentials (`vault.commit(key, null)` for AniList and MAL: no

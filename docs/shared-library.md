@@ -216,7 +216,8 @@ The user picks titles, translations and episodes, a folder and a library name, a
 |---|---|
 | No library | `new`: create `<folder>/<name>/` with `mode: 'videos'` and `owner: null` |
 | A Videos-only library (`owner: null`), made by any PC | `add`: anyone may add to it, a PC with no account included |
-| A With metadata library owned by any of this PC's accounts | `own-metadata`: routed to [With metadata](#export-with-metadata-586) (#586), since a Videos only add would widen `titles[]` with no state; its owner is kept |
+| A With metadata library owned by this PC's offered account (Shikimori until #715) | `own-metadata`: routed to [With metadata](#export-with-metadata-586) (#586), since a Videos only add would widen `titles[]` with no state; its owner is kept |
+| A With metadata library owned by another of this PC's accounts (#714) | `other-owner`: never written, as `foreign` below |
 | A With metadata library this PC uses through a claim | `claimed`: never written, as `foreign` below, with "You use this library through a claim. Your export goes into a new library next to it." |
 | A With metadata library with any other owner | `foreign`: never written. The siblings `<name>`, `<name> (2)`, … are checked in order: the first Videos-only library among them (the one an earlier export made; anyone may add to it) is added to, as `add` with the owner's nickname, so a re-export copies only what's new; the first free name gets a new library; any other library or plain folder is skipped |
 | A library this version can't write (a newer major, over a cap, interrupted) | `read-only`: blocked with the reader's message |
@@ -250,6 +251,7 @@ The manifest is written through `writeManifest` every 10 items and at the end (a
 
 - **A re-export keeps the existing owner.** A library any of this PC's accounts owns is `own-metadata`, and its owner never changes.
 - **A different pick on the user's own library is `other-owner`**, when the picked folder is that library itself: never written, and the picked account's library goes next to it through the sibling search below, where "the user's own library" means owned by the **picked** account (the same owner in the same layout, so a hand-written v2 `provider: 'shikimori'` library is never a Shikimori pick's). The dialog says "Your <tracker> library is here; this creates a separate library owned by <picked account> next to it." On a parent folder the default name follows the pick, so a different pick usually lands on a different root: a plain `new`.
+- **`other-owner` is decided by the library, not the request.** A *Videos only* export at a library another of this PC's accounts owns (no pick, or one that isn't offered: an AniList-only PC before #715) is `other-owner` too, and goes next to it ("Your <tracker> library is here. Your export goes into a new library next to it."), so a v2 library is never routed to `own-metadata` and written. A library whose owner the pick keeps is still `own-metadata`.
 
 **Scope and privacy.** The state holds only the titles in the library's `titles[]`, never the whole history: S9's library leg projects exactly that scope (S4's `projectSyncDoc`) and writes the drive's other titles back as they were. Tokens and credentials never leave the PC: S5's writer serializes `state.json` through its schema walk, an allow-list (see [Never on the drive](#never-on-the-drive)). A test scans every file the export writes for `token`, `shikimoriCredentials` and `syncplayPassword`.
 

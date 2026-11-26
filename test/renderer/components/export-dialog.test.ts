@@ -706,6 +706,24 @@ describe('ExportDialog owner picker (#714)', () => {
     expect(line).not.toContain("me's library")
   })
 
+  it('other-owner in Videos only: its own line, with no owner named (PR #730 review)', async () => {
+    const w = await open(
+      metadataTarget({
+        kind: 'other-owner',
+        ownerNickname: 'al',
+        owner: { provider: 'anilist', nickname: 'al' },
+        root: '/drive/Trip (2)'
+      }),
+      true,
+      null,
+      { canExportMetadata: false, nickname: null, owners: [], defaultOwner: null }
+    )
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe(
+      'Your AniList library is here. Your export goes into a new library next to it.'
+    )
+    expect(startButton(w).disabled).toBe(false)
+  })
+
   it('an upgrade with an AniList owner: the v2 warning and "Create a separate library instead", which re-plans with sibling', async () => {
     const w = await open(
       metadataTarget(

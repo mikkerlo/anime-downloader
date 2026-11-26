@@ -23,6 +23,7 @@ import {
   metadataHelp,
   metadataLibraryName,
   otherOwnerTarget,
+  otherOwnerVideosTarget,
   overflowWarning,
   ownerOptionLabel,
   preflightForSelection,
@@ -222,6 +223,7 @@ const targetLine = computed(() => {
       return CLAIMED_TARGET;
     case 'other-owner': {
       // The user's own library under another account (#714), never the foreign line.
+      if (t.mode === 'videos') return otherOwnerVideosTarget(trackerName(t.owner?.provider));
       const picked = selectedOption.value;
       const tracker = trackerName(picked?.provider);
       return otherOwnerTarget(

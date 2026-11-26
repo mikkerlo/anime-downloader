@@ -69,19 +69,26 @@ export async function makeLibrary(
     libraryId?: string
     mode?: SharedLibraryMode
     ownerId?: number
+    // A layout v2 owner (#713), written by a test actor holding that account.
+    tracker?: { provider: string; userId: string }
   } = {}
 ): Promise<{ root: string; libraryId: string }> {
   const root = path.join(tempRoot(), 'Lib')
   const libraryId = opts.libraryId ?? LIB_A
   const mode = opts.mode ?? 'metadata'
   const ownerId = opts.ownerId ?? OWNER.id
-  const actor = ownerActor('pc-owner', ownerId)
+  const actor: SharedLibraryActor = opts.tracker
+    ? { ...ownerActor('pc-owner', ownerId), shikimoriUserId: null, trackerAccounts: [opts.tracker] }
+    : ownerActor('pc-owner', ownerId)
+  const owner = opts.tracker
+    ? { ...opts.tracker, nickname: 'tracker' }
+    : { shikimoriId: ownerId, nickname: `u${ownerId}` }
   await createLibrary(
     root,
     {
       libraryId,
       name: `Drive ${libraryId.slice(0, 4)}`,
-      owner: mode === 'metadata' ? { shikimoriId: ownerId, nickname: `u${ownerId}` } : null,
+      owner: mode === 'metadata' ? owner : null,
       mode,
       titles: (opts.titles ?? [ANIME]).map((animeId) => ({ animeId, name: `#${animeId}` })),
       items: [],

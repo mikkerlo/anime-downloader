@@ -43,7 +43,9 @@ export function shikimoriOwnerId(owner: AnyOwner): number | null {
 export function isOwnedBy(owner: AnyOwner, who: OwnerAccounts): boolean {
   if (owner == null) return false
   if (isTrackerOwner(owner)) {
-    return who.trackerAccounts.some((a) => a.provider === owner.provider && a.userId === owner.userId)
+    return who.trackerAccounts.some(
+      (a) => a.provider === owner.provider && a.userId === owner.userId
+    )
   }
   return who.shikimoriUserId !== null && who.shikimoriUserId === owner.shikimoriId
 }

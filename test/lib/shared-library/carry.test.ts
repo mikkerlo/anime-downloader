@@ -181,6 +181,30 @@ describe('golden files round-trip byte-for-byte', () => {
     ).toBe(fixtureText('golden-metadata', 'manifest.json'))
   })
 
+  it('the 6.0.21 drive pair (#689) through writeState and writeManifest stays v1, byte for byte (#713)', async () => {
+    const golden = path.resolve(__dirname, '../../fixtures/golden-6.0.21/drive')
+    const want = (file: string): string => fs.readFileSync(path.join(golden, file), 'utf8')
+    const root = tree({ 'manifest.json': want('manifest.json'), 'state.json': want('state.json') })
+    const owner: SharedLibraryActor = {
+      ...OWNER,
+      shikimoriUserId: JSON.parse(want('manifest.json')).owner.shikimoriId
+    }
+    const r = await ok(root)
+    await writeState(root, r.state!.doc, owner, r.manifest.stateGeneration)
+    for (const [file, fields] of [
+      ['state.json', STATE_OWNED],
+      ['manifest.json', MANIFEST_OWNED]
+    ] as const) {
+      expect(writerFieldsAsIn(root, file, want(file), [...fields]), file).toBe(want(file))
+    }
+    const m = (await ok(root)).manifest
+    await writeManifest(root, m, owner, m.generation)
+    expect(writerFieldsAsIn(root, 'manifest.json', want('manifest.json'), MANIFEST_OWNED)).toBe(
+      want('manifest.json')
+    )
+    expect(readJson(root, 'manifest.json')).toMatchObject({ layoutVersion: 1, layoutMinor: 1 })
+  })
+
   it.each(['golden-metadata', 'golden-videos', 'golden-merged'])(
     '%s through writeManifest',
     async (name) => {

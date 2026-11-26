@@ -201,6 +201,17 @@ export function fixtureText(name: string, file: string): string {
   return fs.readFileSync(path.join(FIXTURES, name, '.anime-dl', file), 'utf8')
 }
 
+/** A checked-in layout v2 tree (#713), copied into a fresh root. */
+export function fixtureV2(name: string): string {
+  const root = tempRoot()
+  fs.cpSync(path.join(FIXTURES_V2, name), root, { recursive: true })
+  return root
+}
+
+export function fixtureV2Text(name: string, file: string): string {
+  return fs.readFileSync(path.join(FIXTURES_V2, name, '.anime-dl', file), 'utf8')
+}
+
 export function readJson(root: string, file: string): Record<string, any> {
   return JSON.parse(fs.readFileSync(path.join(root, '.anime-dl', file), 'utf8'))
 }

@@ -3,10 +3,17 @@
 // `statfs`, the per-file playback hold against a fake presence service, the
 // naming of items appended to a library, and the `meta` re-export merge.
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { fitsFreeSpace, requiredBytes } from '../../src/shared/shared-library-export'
+import { renderIndexHtml } from '../../src/main/lib/shared-library/index-html'
+
+// The real page; the spy sees the job's in-memory base after each checkpoint (#713).
+vi.mock('../../src/main/lib/shared-library/index-html', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/main/lib/shared-library/index-html')>()
+  return { ...real, renderIndexHtml: vi.fn(real.renderIndexHtml) }
+})
 import {
   UNKNOWN_FIELDS,
   serializeMeta,
@@ -546,6 +553,65 @@ describe('the target table', () => {
     const t = await classifyTarget(env.drive, 'Trip', ME, exists)
     expect(t.kind).toBe('read-only')
     expect(t.blocked).toMatch(/newer version/)
+  })
+})
+
+describe('a layout v2 library (#713)', () => {
+  const ME = 4242
+  // The v2 `userId` equals this PC's Shikimori id numerically: still foreign.
+  const ALICE = { provider: 'anilist', userId: String(ME), nickname: 'alice' }
+
+  it('is foreign for a Shikimori PC and an account-less one, in either mode: a sibling', async () => {
+    env = makeExportEnv()
+    await seedLibrary(path.join(env.drive, 'Trip'), {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: ALICE
+    })
+    for (const who of [ME, null]) {
+      for (const mode of ['videos', 'metadata'] as const) {
+        const t = await classifyTarget(env.drive, 'Trip', who, exists, { mode })
+        expect(t, `${who} ${mode}`).toMatchObject({
+          kind: 'foreign',
+          ownerNickname: 'alice',
+          root: path.join(env.drive, 'Trip (2)'),
+          blocked: null,
+          manifest: null
+        })
+      }
+    }
+  })
+
+  it('an account-less Videos only export goes to the sibling and never writes the v2 library', async () => {
+    env = makeExportEnv()
+    const v2 = path.join(env.drive, 'Trip')
+    await seedLibrary(v2, { libraryId: OTHER_LIB, name: 'Trip', owner: ALICE })
+    const before = scan(v2)
+    const { key } = env.addEpisode({
+      animeId: 7,
+      title: 'Show',
+      episodeInt: '1',
+      translationId: 11
+    })
+    const res = await env.svc.start({ selection: sel(key), target: env.drive, name: 'Trip' })
+    expect(res.ok).toBe(true)
+    if (res.ok) await env.svc.settled(res.job.jobId)
+    expect(scan(v2)).toEqual(before)
+    expect(fs.existsSync(path.join(env.drive, 'Trip (2)', LIBRARY_DIR, 'manifest.json'))).toBe(true)
+  })
+
+  it('the job’s in-memory base after each checkpoint is layoutVersionFor(owner): 1 in this slice', async () => {
+    env = makeExportEnv()
+    const spy = vi.mocked(renderIndexHtml)
+    spy.mockClear()
+    const keys = ['1', '2', '3'].map(
+      (ep) => env.addEpisode({ animeId: 7, title: 'Show', episodeInt: ep, translationId: 11 }).key
+    )
+    const res = await env.svc.start({ selection: sel(...keys), target: env.drive, name: 'Lib' })
+    expect(res.ok).toBe(true)
+    if (res.ok) await env.svc.settled(res.job.jobId)
+    expect(spy.mock.calls.length).toBeGreaterThan(0)
+    for (const [base] of spy.mock.calls) expect(base.layoutVersion).toBe(1)
   })
 })
 

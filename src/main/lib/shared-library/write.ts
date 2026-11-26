@@ -394,9 +394,7 @@ export function layoutMinorFor(
   chosen: Pick<SharedLibraryManifest, 'layoutVersion' | 'layoutMinor'> | null
 ): number {
   const own = LAYOUT_MINORS[major]
-  return chosen !== null && chosen.layoutVersion === major
-    ? Math.max(own, chosen.layoutMinor)
-    : own
+  return chosen !== null && chosen.layoutVersion === major ? Math.max(own, chosen.layoutMinor) : own
 }
 
 function writerOf(actor: SharedLibraryActor): SharedLibraryWriter {

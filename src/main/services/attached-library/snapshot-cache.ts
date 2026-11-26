@@ -233,7 +233,11 @@ export function createSnapshotCache(deps: SnapshotCacheDeps): SnapshotCache {
       // downgraded PC never renders it as a v1 one (#713).
       await writeAtomic(
         path.join(dir, SNAPSHOT_FILE),
-        JSON.stringify({ version: snapshotVersionOf(input.manifest), manifest: input.manifest, metas })
+        JSON.stringify({
+          version: snapshotVersionOf(input.manifest),
+          manifest: input.manifest,
+          metas
+        })
       )
       // No `posterFile` path points into the folder while it is swapped.
       indexes.delete(libraryId)

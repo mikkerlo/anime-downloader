@@ -205,8 +205,7 @@ export type Classified<T> =
 
 const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v !== ''
 
-const isKnownMajor = (v: unknown): v is LayoutMajor =>
-  isInt(v) && v >= 1 && v <= LAYOUT_READER_MAX
+const isKnownMajor = (v: unknown): v is LayoutMajor => isInt(v) && v >= 1 && v <= LAYOUT_READER_MAX
 
 /** Whether `owner` fits `mode` at `major`. v2 is always With metadata, with a v2 owner. */
 function ownerFits(major: LayoutMajor, mode: SharedLibraryMode, owner: unknown): boolean {
@@ -488,6 +487,9 @@ export async function inspectLibrary(root: string, opts: ReadOptions = {}): Prom
  * Reads the library at `root`: the manifest and state pair, after the version
  * and size checks that come before the pair search. Never calls `realpath`.
  */
-export async function readLibrary(root: string, opts: ReadOptions = {}): Promise<SharedLibraryRead> {
+export async function readLibrary(
+  root: string,
+  opts: ReadOptions = {}
+): Promise<SharedLibraryRead> {
   return (await inspectLibrary(root, opts)).result
 }

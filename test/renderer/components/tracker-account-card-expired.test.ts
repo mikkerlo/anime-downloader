@@ -142,3 +142,43 @@ describe('TrackerAccountCard — Shikimori connect channels', () => {
     expect(wrapper.find('.conn-card').text()).toContain('mikkerlo')
   })
 })
+
+// The card discards `begin()`'s promise, so the body shows its own failure
+// (#729 review): a rejection must reach the screen, on both entry points.
+describe('TrackerAccountCard — a failed Shikimori begin()', () => {
+  it('Connect Shikimori shows why the sign-in could not start', async () => {
+    const wrapper = await mountCard({ user: null })
+    fake.api.shikimoriGetAuthUrl.mockRejectedValueOnce(new Error('auth url unavailable'))
+
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'Connect Shikimori')!
+      .trigger('click')
+    await flushPromises()
+
+    const error = wrapper.find('.inline-result.bad')
+    expect(error.isVisible()).toBe(true)
+    expect(error.text()).toBe('Error: auth url unavailable')
+    expect(fake.api.shellOpenExternal).not.toHaveBeenCalled()
+  })
+
+  it('Reconnect on an expired session shows it too, and a retry clears it', async () => {
+    const wrapper = await mountCard({ sessionExpired: true })
+    fake.api.shikimoriGetAuthUrl.mockRejectedValueOnce(new Error('auth url unavailable'))
+
+    await wrapper.find('.conn-card button').trigger('click')
+    await flushPromises()
+
+    // The body's row is hidden on an expired card until it has something to show.
+    const error = wrapper.find('.inline-result.bad')
+    expect(error.isVisible()).toBe(true)
+    expect(error.text()).toBe('Error: auth url unavailable')
+
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Connect Shikimori')!
+    expect(retry.isVisible()).toBe(true)
+    await retry.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.inline-result.bad').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="Paste authorization code..."]').isVisible()).toBe(true)
+  })
+})

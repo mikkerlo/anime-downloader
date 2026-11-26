@@ -219,7 +219,7 @@ onMounted(async () => {
       </SettingsRow>
 
       <!-- Kept mounted (v-show): Reconnect starts the body's sign-in, and the
-         body is shown once it has one in progress. -->
+         body is shown once it has one in progress, or the reason it couldn't start. -->
       <SettingsRow v-show="!user || (sessionExpired && connectActive)" stack>
         <component :is="connectForm" ref="connectFormRef" :complete="complete" />
       </SettingsRow>

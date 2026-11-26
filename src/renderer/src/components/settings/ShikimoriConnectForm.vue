@@ -13,10 +13,16 @@ const connecting = ref(false);
 const error = ref('');
 const showUrl = ref(false);
 
+// The card discards this promise (Reconnect), so a failure is shown here.
 async function begin(): Promise<void> {
-  authUrl.value = await window.api.shikimoriGetAuthUrl();
-  const opened = await window.api.shellOpenExternal(authUrl.value);
-  showUrl.value = !opened;
+  error.value = '';
+  try {
+    authUrl.value = await window.api.shikimoriGetAuthUrl();
+    const opened = await window.api.shellOpenExternal(authUrl.value);
+    showUrl.value = !opened;
+  } catch (err) {
+    error.value = String(err);
+  }
 }
 
 function copyUrl(): void {
@@ -46,7 +52,8 @@ function reset(): void {
   error.value = '';
 }
 
-const active = computed(() => Boolean(authUrl.value));
+// A sign-in in progress, or the reason one couldn't start.
+const active = computed(() => Boolean(authUrl.value || error.value));
 
 defineExpose({ active, begin, reset });
 </script>
@@ -81,13 +88,17 @@ defineExpose({ active, begin, reset });
         {{ connecting ? 'Connecting...' : 'Submit' }}
       </button>
     </div>
-    <div v-if="error" class="inline-result bad">{{ error }}</div>
   </div>
+  <div v-if="error" class="inline-result bad connect-error">{{ error }}</div>
 </template>
 
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
 
 <style scoped>
+.connect-error {
+  margin-top: 10px;
+}
+
 .token-row {
   display: flex;
   align-items: center;

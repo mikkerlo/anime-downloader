@@ -16,7 +16,10 @@ export interface TrackerConnectFormProps {
 
 /** What the body exposes to the card through its template ref. */
 export interface TrackerConnectFormHandle {
-  /** A sign-in is in progress, so the body has something to show. */
+  /**
+   * The body has something to show: a sign-in in progress, or why one
+   * couldn't start. On an expired session the card shows the body only then.
+   */
   active: boolean
   /**
    * Starts a sign-in: the card's Reconnect on an expired session. The card

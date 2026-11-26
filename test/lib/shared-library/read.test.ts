@@ -381,10 +381,21 @@ describe('whole-file invalid is the envelope only', () => {
     ['owner does not fit mode (videos, an owner)', (m) => ({ ...m, mode: 'videos' })],
     ['items not an array', (m) => ({ ...m, items: {} })],
     ['titles not an array', (m) => ({ ...m, titles: 'all' })],
-    // Layout v2 (#713): the envelope requires With metadata and a v2 owner.
+    // Layout v2 (#713): the envelope requires With metadata and a v2 owner. A
+    // null owner is refused twice, by the envelope and by v2's non-nullable
+    // schema; a v2 owner on a Videos only library only by the envelope.
     [
       'v2 Videos only with no owner',
       (m) => ({ ...m, layoutVersion: 2, mode: 'videos', owner: null })
+    ],
+    [
+      'v2 Videos only with a v2 owner',
+      (m) => ({
+        ...m,
+        layoutVersion: 2,
+        mode: 'videos',
+        owner: { provider: 'anilist', userId: '5' }
+      })
     ],
     ['v2 With metadata with no owner', (m) => ({ ...m, layoutVersion: 2, owner: null })],
     ['v2 with a v1-shaped owner', (m) => ({ ...m, layoutVersion: 2 })],

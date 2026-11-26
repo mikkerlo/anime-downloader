@@ -4,8 +4,9 @@
 // Composes the pieces `src/main/index.ts` builds (it boots the app when
 // imported): the real store over `STORE_DEFAULTS` with the real write-through
 // list in a temp dir, the safeStorage holder with a getter attached as
-// `bootstrap()` does, the vault, and the settings router. #693 (T2c), #702
-// (T6) and #703 (T7) extend this with their boot pieces.
+// `bootstrap()` does, the vault, and the settings router, then #693 (T2c)'s
+// boot drain and online kick-off list. #702 (T6) and #703 (T7) extend this
+// with their boot pieces.
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -17,7 +18,11 @@ import { createCredentialVault, VAULT_KEYS } from '../../src/main/trackers/crede
 import { getClientConfig } from '../../src/main/trackers/client-config'
 import { register as registerSettings } from '../../src/main/ipc/settings.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
+import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
+import { createOfflineKickoff } from '../../src/main/services/offline/kickoff'
+import { bootDrain, edgeTrackers, kickoffTrackers } from '../../src/main/services/trackers/edges'
 import { createFakeSafeStorage } from '../helpers/fake-safe-storage'
+import { shikimoriOnlyFanOut } from '../helpers/tracker-fan-out'
 import { useTempStoreDir } from '../helpers/temp-store-dir'
 
 const SHIKI_CREDENTIALS = {
@@ -90,6 +95,94 @@ describe('a Shikimori-only boot', () => {
     expect(await getSetting('shikimoriUser')).toEqual(SHIKI_USER)
     expect(fake.getter).not.toHaveBeenCalled()
     expect(fake.touched).toEqual([])
+    expect(fake.untouched()).toBe(true)
+  })
+
+  // #693: the boot drain and the online kick-off's tracker list, as
+  // `bootstrap()` builds them over the fan-out's sync services.
+  function trackerEdges(store: ReturnType<typeof boot>['store']) {
+    const sync = createShikimoriSyncService({
+      store,
+      broadcast: () => {},
+      syncStatusChannel: 's',
+      offlineQueueChangedChannel: 'q',
+      rateUpdatedChannel: 'r',
+      animeDetailsUpdatedChannel: 'd',
+      isOffline: () => false
+    })
+    const fan = shikimoriOnlyFanOut(store, sync)
+    const timer = vi.spyOn(sync.tracker, 'startSyncTimer')
+    const drain = vi.spyOn(sync.tracker, 'syncQueue')
+    const prefetch = vi.fn(async () => undefined)
+    const kickoff = createOfflineKickoff({
+      trackers: () => kickoffTrackers(store, fan.syncServices(), prefetch),
+      suspendDownloads: vi.fn(),
+      resumeDownloads: vi.fn(),
+      suspendSyncplay: vi.fn(),
+      resumeSyncplay: vi.fn(),
+      retryBinaries: vi.fn(),
+      runAutoDownloadTick: vi.fn()
+    })
+    return {
+      timer,
+      drain,
+      bootDrain: () => bootDrain(edgeTrackers(store, fan.syncServices())),
+      onOnline: () => kickoff.onOnline(),
+      stop: () => {
+        kickoff.onOffline()
+        sync.tracker.stopSyncTimer()
+      }
+    }
+  }
+
+  it('the boot drain and the online kick-off touch no safeStorage either', async () => {
+    const { store, fake } = boot()
+    const edges = trackerEdges(store)
+    try {
+      edges.bootDrain()
+      edges.onOnline()
+      await Promise.resolve()
+      // An empty queue: no timer at boot; the online edge still kicks Shikimori's drain.
+      expect(edges.timer).not.toHaveBeenCalled()
+      expect(edges.drain).toHaveBeenCalledTimes(1)
+    } finally {
+      edges.stop()
+    }
+    expect(fake.getter).not.toHaveBeenCalled()
+    expect(fake.untouched()).toBe(true)
+  })
+
+  it('signed out with a non-empty live queue: boot still starts Shikimori’s timer and kicks its drain, as on 6.0.21', async () => {
+    fs.writeFileSync(
+      tmp.cfg,
+      JSON.stringify({
+        shikimoriCredentials: null,
+        shikimoriUser: null,
+        shikimoriUpdateQueue: [
+          {
+            malId: 10,
+            rateId: null,
+            queuedAt: 1,
+            before: { episodes: 0, status: 'watching', score: 0, rewatches: 0 },
+            after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+          }
+        ],
+        installId: 'pc-a'
+      })
+    )
+    const { store, fake } = boot()
+    const edges = trackerEdges(store)
+    try {
+      edges.bootDrain()
+      expect(edges.timer).toHaveBeenCalledTimes(1)
+      expect(edges.drain).toHaveBeenCalledTimes(1)
+      edges.onOnline()
+      expect(edges.drain).toHaveBeenCalledTimes(2)
+    } finally {
+      edges.stop()
+    }
+    // The drain returned at its own signed-out guard: the queue is kept.
+    expect(store.get('shikimoriUpdateQueue')).toHaveLength(1)
     expect(fake.untouched()).toBe(true)
   })
 })

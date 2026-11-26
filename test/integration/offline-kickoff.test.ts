@@ -2,7 +2,8 @@
 // split unsynced changes into the signed-in user's live queue and per-user
 // parked buckets: coming back online drains the live queue only, and parked
 // buckets stay parked. After #600, a 429 during that drain stops it and keeps
-// the queue.
+// the queue. After #693 every connected tracker drains on that edge: the
+// AniList instance here gets the same case.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
@@ -28,6 +29,9 @@ import { ShikiApiError } from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { createOfflineService } from '../../src/main/services/offline'
 import { createOfflineKickoff } from '../../src/main/services/offline/kickoff'
+import { kickoffTrackers } from '../../src/main/services/trackers/edges'
+import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
+import { createGenericTracker } from '../helpers/generic-tracker'
 
 function entry(malId: number, queuedAt: number) {
   return {
@@ -56,6 +60,7 @@ const PARKED = {
 function boot(): {
   store: InMemoryStorage
   goOnline: () => void
+  anilist: ReturnType<typeof createGenericTracker<'anilist'>>
 } {
   const store = new InMemoryStorage({
     workOffline: true,
@@ -64,7 +69,13 @@ function boot(): {
     shikimoriUpdateQueue: [entry(10, 1), entry(11, 2)],
     shikimoriParkedQueues: structuredClone(PARKED),
     shikimoriUserRates: [],
-    shikimoriAnimeDetails: {}
+    shikimoriAnimeDetails: {},
+    // #693: a connected AniList account with its own live queue and parked buckets.
+    anilistCredentials: { v: 1, enc: 'plain', data: 'blob' },
+    anilistUser: { id: 1, nickname: 'anilist-user', avatar: null },
+    anilistUpdateQueue: [entry(1, 1), entry(2, 2)],
+    anilistParkedQueues: structuredClone(PARKED),
+    anilistUserRates: []
   })
   // `offline` is read through a late binding, as `index.ts` does.
   const ref: { isOffline: () => boolean } = { isOffline: () => true }
@@ -77,15 +88,18 @@ function boot(): {
     animeDetailsUpdatedChannel: 'd',
     isOffline: () => ref.isOffline()
   })
+  const anilist = createGenericTracker('anilist', store as never, {
+    isOffline: () => ref.isOffline()
+  })
+  const syncs = [sync.tracker as TrackerSyncService<unknown, unknown>, anilist.sync]
   const kickoff = createOfflineKickoff({
-    syncShikimoriQueue: () => sync.syncShikimoriQueue(),
+    trackers: () => kickoffTrackers(store, syncs, vi.fn()),
     suspendDownloads: vi.fn(),
     resumeDownloads: vi.fn(),
     suspendSyncplay: vi.fn(),
     resumeSyncplay: vi.fn(),
     retryBinaries: vi.fn(),
-    runAutoDownloadTick: vi.fn(),
-    prefetchShikimoriDetails: vi.fn()
+    runAutoDownloadTick: vi.fn()
   })
   const offline = createOfflineService({
     store,
@@ -94,7 +108,7 @@ function boot(): {
     onOffline: kickoff.onOffline
   })
   ref.isOffline = offline.isOffline
-  return { store, goOnline: () => offline.setManual(false) }
+  return { store, goOnline: () => offline.setManual(false), anilist }
 }
 
 /** The drain sleeps 250 ms between items. */
@@ -124,6 +138,18 @@ describe('the online edge drains the live queue only (#567 × #588)', () => {
     expect(getUserRate.mock.calls.every((c) => c[1] === 1)).toBe(true)
     expect(store.get('shikimoriUpdateQueue')).toEqual([])
     expect(store.get('shikimoriParkedQueues')).toEqual(PARKED)
+  })
+
+  it('the AniList instance too: its live queue drains and its parked buckets stay (#693)', async () => {
+    const { store, goOnline, anilist } = boot()
+    goOnline()
+    await settle()
+
+    const sent = anilist.fake.upserts.map((u) => u.ref.malId)
+    expect(sent.sort()).toEqual([1, 2])
+    expect(anilist.fake.upserts.every((u) => u.session.userId === 1)).toBe(true)
+    expect(store.get('anilistUpdateQueue')).toEqual([])
+    expect(store.get('anilistParkedQueues')).toEqual(PARKED)
   })
 
   it('nothing drains while still offline', async () => {

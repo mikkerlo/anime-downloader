@@ -37,6 +37,10 @@ import {
   type BinariesStepDeps
 } from '../../src/main/services/prepare-offline/steps/binaries'
 import { createShikimoriRatesStep } from '../../src/main/services/prepare-offline/steps/shikimori-rates'
+import {
+  createTrackerRatesStep,
+  type TrackerRatesStepDeps
+} from '../../src/main/services/prepare-offline/steps/tracker-rates'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import type { BinaryCheck } from '../../src/main/ffmpeg-binaries'
@@ -905,5 +909,236 @@ describe('step 2: Shikimori rates', () => {
     expect(sent[0][1]).toEqual([
       expect.objectContaining({ rate: expect.objectContaining({ target_id: 1, score: 6 }) })
     ])
+  })
+})
+
+// --- The per-tracker rates steps (#693) ------------------------------------------
+
+describe('the runner: steps that join a run (#693)', () => {
+  it('a step whose joinsRun() is false has no row; the next one runs against its own row', async () => {
+    const { svc } = service()
+    const gated = fakeStep('anilist-rates', {
+      joinsRun: () => false,
+      run: vi.fn(async () => ({
+        status: 'failed' as const,
+        details: [{ text: 'gated', status: 'failed' as const }]
+      }))
+    })
+    const after = fakeStep('metadata', {
+      run: vi.fn(async () => ({
+        status: 'warning' as const,
+        details: [{ text: 'after', status: 'warning' as const }]
+      }))
+    })
+    svc.registerStep(fakeStep('binaries'))
+    svc.registerStep(gated)
+    svc.registerStep(after)
+    svc.start()
+    await svc.idle()
+    expect(gated.run).not.toHaveBeenCalled()
+    expect(after.run).toHaveBeenCalledTimes(1)
+    expect(svc.getState().run!.steps.map((s) => [s.id, s.status, s.details])).toEqual([
+      ['binaries', 'ok', []],
+      ['metadata', 'warning', [{ text: 'after', status: 'warning' }]]
+    ])
+  })
+
+  it('prepareOfflineLastRun lists only the joined steps', async () => {
+    const { svc, store } = service()
+    svc.registerStep(fakeStep('shikimori-rates'))
+    svc.registerStep(fakeStep('anilist-rates', { joinsRun: () => false }))
+    svc.registerStep(fakeStep('mal-rates', { joinsRun: () => true }))
+    svc.start()
+    await svc.idle()
+    expect(
+      (store.get('prepareOfflineLastRun') as PrepareOfflineLastRun).steps.map((s) => s.id)
+    ).toEqual(['shikimori-rates', 'mal-rates'])
+  })
+
+  it('joinsRun() is read once, when the run starts: a change mid-run adds no row', async () => {
+    const { svc } = service()
+    let connected = false
+    const gate = deferred()
+    svc.registerStep(
+      fakeStep('shikimori-rates', {
+        run: vi.fn(async () => {
+          await gate.promise
+          return { status: 'ok' as const, details: [] }
+        })
+      })
+    )
+    const joinsRun = vi.fn(() => connected)
+    const anilist = fakeStep('anilist-rates', { joinsRun })
+    svc.registerStep(anilist)
+    svc.start()
+    await vi.waitFor(() => expect(svc.getState().run?.steps[0].state).toBe('running'))
+    connected = true
+    gate.resolve()
+    await svc.idle()
+    expect(anilist.run).not.toHaveBeenCalled()
+    expect(svc.getState().run!.steps.map((s) => s.id)).toEqual(['shikimori-rates'])
+    expect(joinsRun).toHaveBeenCalledTimes(1)
+
+    svc.start()
+    await svc.idle()
+    expect(svc.getState().run!.steps.map((s) => s.id)).toEqual(['shikimori-rates', 'anilist-rates'])
+    expect(anilist.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('a joinsRun() that throws joins the run', async () => {
+    const { svc } = service()
+    const step = fakeStep('anilist-rates', {
+      joinsRun: () => {
+        throw new Error('boom')
+      }
+    })
+    svc.registerStep(step)
+    svc.start()
+    await svc.idle()
+    expect(step.run).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the tracker rates step (#693)', () => {
+  function rates(over: Partial<TrackerRatesStepDeps> = {}) {
+    let connected = true
+    const order: string[] = []
+    const deps: TrackerRatesStepDeps = {
+      isConnected: () => connected,
+      drain: vi.fn(async () => void order.push('drain')),
+      refreshRates: vi.fn(async (opts: { keepQueued: boolean }) => {
+        order.push(`refresh ${opts.keepQueued}`)
+        return { entries: [{}, {}], waitingMalIds: [] }
+      }),
+      ...over
+    }
+    return { deps, order, setConnected: (v: boolean) => (connected = v) }
+  }
+
+  it('AniList: id anilist-rates, label "AniList rates"; MyAnimeList: mal-rates, "MyAnimeList rates"', () => {
+    const al = createTrackerRatesStep('anilist', rates().deps)
+    const mal = createTrackerRatesStep('mal', rates().deps)
+    expect([al.id, al.label, al.requiresNetwork]).toEqual(['anilist-rates', 'AniList rates', true])
+    expect([mal.id, mal.label]).toEqual(['mal-rates', 'MyAnimeList rates'])
+  })
+
+  it('joins a run only while its tracker is connected', () => {
+    const r = rates()
+    const step = createTrackerRatesStep('anilist', r.deps)
+    expect(step.joinsRun?.()).toBe(true)
+    r.setConnected(false)
+    expect(step.joinsRun?.()).toBe(false)
+  })
+
+  it('a fake AniList step joins a run only if AniList is connected when the run starts', async () => {
+    const r = rates()
+    r.setConnected(false)
+    const { svc } = service()
+    svc.registerStep(fakeStep('shikimori-rates'))
+    svc.registerStep(createTrackerRatesStep('anilist', r.deps))
+    svc.start()
+    await svc.idle()
+    expect(svc.getState().run!.steps.map((s) => s.id)).toEqual(['shikimori-rates'])
+    expect(r.deps.drain).not.toHaveBeenCalled()
+    r.setConnected(true)
+    svc.start()
+    await svc.idle()
+    const row = svc.getState().run!.steps[1]
+    expect([row.id, row.label, row.status]).toEqual(['anilist-rates', 'AniList rates', 'ok'])
+  })
+
+  it('without a prefetch: total 2, drain then the keepQueued refresh, and never "Caching … details"', async () => {
+    const r = rates()
+    const ctx = ctxFor()
+    const out = await createTrackerRatesStep('anilist', r.deps).run(ctx)
+    expect(r.order).toEqual(['drain', 'refresh true'])
+    expect(ctx.ticks).toEqual([
+      { done: 0, total: 2, message: 'Sending queued changes' },
+      { done: 1, total: 2, message: 'Refreshing your list' },
+      { done: 2, total: 2 }
+    ])
+    expect(ctx.ticks.some((t) => /Caching/.test(t.message ?? ''))).toBe(false)
+    expect(out).toEqual({ status: 'ok', details: [{ text: '2 rates refreshed', status: 'ok' }] })
+  })
+
+  it('with a prefetch: the third phase, as Shikimori’s', async () => {
+    const prefetch = vi.fn(async () => {})
+    const r = rates({ prefetch, abortPrefetch: vi.fn() })
+    const ctx = ctxFor()
+    const out = await createTrackerRatesStep('anilist', r.deps).run(ctx)
+    expect(prefetch).toHaveBeenCalledTimes(1)
+    expect(ctx.ticks.map((t) => [t.done, t.total, t.message])).toEqual([
+      [0, 3, 'Sending queued changes'],
+      [1, 3, 'Refreshing your list'],
+      [2, 3, 'Caching AniList details'],
+      [3, 3, undefined]
+    ])
+    expect(out.status).toBe('ok')
+  })
+
+  it('a failing prefetch is a warning detail; Cancel calls abortPrefetch', async () => {
+    const controller = new AbortController()
+    const abortPrefetch = vi.fn()
+    const r = rates({
+      prefetch: vi.fn(async () => {
+        controller.abort()
+        throw new Error('nope')
+      }),
+      abortPrefetch
+    })
+    const out = await createTrackerRatesStep('mal', r.deps).run(
+      ctxFor({ signal: controller.signal })
+    )
+    expect(abortPrefetch).toHaveBeenCalledTimes(1)
+    expect(out).toEqual({
+      status: 'warning',
+      details: [
+        { text: '2 rates refreshed', status: 'ok' },
+        { text: 'MyAnimeList details: nope', status: 'warning' }
+      ]
+    })
+  })
+
+  it('edits still queued after the refresh are a warning, with the shared wording', async () => {
+    const r = rates({
+      refreshRates: vi.fn(async () => ({ entries: [{}], waitingMalIds: [5, 6] }))
+    })
+    const out = await createTrackerRatesStep('anilist', r.deps).run(ctxFor())
+    expect(out).toEqual({
+      status: 'warning',
+      details: [
+        { text: '1 rates refreshed', status: 'ok' },
+        { text: '2 edits still waiting to sync', status: 'warning' }
+      ]
+    })
+  })
+
+  it('an account change during the refresh is a warning; a refresh that throws is failed', async () => {
+    const changed = rates({ refreshRates: vi.fn(async () => null) })
+    expect(await createTrackerRatesStep('anilist', changed.deps).run(ctxFor())).toEqual({
+      status: 'warning',
+      details: [{ text: 'The account changed during the refresh', status: 'warning' }]
+    })
+    const thrown = rates({
+      refreshRates: vi.fn(async () => {
+        throw new Error('AniList API error: 500')
+      })
+    })
+    expect(await createTrackerRatesStep('anilist', thrown.deps).run(ctxFor())).toEqual({
+      status: 'failed',
+      details: [{ text: 'AniList API error: 500', status: 'failed' }]
+    })
+  })
+
+  it('disconnected after it joined: "Not logged in", and nothing is sent', async () => {
+    const r = rates()
+    r.setConnected(false)
+    const out = await createTrackerRatesStep('anilist', r.deps).run(ctxFor())
+    expect(out).toEqual({
+      status: 'skipped',
+      details: [{ text: 'Not logged in', status: 'skipped' }]
+    })
+    expect(r.deps.drain).not.toHaveBeenCalled()
+    expect(r.deps.refreshRates).not.toHaveBeenCalled()
   })
 })

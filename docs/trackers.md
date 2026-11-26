@@ -387,6 +387,50 @@ stripped entry for `f` to `before[f]` = the `after[f]` of the nearest survivor
 before it that has `f` (else that earliest stripped `before[f]`), and also
 `after[f]` when it doesn't carry `f`. Non-`via` survivors are never rebased.
 
+## Boot, the online edge and Prepare
+
+`src/main/services/trackers/edges.ts` (#693, T2c) decides which trackers take
+part in the three places that used to know only Shikimori's queue. Connected
+means the tracker's `<provider>User` key is set (`isTrackerConnected`).
+
+- **Shikimori takes part signed in or not**, as in 6.0.21: its drain returns at
+  its own guard when signed out. Every other tracker takes part only while
+  connected (`edgeTrackers`). A Shikimori-only profile behaves exactly as
+  before.
+- **The list is read when each edge fires**, not when it is built, so a
+  tracker connected later joins the next boot or online edge.
+- **Boot** (`bootDrain`): each tracker with a non-empty queue starts its timer
+  and kicks one drain. Each iteration has its own `try/catch`, so a
+  synchronous throw from one tracker's `getQueueLength()` or
+  `startSyncTimer()` logs `[trackers] <Name> boot drain failed:` and the next
+  tracker still drains.
+- **The online edge** (`kickoffTrackers`, `kickoffEntry`): one
+  `KickoffTracker` per tracker, `{ drainLabel, drain, prefetchLabel,
+  prefetch? }`. Each drain runs in its own `run()`, so a synchronous throw
+  never skips the next tracker. An expired session or a 401 rejects inside the
+  drain's promise and is contained by the drain's own guards either way. Every
+  `prefetch` fires at the same `PREFETCH_STAGGER_MS` mark, 10 s after the
+  edge, not one after another; an entry without one schedules no timer, and
+  `onOffline` clears every pending one. Shikimori keeps its labels
+  (`'Shikimori queue drain'`, `'details prefetch'`); every other tracker is
+  `'<Name> queue drain'` / `'<Name> details prefetch'`. Only Shikimori's entry
+  has a prefetch: the generic instance has none, and T7 passes AniList's (list
+  titles only, per the AniList terms of use).
+- **Prepare for offline** is the exception to "read at the edge": steps are
+  registered once at module load and `registerStep` rejects a duplicate id.
+  So `registerTrackerRatesSteps` (`prepare-offline/wiring.ts`) registers one
+  `createTrackerRatesStep` (`steps/tracker-rates.ts`) per known tracker but
+  Shikimori, connected or not, right after `shikimori-rates`, and the step's
+  `joinsRun()` (its tracker is connected when the run starts) is the only gate.
+  The ids are `anilist-rates` / `mal-rates`, the labels `AniList rates` /
+  `MyAnimeList rates`; `prefetch` and `abortPrefetch` are optional deps, and
+  without them the step runs two phases (`total: 2`). A tracker that
+  disconnects mid-run has already joined, and its step reports "Not logged
+  in". `shikimori-rates` is unchanged and always joins.
+
+Until T6/T7 add the AniList and MAL instances, the fan-out's `syncServices()`
+holds Shikimori's alone, so nothing new registers or drains in production.
+
 ## Statuses and scores
 
 **The canonical vocabulary is Shikimori's six statuses**: `RateValues.status`

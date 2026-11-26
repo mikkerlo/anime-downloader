@@ -6,34 +6,39 @@ import { KNOWN_DOC_FIELDS, KNOWN_TITLE_FIELDS } from '../../../src/main/lib/sync
 import {
   CAPS,
   DOC_LEVEL_FIELDS,
-  MANIFEST_SCHEMA,
+  LAYOUT_MINORS,
+  MANIFEST_SCHEMAS,
   TITLE_LEVEL_FIELDS,
   carryUnknown,
   compareFingerprint,
   describeSchema,
   emit,
   itemKey,
+  layoutVersionFor,
   serializeMeta,
   setUnknownFields,
   toAnimeSearchResult,
   unknownFieldsOf,
+  type LayoutMajor,
   type SchemaDescription
 } from '../../../src/main/lib/shared-library/format'
 import { readLibrary, readMeta } from '../../../src/main/lib/shared-library/read'
 import {
-  SCHEMA_FIXTURE,
   cleanup,
   fixture,
   fixtureText,
-  manifest
+  manifest,
+  schemaFixture
 } from '../../helpers/shared-library'
 
 afterEach(cleanup)
 
-const checkedIn = (): SchemaDescription => JSON.parse(fs.readFileSync(SCHEMA_FIXTURE, 'utf8'))
+const checkedInV = (major: LayoutMajor): SchemaDescription =>
+  JSON.parse(fs.readFileSync(schemaFixture(major), 'utf8'))
+const checkedIn = (): SchemaDescription => checkedInV(1)
 
-function changed(edit: (d: SchemaDescription) => void): SchemaDescription {
-  const d = structuredClone(describeSchema())
+function changed(edit: (d: SchemaDescription) => void, major: LayoutMajor = 1): SchemaDescription {
+  const d = structuredClone(describeSchema(major))
   edit(d)
   return d
 }
@@ -41,15 +46,75 @@ function changed(edit: (d: SchemaDescription) => void): SchemaDescription {
 const field = (d: SchemaDescription, path: string) => d.fields.find((f) => f.path === path)!
 
 describe('the version rule, enforced by the schema fingerprint', () => {
-  it('the current schema matches the checked-in fingerprint', () => {
-    const verdict = compareFingerprint(checkedIn(), describeSchema())
-    console.log(`schema fingerprint: ${verdict.rule}`)
-    expect(verdict.details).toEqual([])
-    expect(verdict.ok).toBe(true)
+  it.each([1, 2] as const)(
+    'layout v%i matches its own checked-in fingerprint, schema-v<N>.json',
+    (major) => {
+      const file = checkedInV(major)
+      // The hazard is a v2 description in the v1 file: against a higher major
+      // `compareFingerprint` accepts every difference, so this is checked first.
+      expect(file.versions.layout.version).toBe(major)
+      const verdict = compareFingerprint(file, describeSchema(major))
+      console.log(`schema fingerprint v${major}: ${verdict.rule}`)
+      expect(verdict.details).toEqual([])
+      expect(verdict.ok).toBe(true)
+    }
+  )
+
+  it('v2 differs from v1 only in its owner, which is never null', () => {
+    const shared = (d: SchemaDescription): SchemaDescription['fields'] =>
+      d.fields.filter((f) => !f.path.startsWith('manifest.owner'))
+    expect(shared(describeSchema(2))).toEqual(shared(describeSchema(1)))
+    const owner = (major: LayoutMajor): SchemaDescription['fields'] =>
+      describeSchema(major).fields.filter((f) => f.path.startsWith('manifest.owner'))
+    expect(owner(1)).toEqual([
+      { path: 'manifest.owner', type: 'object|null', required: true },
+      { path: 'manifest.owner.shikimoriId', type: 'integer', required: true },
+      { path: 'manifest.owner.nickname', type: 'string', required: false }
+    ])
+    expect(owner(2)).toEqual([
+      { path: 'manifest.owner', type: 'object', required: true },
+      { path: 'manifest.owner.provider', type: 'string:nonEmpty', required: true },
+      { path: 'manifest.owner.userId', type: 'string:nonEmpty', required: true },
+      { path: 'manifest.owner.nickname', type: 'string', required: false }
+    ])
+    expect(describeSchema(2).versions).toEqual({
+      layout: { version: 2, minor: LAYOUT_MINORS[2] },
+      state: describeSchema(1).versions.state
+    })
+  })
+
+  it('an optional field added to the v2 owner needs LAYOUT_MINORS[2], and leaves v1 alone', () => {
+    const add = (d: SchemaDescription): void => {
+      d.fields.push({ path: 'manifest.owner.avatar', type: 'string', required: false })
+    }
+    expect(compareFingerprint(checkedInV(2), changed(add, 2)).ok).toBe(false)
+    expect(
+      compareFingerprint(
+        checkedInV(2),
+        changed((d) => {
+          add(d)
+          d.versions.layout.minor += 1
+        }, 2)
+      ).ok
+    ).toBe(true)
+    expect(compareFingerprint(checkedInV(1), describeSchema(1)).ok).toBe(true)
+  })
+
+  it('a v2 description written into the v1 file is caught by the major in its name', () => {
+    // Compared as the version rule would, it passes: the major went up.
+    expect(compareFingerprint(checkedInV(1), describeSchema(2)).ok).toBe(true)
+    expect(describeSchema(2).versions.layout.version).not.toBe(1)
+  })
+
+  it('layoutVersionFor: v2 only for a v2-shaped owner, whatever its provider', () => {
+    expect(layoutVersionFor(null)).toBe(1)
+    expect(layoutVersionFor({ shikimoriId: 5, nickname: 'a' })).toBe(1)
+    expect(layoutVersionFor({ provider: 'anilist', userId: '5' })).toBe(2)
+    expect(layoutVersionFor({ provider: 'shikimori', userId: '5' })).toBe(2)
   })
 
   it('carries each field’s path, type, required flag and enum, and the caps', () => {
-    const d = describeSchema()
+    const d = describeSchema(1)
     expect(field(d, 'manifest.items[].size')).toEqual({
       path: 'manifest.items[].size',
       type: 'integer>=0',
@@ -60,7 +125,7 @@ describe('the version rule, enforced by the schema fingerprint', () => {
     expect(d.caps).toEqual({ ...CAPS })
   })
 
-  it('an added optional field fails unless LAYOUT_MINOR was bumped', () => {
+  it('an added optional field fails unless LAYOUT_MINORS[1] was bumped', () => {
     const add = (d: SchemaDescription): void => {
       d.fields.push({ path: 'manifest.items[].container', type: 'string', required: false })
     }
@@ -86,7 +151,7 @@ describe('the version rule, enforced by the schema fingerprint', () => {
     expect(compareFingerprint(checkedIn(), changed(add)).ok).toBe(false)
   })
 
-  it('items[].size from number to string fails without bumping LAYOUT_VERSION', () => {
+  it('items[].size from number to string fails without bumping the layout major', () => {
     const retype = (d: SchemaDescription): void => {
       field(d, 'manifest.items[].size').type = 'string'
     }
@@ -158,12 +223,12 @@ describe('the version rule, enforced by the schema fingerprint', () => {
     ).toBe(true)
   })
 
-  it('items[].source (#623) is a minor add: from minor 0 it needs LAYOUT_MINOR 1, not a major', () => {
+  it('items[].source (#623) is a minor add: from minor 0 it needs LAYOUT_MINORS[1] 1, not a major', () => {
     const minor0 = changed((d) => {
       d.fields = d.fields.filter((f) => !f.path.startsWith('manifest.items[].source'))
       d.versions.layout.minor = 0
     })
-    const verdict = compareFingerprint(minor0, describeSchema())
+    const verdict = compareFingerprint(minor0, describeSchema(1))
     console.log(`items[].source: ${verdict.rule}`)
     expect(verdict.ok).toBe(true)
     expect(verdict.details).toEqual([
@@ -254,7 +319,7 @@ describe('the serializer emits allow-listed fields plus the bag, and nothing els
     const m = manifest(1, null, { mode: 'videos' }) as Record<string, any>
     m.token = 'secret'
     m.items[0].token = 'secret'
-    const bytes = JSON.stringify(emit(MANIFEST_SCHEMA, m))
+    const bytes = JSON.stringify(emit(MANIFEST_SCHEMAS[1], m))
     expect(bytes).not.toContain('token')
   })
 

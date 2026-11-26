@@ -16,6 +16,16 @@ interface SharedLibraryOwner {
   nickname?: string
 }
 
+/**
+ * A layout v2 owner (#713): a non-Shikimori account. `provider` is open (a
+ * `TrackerId` today) and `userId` its decimal id as a string.
+ */
+interface SharedLibraryTrackerOwner {
+  provider: string
+  userId: string
+  nickname?: string
+}
+
 interface SharedLibraryWriter {
   installId: string
   appVersion: string

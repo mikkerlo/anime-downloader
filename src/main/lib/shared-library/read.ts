@@ -14,9 +14,8 @@ import * as path from 'path'
 import {
   CAPS,
   FORBIDDEN_FIELDS,
-  LAYOUT_VERSION,
   META_SCHEMA,
-  MANIFEST_SCHEMA,
+  MANIFEST_SCHEMAS,
   READ_ONLY_MESSAGES,
   STATE_SCHEMA,
   STATE_VERSION,
@@ -205,7 +204,7 @@ export type Classified<T> =
 /** A manifest file's envelope; `null` when it holds, otherwise why not. */
 export function manifestEnvelopeFailure(raw: unknown): string | null {
   if (!isPlainObject(raw)) return 'not an object'
-  if (raw.layoutVersion !== LAYOUT_VERSION) return 'layoutVersion'
+  if (raw.layoutVersion !== 1) return 'layoutVersion'
   if (!isInt(raw.layoutMinor) || raw.layoutMinor < 0) return 'layoutMinor'
   if (typeof raw.libraryId !== 'string' || !UUID.test(raw.libraryId)) return 'libraryId'
   if (!isInt(raw.generation)) return 'generation'
@@ -264,9 +263,9 @@ export function classifyManifest(loaded: Loaded): Classified<SharedLibraryManife
   return classify(
     loaded,
     'layoutVersion',
-    LAYOUT_VERSION,
+    1,
     manifestEnvelopeFailure,
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[1],
     manifestOverItems
   )
 }

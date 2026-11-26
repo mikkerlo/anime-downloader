@@ -9,7 +9,10 @@ export const LIB = '3b0e7a52-5c1f-4d8e-9a6b-2f4c8d1e7a90'
 export const OTHER_LIB = '9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e5f'
 export const OWNER_ID = 4242
 export const FIXTURES = path.resolve(__dirname, '../fixtures/shared-library/v1')
-export const SCHEMA_FIXTURE = path.resolve(__dirname, '../fixtures/shared-library/schema-v1.json')
+export const FIXTURES_V2 = path.resolve(__dirname, '../fixtures/shared-library/v2')
+/** The checked-in fingerprint of layout `major`: `schema-v<major>.json`. */
+export const schemaFixture = (major: number): string =>
+  path.resolve(__dirname, `../fixtures/shared-library/schema-v${major}.json`)
 
 export const OWNER: SharedLibraryActor = {
   installId: 'pc-owner',

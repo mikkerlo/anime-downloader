@@ -11,7 +11,7 @@ import { pruneDocTombstones } from '../../../src/main/lib/sync-state/gc'
 import { projectSyncDoc } from '../../../src/main/lib/sync-state/project'
 import {
   CAPS,
-  LAYOUT_MINOR,
+  LAYOUT_MINORS,
   STATE_MINOR,
   type RecordNode,
   type SchemaField
@@ -41,6 +41,7 @@ import {
   readJson,
   readText,
   state,
+  tempRoot,
   text,
   tree
 } from '../../helpers/shared-library'
@@ -93,7 +94,8 @@ const FORMAT = '../../../src/main/lib/shared-library/format'
 
 /**
  * The reader and writer as a minor-0 build has them (#623): no
- * `items[].source` in the schema, and LAYOUT_MINOR 0.
+ * `items[].source` in the v1 schema, and `LAYOUT_MINORS[1]` 0. It mocks the
+ * exported tables, which `read.ts` and `write.ts` index themselves.
  */
 async function minor0Build(): Promise<{
   format: typeof import('../../../src/main/lib/shared-library/format')
@@ -110,21 +112,41 @@ async function minor0Build(): Promise<{
       const element = { ...el, fields: el.fields.filter((x) => x.name !== 'source') }
       return { ...f, node: { ...f.node, element } }
     }
+    const v1 = real.MANIFEST_SCHEMAS[1]
     return {
       ...real,
-      LAYOUT_MINOR: 0,
-      MANIFEST_SCHEMA: {
-        ...real.MANIFEST_SCHEMA,
-        fields: real.MANIFEST_SCHEMA.fields.map(withoutSource)
+      LAYOUT_MINORS: { ...real.LAYOUT_MINORS, 1: 0 },
+      MANIFEST_SCHEMAS: {
+        ...real.MANIFEST_SCHEMAS,
+        1: { ...v1, fields: v1.fields.map(withoutSource) }
       }
     }
   })
   try {
-    return {
+    const build = {
       format: await import('../../../src/main/lib/shared-library/format'),
       read: await import('../../../src/main/lib/shared-library/read'),
       write: await import('../../../src/main/lib/shared-library/write')
     }
+    // The emulation reaches the reader and the writer, or the carry tests built
+    // on it would pass without testing anything (#713).
+    const root = tempRoot()
+    const source = { size: 1, subtitleSize: 1, codec: 'copy', outputSize: 1001 }
+    await build.write.createLibrary(
+      root,
+      {
+        libraryId: LIB,
+        owner: null,
+        mode: 'videos',
+        titles: [],
+        items: [{ ...(item('1', 9001) as SharedLibraryItem), source }]
+      },
+      LOGGED_OUT
+    )
+    const written = readJson(root, 'manifest.json')
+    expect(written.layoutMinor).toBe(0)
+    expect(written.items[0]).not.toHaveProperty('source')
+    return build
   } finally {
     vi.doUnmock(FORMAT)
     vi.resetModules()
@@ -447,11 +469,11 @@ describe('the writer keeps the minor it read', () => {
     expect(readJson(mf, 'manifest.json').layoutMinor).toBe(2)
   })
 
-  it('a minor-0 manifest written by this version is stamped LAYOUT_MINOR (1, #623)', async () => {
+  it('a minor-0 manifest written by this version is stamped LAYOUT_MINORS[1] (1, #623)', async () => {
     const root = tree({ 'manifest.json': manifest(3, null, { mode: 'videos' }) })
     expect((await ok(root)).manifest.layoutMinor).toBe(0)
     await writeManifest(root, (await ok(root)).manifest, LOGGED_OUT, 3)
-    expect(LAYOUT_MINOR).toBe(1)
+    expect(LAYOUT_MINORS[1]).toBe(1)
     expect(readJson(root, 'manifest.json').layoutMinor).toBe(1)
   })
 

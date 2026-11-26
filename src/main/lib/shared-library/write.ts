@@ -23,9 +23,8 @@ import type { FileHandle } from 'fs/promises'
 import * as path from 'path'
 import {
   CAPS,
-  LAYOUT_MINOR,
-  LAYOUT_VERSION,
-  MANIFEST_SCHEMA,
+  LAYOUT_MINORS,
+  MANIFEST_SCHEMAS,
   STATE_MINOR,
   STATE_SCHEMA,
   STATE_VERSION,
@@ -385,7 +384,7 @@ function manifestFields(
   }
 ): Record<string, unknown> {
   return {
-    layoutVersion: LAYOUT_VERSION,
+    layoutVersion: 1,
     layoutMinor: over.layoutMinor,
     libraryId: input.libraryId,
     name: input.name,
@@ -429,9 +428,9 @@ export async function createLibrary(
   }
   const generation = 1
   const { text } = serialize(
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[1],
     manifestFields(manifest, {
-      layoutMinor: LAYOUT_MINOR,
+      layoutMinor: LAYOUT_MINORS[1],
       generation,
       stateGeneration: null,
       lastWriter: writerOf(actor)
@@ -485,9 +484,9 @@ export async function writeManifest(
   }
   const generation = m.generation + 1
   const { text } = serialize(
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[1],
     manifestFields(next, {
-      layoutMinor: Math.max(LAYOUT_MINOR, m.layoutMinor),
+      layoutMinor: Math.max(LAYOUT_MINORS[1], m.layoutMinor),
       generation,
       stateGeneration,
       lastWriter: writerOf(actor)
@@ -537,9 +536,9 @@ export async function writeState(
     'state'
   )
   const manifest = serialize(
-    MANIFEST_SCHEMA,
+    MANIFEST_SCHEMAS[1],
     manifestFields(m, {
-      layoutMinor: Math.max(LAYOUT_MINOR, m.layoutMinor),
+      layoutMinor: Math.max(LAYOUT_MINORS[1], m.layoutMinor),
       generation,
       stateGeneration,
       lastWriter: writerOf(actor)

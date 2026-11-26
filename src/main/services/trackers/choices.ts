@@ -9,8 +9,8 @@
 // sources describes the rules.
 
 import type { StorageService } from '../../store/types'
-import { TRACKER_KEYS } from '../../trackers/keys'
 import type { TrackerLifecycle } from '../../trackers/lifecycle'
+import { isConnected } from '../../trackers/primary'
 import {
   TRACKER_LABELS,
   type TrackerCapabilities,
@@ -44,6 +44,7 @@ export interface TrackerChoicesDeps {
   lifecycle: Pick<TrackerLifecycle, 'accountsState' | 'primary' | 'notifyAccountsChanged'>
   /** Each landed provider, for its capabilities. A tracker missing here is capable of nothing. */
   providers: Partial<Record<TrackerId, { capabilities: TrackerCapabilities }>>
+  log?: Pick<Console, 'error'>
 }
 
 export interface TrackerChoices {
@@ -52,7 +53,9 @@ export interface TrackerChoices {
   /**
    * The mirror toggle. Rejects the current primary in both directions. Off
    * without `confirm` only counts; off with `confirm` writes the flag, then
-   * runs `discardQueue`, which takes the tracker's queue lock itself.
+   * runs `discardQueue`, which takes the tracker's queue lock itself. A
+   * discard that rejects is logged and reported as `discarded: 0`: the
+   * toggle is off either way.
    */
   setMirror(
     trackerId: TrackerId,
@@ -68,11 +71,10 @@ type Sources = Partial<Record<TrackerFeature, TrackerId>>
 
 export function createTrackerChoices(deps: TrackerChoicesDeps): TrackerChoices {
   const { store, trackers, lifecycle } = deps
+  const log = deps.log ?? console
 
   function assertConnected(id: TrackerId): void {
-    if (store.get(TRACKER_KEYS[id].user) == null) {
-      throw new Error(`${TRACKER_LABELS[id]} isn't connected`)
-    }
+    if (!isConnected(store, id)) throw new Error(`${TRACKER_LABELS[id]} isn't connected`)
   }
 
   const toggles = (): Toggles => (store.get('trackerMirror') as Toggles | undefined) ?? {}
@@ -119,8 +121,15 @@ export function createTrackerChoices(deps: TrackerChoicesDeps): TrackerChoices {
     // line. `discardQueue` then waits for a drain in flight under the lock.
     store.set('trackerMirror', { ...toggles(), [id]: false })
     lifecycle.notifyAccountsChanged()
-    const discarded = await trackers.discardQueue(id)
-    return { applied: true, discarded }
+    try {
+      return { applied: true, discarded: await trackers.discardQueue(id) }
+    } catch (err) {
+      // The toggle is already off and broadcast, so the call reports the
+      // change that landed: a rejection would read as a revert that never
+      // happened. Whatever it didn't remove stays queued and drains as usual.
+      log.error(`[trackers] discarding the ${TRACKER_LABELS[id]} mirror queue failed:`, err)
+      return { applied: true, discarded: 0 }
+    }
   }
 
   function setFeatureSource(feature: TrackerFeature, id: TrackerId | null): TrackerAccountsState {

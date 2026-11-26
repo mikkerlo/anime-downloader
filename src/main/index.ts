@@ -401,9 +401,12 @@ shikimori.setOnSessionExpired(() => {
 })
 // The fan-out writer (#692): one entry per tracker whose sync service has
 // landed, Shikimori only for now. The Shikimori router sets its primary branch.
+// Its primary is the lifecycle's (#696 § 0), read at call time: the lifecycle
+// is declared below, and nothing writes a rate while this module is set up.
 const trackerFanOut = createTrackerFanOut({
   store,
-  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }]
+  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }],
+  primary: () => trackerLifecycle.primary()
 })
 // The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
 const trackerRates = createTrackerRates({ store, trackers: trackerFanOut, isOffline })

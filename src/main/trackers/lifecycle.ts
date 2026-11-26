@@ -32,6 +32,7 @@ import type { StorageService } from '../store/types'
 import { getClientConfig } from './client-config'
 import { VAULT_KEYS, type CredentialVault, type VaultKey } from './credential-vault'
 import { TRACKER_KEYS } from './keys'
+import { resolvePrimary, storedPrimary as readStoredPrimary } from './primary'
 
 /** `shikimori`, `anilist`, `mal`: the primary fallback's and the accounts list's order. */
 const ORDER = TRACKER_IDS
@@ -338,17 +339,9 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     }
   }
 
-  function storedPrimary(): TrackerId | null {
-    const stored = store.get('trackerPrimary') as TrackerId | null | undefined
-    return stored && ORDER.includes(stored) ? stored : null
-  }
-
-  // #696's § 0 rule: the stored primary if connected, else the first connected.
-  function primary(): TrackerId | null {
-    const stored = storedPrimary()
-    if (stored && userOf(stored)) return stored
-    return ORDER.find((id) => userOf(id) !== null) ?? null
-  }
+  const storedPrimary = (): TrackerId | null => readStoredPrimary(store)
+  // #696's § 0 rule, shared with the fan-out through `index.ts`.
+  const primary = (): TrackerId | null => resolvePrimary(store)
 
   function accountsState(): TrackerAccountsState {
     return {

@@ -23,6 +23,7 @@ import {
 import { rateClockKey, stampRateClocks } from '../../store/sync-meta'
 import type { StorageService } from '../../store/types'
 import type { ShikiUserRate } from '../../shikimori'
+import { resolvePrimary } from '../../trackers/primary'
 import { TRACKER_LABELS } from '../../trackers/types'
 import type { TrackerSyncService } from './sync'
 
@@ -88,6 +89,12 @@ export interface FanOutTracker {
 export interface TrackerFanOutDeps {
   store: StorageService
   trackers: FanOutTracker[]
+  /**
+   * The primary, read at call time. `index.ts` passes `trackerLifecycle.primary`,
+   * so the accounts state and the writes share one answer (#696 § 0). Defaults
+   * to the same rule, `resolvePrimary`, over `store`.
+   */
+  primary?: () => TrackerId | null
   now?: () => number
   log?: Pick<Console, 'warn'>
 }
@@ -109,7 +116,7 @@ export interface TrackerFanOut {
     trackerId: K,
     writer: PrimaryWriter<PrimaryResults[K]>
   ): void
-  /** The stored primary if connected, else the first connected tracker, else null. */
+  /** The primary (#696 § 0): `deps.primary`, else `resolvePrimary` over the store. */
   primary(): TrackerId | null
   /**
    * Mirror toggle off (T3c, T5b call it after the user confirms): drops every
@@ -149,12 +156,7 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
 
   const connected = (t: TrackerSyncService<unknown, unknown>): boolean => userId(t) !== undefined
 
-  function primary(): TrackerId | null {
-    const stored = store.get('trackerPrimary') as TrackerId | null | undefined
-    const s = trackers.find((t) => t.sync.trackerId === stored)
-    if (s && connected(s.sync)) return s.sync.trackerId
-    return trackers.find((t) => connected(t.sync))?.sync.trackerId ?? null
-  }
+  const primary = deps.primary ?? ((): TrackerId | null => resolvePrimary(store))
 
   // A missing entry means on.
   function mirrorOn(id: TrackerId): boolean {

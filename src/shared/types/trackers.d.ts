@@ -205,7 +205,9 @@ interface TrackerSetMirrorOptions {
 // that matches the stored toggle is `{ applied: false }`. Off without
 // `confirm`: `pendingMirrorChanges`, the live `via: 'mirror'` count. Off with
 // `confirm`: `discarded`, the count actually removed, which can be smaller or
-// larger than the count shown. On: `offerReconcile: true`.
+// larger than the count shown; a discard that failed after the toggle was
+// written is `{ applied: true, discarded: 0 }`, since the toggle is off either
+// way. On: `offerReconcile: true`.
 interface TrackerSetMirrorResult {
   applied: boolean
   pendingMirrorChanges?: number

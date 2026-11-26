@@ -287,8 +287,8 @@ row behind) or null (mark-watched).
   else the first connected tracker in `shikimori`, `anilist`, `mal` order, else
   null. Connected means `<provider>User` is set. This is #696's read rule
   ([Primary, mirrors and feature sources](#primary-mirrors-and-feature-sources)),
-  and `fan-out.ts`'s `primary()` and `lifecycle.ts`'s state builder both
-  implement it.
+  `resolvePrimary` in `trackers/primary.ts`; `index.ts` passes the fan-out
+  `trackerLifecycle.primary()` as its `primary` getter.
 - **A user change to the primary** runs that tracker's own primary branch,
   unchanged. Shikimori's is `services/trackers/shikimori-primary.ts`: 6.x's
   `sendRate` / `queueRate` and the two handler bodies, moved verbatim, with the
@@ -611,8 +611,11 @@ is the only writer and its side effects always run.
 is connected (`<provider>User` set); otherwise the first connected tracker in
 `TrackerId` order (`shikimori`, `anilist`, `mal`, the order #706's resolver
 uses); `null` when none is connected. With one connected tracker this is #690's
-"the only connected tracker" rule. The fan-out's `primary()` and the accounts
-state's `primary` both implement it.
+"the only connected tracker" rule. It lives in one function, `resolvePrimary`
+(`src/main/trackers/primary.ts`): `trackerLifecycle.primary()` and the
+accounts state's `primary` answer with it, and `index.ts` hands the fan-out
+`() => trackerLifecycle.primary()`, read at call time, so the writes and the
+accounts state can't disagree. Connected never depends on a sync instance.
 
 **The invariant: 2 or more connected means `trackerPrimary` is non-null.** The
 two reassignments below maintain it, so with 2 or more trackers connected the
@@ -663,7 +666,10 @@ broadcast and no `offerReconcile`).
   that appends, after the primary's `await`. `discarded` can be smaller or
   larger than the `pendingMirrorChanges` shown earlier: the drain can send some
   while the dialog is open, and the user's changes keep adding them until the
-  confirm. #701 reports `discarded`.
+  confirm. #701 reports `discarded`. A discard that rejects is logged and
+  returns `{ applied: true, discarded: 0 }`: the toggle is already off and
+  broadcast, so an error would read as a revert that never happened, and the
+  entries it didn't remove stay queued.
 - **On** writes `trackerMirror[id] = true`, broadcasts and returns
   `offerReconcile: true` for #708 (T10)'s reconcile review.
 

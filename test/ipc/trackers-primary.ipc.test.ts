@@ -185,6 +185,8 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
       { sync: syncs.anilist, writePrimary: anilistPrimary },
       { sync: syncs.mal }
     ],
+    // As `index.ts` wires it: the lifecycle's primary, read at call time.
+    primary: () => lifecycle.primary(),
     log: { warn: () => {} }
   })
   const trackerRates = createTrackerRates({ store: store as never, trackers: fan, isOffline })
@@ -218,7 +220,14 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
     openExternal: async () => {},
     log: { warn: () => {} }
   })
-  const choices = createTrackerChoices({ store, trackers: fan, lifecycle, providers })
+  const choicesLog = { error: vi.fn() }
+  const choices = createTrackerChoices({
+    store,
+    trackers: fan,
+    lifecycle,
+    providers,
+    log: choicesLog
+  })
 
   ;(ipcMain.handle as unknown as Mock).mockClear()
   const deps = {
@@ -268,6 +277,8 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
     lifecycle,
     auth,
     choices,
+    choicesLog,
+    trackerRates,
     broadcast,
     accountsChanged,
     invoke,
@@ -480,6 +491,25 @@ describe('mirror off, then discard (§2)', () => {
       await r.invoke(CHANNELS.TRACKER_SET_MIRROR, 'anilist', false, { confirm: true })
     ).toEqual({ applied: true, discarded: 3 })
     expect(mirrorsOf(r)).toEqual([])
+  })
+
+  it('a discard that rejects after the flag is down resolves applied: true, discarded: 0, logs, and leaves the toggle off', async () => {
+    const r = await mirrorRig({ anilistUpdateQueue: [entry(2, 100, { via: 'mirror' })] })
+    const failure = new Error('disk full')
+    vi.spyOn(r.fan, 'discardQueue').mockRejectedValue(failure)
+
+    expect(
+      await r.invoke(CHANNELS.TRACKER_SET_MIRROR, 'anilist', false, { confirm: true })
+    ).toEqual({ applied: true, discarded: 0 })
+
+    expect(r.store.get('trackerMirror')).toEqual({ anilist: false })
+    expect(r.choicesLog.error).toHaveBeenCalledTimes(1)
+    expect(r.choicesLog.error.mock.calls[0]).toEqual([
+      expect.stringContaining('AniList mirror queue'),
+      failure
+    ])
+    expect(accountsEvents(r)).toEqual([expect.objectContaining({ mirror: { anilist: false } })])
+    expectBroadcastsMatchList(r)
   })
 
   it('rejects a tracker that isn’t connected, and the store is unchanged', async () => {
@@ -751,6 +781,38 @@ describe('the primary read rule (§0)', () => {
     const r = rig({ seed: { trackerPrimary: 'anilist' } })
     expect(await primaries(r)).toEqual([null, null])
   })
+
+  it('the fan-out reads the lifecycle’s primary at call time, so the writes follow it', async () => {
+    const r = rig({ seed: { trackerPrimary: 'shikimori' } })
+    await seedSignedIn(r, 'shikimori', A)
+    await seedSignedIn(r, 'anilist', B)
+    r.store.set(ANILIST_KEYS.userRates, [{ malId: 1, remoteId: 1000, values: rv(7) }])
+    const lifecyclePrimary = vi.spyOn(r.lifecycle, 'primary').mockReturnValue('anilist')
+
+    expect(r.fan.primary()).toBe('anilist')
+    expect(r.trackerRates.primary()).toBe('anilist')
+    await r.invoke(CHANNELS.TRACKER_UPDATE_RATE, 1, rv(8))
+    expect(r.anilistPrimary).toHaveBeenCalledTimes(1)
+    expect(fakeApi.updateUserRate).not.toHaveBeenCalled()
+
+    lifecyclePrimary.mockReturnValue('shikimori')
+    expect(r.fan.primary()).toBe('shikimori')
+  })
+
+  it('a fan-out built without the getter answers with the same rule: connected never needs a sync instance', async () => {
+    const r = rig({ seed: { trackerPrimary: 'mal' } })
+    await seedSignedIn(r, 'shikimori', A)
+    await seedSignedIn(r, 'mal', C)
+    const bare = createTrackerFanOut({
+      store: r.store as never,
+      trackers: [{ sync: r.syncs.shikimori }],
+      log: { warn: () => {} }
+    })
+    expect(bare.primary()).toBe('mal')
+    expect(bare.primary()).toBe(r.lifecycle.primary())
+    r.store.set('trackerPrimary', null)
+    expect([bare.primary(), r.lifecycle.primary()]).toEqual(['shikimori', 'shikimori'])
+  })
 })
 
 describe('disconnecting the primary (§4)', () => {
@@ -991,6 +1053,12 @@ describe('tracker:accounts-changed (§6)', () => {
     it('the vault’s onLocked calls it', () => {
       expect(callArgs('createCredentialVault')).toMatch(
         /onLocked:\s*\(\)\s*=>\s*trackerLifecycle\.notifyAccountsChanged\(\)/
+      )
+    })
+
+    it('the fan-out reads the lifecycle’s primary', () => {
+      expect(callArgs('createTrackerFanOut')).toMatch(
+        /primary:\s*\(\)\s*=>\s*trackerLifecycle\.primary\(\)/
       )
     })
 

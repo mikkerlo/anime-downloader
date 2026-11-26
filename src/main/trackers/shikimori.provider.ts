@@ -6,11 +6,17 @@
 
 import * as shikimori from '../shikimori'
 import { rateValues } from '../lib/shikimori-rate'
+import { buildRateCacheEntries, type CachedRateEntry } from '../lib/shikimori-rate-cache'
 import type { AnimeSearchResult } from '../smotret-api'
 import type { StorageService } from '../store/types'
 import { classifyShikimoriError } from './shikimori.errors'
 import { TRACKER_CAPABILITIES, type TrackerCapabilities, type TrackerEntry } from './types'
-import type { ShikimoriSession, TrackerProvider, TrackerRateEntry } from './types'
+import type {
+  ShikimoriSession,
+  TrackerRateCacheCodec,
+  TrackerRateEntry,
+  TrackerSyncProvider
+} from './types'
 
 export interface ShikimoriProviderDeps {
   store: StorageService
@@ -18,11 +24,53 @@ export interface ShikimoriProviderDeps {
   lookupByMalIds?: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
 }
 
-export type ShikimoriProvider = TrackerProvider<
+export type ShikimoriProvider = TrackerSyncProvider<
   ShikimoriSession,
   shikimori.ShikiAnimeRateEntry,
-  shikimori.ShikiUserRate
+  shikimori.ShikiUserRate,
+  CachedRateEntry
 >
+
+/**
+ * `shikimoriUserRates` (#691): `buildRateCacheEntries` over the `native`
+ * rows, with the smotret join each entry already carries, and the settle patch
+ * that `reconcileCacheFromRate` made. Both match a row by `rate.target_id`
+ * alone; a refresh's `keepQueued` falls back to `shikiAnime.id`.
+ */
+export const shikimoriRateCache: TrackerRateCacheCodec<
+  shikimori.ShikiAnimeRateEntry,
+  CachedRateEntry
+> = {
+  fromEntries(entries) {
+    const malMap: Record<number, AnimeSearchResult> = {}
+    for (const e of entries) if (e.smotretAnime) malMap[e.native.anime.id] = e.smotretAnime
+    return buildRateCacheEntries(
+      entries.map((e) => e.native),
+      malMap
+    )
+  },
+  malIdOf: (row) => row.rate.target_id ?? row.shikiAnime?.id,
+  indexOf: (rows, malId) => rows.findIndex((e) => e.rate.target_id === malId),
+  patch(row, values, remoteId) {
+    return {
+      ...row,
+      rate: {
+        ...row.rate,
+        ...(remoteId !== undefined ? { id: remoteId } : {}),
+        episodes: values.episodes,
+        status: values.status,
+        score: values.score,
+        rewatches: values.rewatches,
+        updated_at: new Date().toISOString()
+      }
+    }
+  }
+}
+
+/** The refresh cleared the stored credentials: only a new sign-in brings them back. */
+export function isShikimoriSessionGone(err: unknown): boolean {
+  return err instanceof shikimori.ShikiAuthError
+}
 
 const NO_CAPABILITIES = Object.fromEntries(
   TRACKER_CAPABILITIES.map((c) => [c, false])
@@ -92,6 +140,8 @@ export function createShikimoriProvider(deps: ShikimoriProviderDeps): ShikimoriP
     getUser: (token) => shikimori.getUser(token),
 
     classifyError: classifyShikimoriError,
+    isSessionGone: isShikimoriSessionGone,
+    rateCache: shikimoriRateCache,
 
     async listEntries(session, opts) {
       const rows = await shikimori.getUserAnimeRates(session.token, session.userId, opts?.status)

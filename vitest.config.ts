@@ -56,7 +56,10 @@ export default defineConfig({
         'src/main/store/**': { statements: 70, lines: 70 },
         'src/main/services/anime-cache/**': { statements: 88, lines: 88 },
         'src/main/services/mp4-stats/**': { statements: 95, lines: 95 },
-        'src/main/services/shikimori-sync/**': { statements: 65, lines: 65 },
+        // The drain moved to the generic tracker sync service with its 65 floor
+        // (#691; measured 99.51 there). The extras left behind measured 91.61.
+        'src/main/services/trackers/**': { statements: 65, lines: 65 },
+        'src/main/services/shikimori-sync/**': { statements: 85, lines: 85 },
         // The tracker seam (#689). Measured 100 at #689. A provider directory
         // with no code yet matches nothing, and an empty glob passes (see
         // docs/testing.md § Coverage thresholds for the re-check).

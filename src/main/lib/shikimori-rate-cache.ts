@@ -92,18 +92,35 @@ export function keepQueuedEntries<S extends StoredRateEntry, C extends StoredRat
   cached: C[],
   queued: ReadonlySet<number>
 ): (S | C)[] {
+  return keepQueuedRows(server, cached, queued, storedMalIdOf)
+}
+
+function storedMalIdOf(e: StoredRateEntry): number | undefined {
+  return e.rate.target_id ?? e.shikiAnime?.id
+}
+
+/**
+ * `keepQueuedEntries` for any tracker's rows (#691), matched by the tracker's
+ * rate-cache `malIdOf`.
+ */
+export function keepQueuedRows<S, C>(
+  server: S[],
+  cached: C[],
+  queued: ReadonlySet<number>,
+  malIdOf: (row: S | C) => number | undefined
+): (S | C)[] {
   if (queued.size === 0) return server
-  const malIdOf = (e: StoredRateEntry): number | undefined => e.rate.target_id ?? e.shikiAnime?.id
+  const find = (id: number): C | null => cached.find((e) => malIdOf(e) === id) ?? null
   const seen = new Set<number>()
   const out: (S | C)[] = server.map((e) => {
     const id = malIdOf(e)
     if (id === undefined || !queued.has(id)) return e
     seen.add(id)
-    return findRateEntry(cached, id) ?? e
+    return find(id) ?? e
   })
   for (const id of queued) {
     if (seen.has(id)) continue
-    const kept = findRateEntry(cached, id)
+    const kept = find(id)
     if (kept) out.push(kept)
   }
   return out

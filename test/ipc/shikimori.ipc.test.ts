@@ -240,6 +240,20 @@ describe('shikimori IPC — update-rate against a genuine API error', () => {
   })
 })
 
+// Each tracker has its own queue key, so an entry names no tracker (#691).
+describe('shikimori IPC — the queued user edit keeps its shape', () => {
+  it('an offline update-rate queues exactly { malId, rateId, before, after, queuedAt }', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await updateRate(invoke)
+
+    const queue = store.get('shikimoriUpdateQueue') as Record<string, unknown>[]
+    expect(queue).toHaveLength(1)
+    expect(Object.keys(queue[0]).sort()).toEqual(['after', 'before', 'malId', 'queuedAt', 'rateId'])
+  })
+})
+
 type QueueEntry = {
   malId: number
   rateId: number | null

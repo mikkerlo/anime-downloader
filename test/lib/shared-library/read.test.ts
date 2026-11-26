@@ -115,7 +115,7 @@ describe('read-only decisions', () => {
     it('a newer major in manifest.prev alone also opens read-only', async () => {
       const root = tree({
         'manifest.json': manifest(8, 4),
-        'manifest.prev.json': manifest(7, 4, { layoutVersion: 2 }),
+        'manifest.prev.json': manifest(7, 4, { layoutVersion: 3 }),
         'state.json': state(4, 7)
       })
       const r = await readOnly(root)

@@ -541,7 +541,7 @@ describe('the target table', () => {
     fs.mkdirSync(path.join(root, LIBRARY_DIR), { recursive: true })
     fs.writeFileSync(
       path.join(root, LIBRARY_DIR, 'manifest.json'),
-      JSON.stringify({ layoutVersion: 2, layoutMinor: 0, libraryId: OTHER_LIB })
+      JSON.stringify({ layoutVersion: 3, layoutMinor: 0, libraryId: OTHER_LIB })
     )
     const t = await classifyTarget(env.drive, 'Trip', ME, exists)
     expect(t.kind).toBe('read-only')

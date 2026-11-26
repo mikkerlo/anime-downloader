@@ -19,6 +19,7 @@ This document is an index. Each subsystem lives in its own page under [`docs/`](
 | Built-in video player (MSE, Anime4K, SubtitlesOctopus, prefetch, episode nav) | [docs/player.md](./docs/player.md) |
 | Auto-update via `electron-updater` | [docs/auto-update.md](./docs/auto-update.md) |
 | Shikimori integration: OAuth, rate cache, offline queue, Friends, Calendar, Chronology, auto-download | [docs/shikimori.md](./docs/shikimori.md) |
+| Trackers (epic #688): the `TrackerProvider` seam and session pinning, the error taxonomy and its per-class policy, the classifiers, the canonical status vocabulary, AniList score mapping | [docs/trackers.md](./docs/trackers.md) |
 | Watch Together (Syncplay) | [docs/syncplay.md](./docs/syncplay.md) |
 | FFmpeg merge codecs and progress | [docs/ffmpeg.md](./docs/ffmpeg.md) |
 | Local OP/ED skip detection (Chromaprint) | [docs/skip-detection.md](./docs/skip-detection.md) |

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "id": "golden-run-000000000004",
+      "ownerScope": 4242,
+      "animeId": "101",
+      "fieldPath": "rate.score",
+      "parties": {
+        "local": 7,
+        "library:00000000-0000-4000-8000-0000000000a1": 8
+      },
+      "bases": {
+        "library:00000000-0000-4000-8000-0000000000a1": 6
+      },
+      "at": {
+        "local": {
+          "at": 1793548860000,
+          "origin": "golden-pc-0000-4000-8000-000000000001"
+        },
+        "library:00000000-0000-4000-8000-0000000000a1": {
+          "at": 1793548980000,
+          "origin": "golden-other-pc"
+        }
+      },
+      "suggestion": "library:00000000-0000-4000-8000-0000000000a1",
+      "reason": "changed on both sides, to different values",
+      "firstSeenRunId": "golden-run-000000000003",
+      "lastSeenRunId": "golden-run-000000000003"
+    }
+  ]
+}

@@ -57,6 +57,10 @@ export default defineConfig({
         'src/main/services/anime-cache/**': { statements: 88, lines: 88 },
         'src/main/services/mp4-stats/**': { statements: 95, lines: 95 },
         'src/main/services/shikimori-sync/**': { statements: 65, lines: 65 },
+        // The tracker seam (#689). Measured 100 at #689. A provider directory
+        // with no code yet matches nothing, and an empty glob passes (see
+        // docs/testing.md § Coverage thresholds for the re-check).
+        'src/main/trackers/**': { statements: 92, lines: 92 },
         'src/main/services/cold-storage/**': { statements: 65, lines: 65 },
         // Measured 96.25 at #659.
         'src/main/services/prepare-offline/**': { statements: 85, lines: 85 },

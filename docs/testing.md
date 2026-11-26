@@ -1081,6 +1081,74 @@ four rules replace it.
    them, and a retention rule kept in an issue body is subject to exactly the
    loss it exists to prevent.
 
+## The 6.0.21 goldens and the tracker fakes
+
+Epic #688 (AniList and MyAnimeList) promises that a Shikimori-only user sees no
+change: not to store keys, values or shapes, to userData files or the drive
+format, nor to sync, merge, queue, auto-download or Prepare for offline. #689
+backs that with goldens captured from 6.0.21 before any refactor, which every
+later slice keeps green.
+
+- **The session** (`test/helpers/golden-session.ts`) is one scripted
+  Shikimori-only PC: the real `createStorageService` over `STORE_DEFAULTS` in a
+  temp `cwd` (so `config.json` is the real file), the real Shikimori sync
+  service and IPC router, the export, the attached-library service, the merge
+  runner, all six Prepare for offline steps and the auto-downloader, wired as
+  `src/main/index.ts` wires them. It signs in as A, marks an episode watched
+  online, subscribes to auto-download, exports With metadata, attaches the
+  drive, runs Prepare for offline and one auto-download tick, goes Work offline
+  and edits a rate and marks another episode (both queue), lets the owner's
+  other PC edit the drive, runs a merge (one pending raise, one conflict), and
+  signs in as B through `SHIKIMORI_EXCHANGE_CODE` (A's queue parks). The
+  network is `test/helpers/golden-shikimori.ts`, which puts A's rows on
+  `fake-shikimori.ts`'s `server`, and a stub smotret; the test blocks `fetch`,
+  so an unmocked call fails rather than leaving the machine.
+- **Determinism.** `Date` is faked and set at each step; real timers still run,
+  so the driver polls on them rather than with `vi.waitFor`, which under fake
+  timers advances the faked clock by its interval on every retry. `installId`
+  (through `ensureInstallId(store, generate)`), the library and job ids, the run
+  ids and the Prepare run id come from fixed generators, credentials are the
+  `fake-access-token` / `fake-refresh-token` stand-ins, and the temp root is
+  written as `<root>`.
+- **The captures** are frozen in `test/fixtures/golden-6.0.21/` (in
+  `.prettierignore`): `config.json`, `sync-pending/`, `sync-state/conflicts.json`
+  and `sync-log/*.jsonl`, the drive's v1 manifest/state pair, the Prepare run's
+  step list and results (#693, T2c, asserts it), and the auto-download tick's
+  result, broadcasts and queued downloads (#706, T11a). A slice never
+  regenerates them.
+- **Comparison** (`test/helpers/golden-compare.ts`) masks timestamps and
+  `appVersion` by explicit field name and path only. userData JSON compares as
+  parsed values; the drive pair compares as bytes after masking (#713, T13a,
+  needs v1 byte identity). A self-check fails on a mask that masks nothing in
+  the golden. A new top-level `config.json` key passes only when it is listed in
+  `GOLDEN_NEW_KEYS` (`test/helpers/golden-allow-list.ts`) and holds the default
+  listed there; #689 lists none, and T1 adds its tracker keys.
+- **Sensitivity**, each proved red at #689: an extra field on the queue entry
+  `queueRate` builds (`ipc/shikimori.ipc.ts:624`), a renamed `shikimori-rates`
+  step id or label, one changed byte in the manifest the v1 writer emits, and a
+  new `STORE_DEFAULTS` key without the allow-list.
+- **The `STORE_DEFAULTS` dump.** `STORE_DEFAULTS` moved out of
+  `src/main/index.ts` into `src/main/store/defaults.ts` so the session can open
+  the real store (`index.ts` boots the app when imported). A golden captured
+  after the move can't show the move itself changed nothing, so
+  `test/store/defaults.test.ts` deep-equals every key against
+  `test/fixtures/store-defaults-6.0.21.json`, a dump taken on the pre-move
+  commit by evaluating the literal cut from `src/main/index.ts`, and refuses a
+  key outside the dump and the allow-list.
+- **`test/helpers/fake-tracker.ts`** is an in-memory `TrackerProvider` with
+  Shikimori, AniList and MyAnimeList personalities, for failure isolation before
+  any real AniList or MAL client exists (#692 and #693 need the second
+  provider). Each has its own rows, its own session from `auth()`, error
+  injection by class (`fail(reply, { member, times })`) and a record of every
+  `upsertEntry` call with its session. AniList has its own ids mapped from MAL
+  ids with one unmapped title, raw `POINT_100` scores, a 200 that carries
+  `errors`, a 401 and a 403 (the API is down: `rate-limit`). MAL has the 400
+  "Invalid client id", a `forbidden` 403 (`config`) and a "DoS detected" 403
+  (`rate-limit`). Those replies encode the epic's documented behaviour only;
+  #702 (T6) and #703 (T7) replace them with captured fixtures.
+  `fake-shikimori.ts` stays as it is: a module-level `vi.mock` fake that
+  imports nothing from `src/`.
+
 ## Coverage thresholds
 
 `test:coverage` enforces **per-glob** floors (in `vitest.config.ts`) on the
@@ -1107,6 +1175,19 @@ both inside the ~7–13 point margin the other floors use. The single-file globs
 **overlap** the directory ones rather than carving out of them, so
 `use-syncplay-client.ts` still counts into the composables aggregate too and
 the tighter of the two floors is what binds.
+
+`src/main/trackers/**` (#689) is the tracker seam: measured 100%
+statements/lines at #689, floored at 92. `types.ts` has no statements, so the
+aggregate is the adapter, the classifiers and the score helpers. Its provider
+subdirectories fill in over epic #688, and a glob that matches **no files
+passes**: measured on Vitest 3.2.7, a `{ statements: 90, lines: 90 }` threshold
+on a glob with no files exits 0. The control is a glob that matches a file below
+its floor, which fails with `does not meet … threshold`. The re-check after a
+Vitest bump, in one line: with `thresholds` set to only `'src/main/shikimori.ts':
+{ statements: 90, lines: 90 }`, `npx vitest run test/trackers/errors.test.ts
+--coverage` must fail with `Coverage for statements (0%) does not meet
+"src/main/shikimori.ts" threshold (90%)`, and the same run with
+`'src/main/no-such-provider/**'` in its place must exit 0.
 
 ## Real-ffmpeg tests
 

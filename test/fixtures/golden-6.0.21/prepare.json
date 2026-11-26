@@ -1,0 +1,104 @@
+{
+  "runId": "golden-prepare-000000000001",
+  "runSeq": 1,
+  "startedAt": 1793524020000,
+  "finishedAt": 1793524020000,
+  "cancelled": false,
+  "steps": [
+    {
+      "id": "binaries",
+      "label": "ffmpeg, ffprobe and fpcalc",
+      "state": "done",
+      "done": 3,
+      "total": 3,
+      "details": [
+        {
+          "text": "ffmpeg: ok",
+          "status": "ok"
+        },
+        {
+          "text": "ffprobe: ok",
+          "status": "ok"
+        },
+        {
+          "text": "fpcalc: ok",
+          "status": "ok"
+        }
+      ],
+      "status": "ok"
+    },
+    {
+      "id": "shikimori-rates",
+      "label": "Shikimori rates",
+      "state": "done",
+      "done": 3,
+      "total": 3,
+      "details": [
+        {
+          "text": "2 rates refreshed",
+          "status": "ok"
+        }
+      ],
+      "status": "ok"
+    },
+    {
+      "id": "metadata",
+      "label": "Library metadata",
+      "state": "done",
+      "done": 2,
+      "total": 2,
+      "details": [
+        {
+          "text": "2 of 2 titles up to date",
+          "status": "ok"
+        }
+      ],
+      "message": "Beta Show",
+      "status": "ok"
+    },
+    {
+      "id": "local-integrity",
+      "label": "Downloaded episodes",
+      "state": "done",
+      "done": 4,
+      "total": 4,
+      "details": [
+        {
+          "text": "4 of 4 episodes ok",
+          "status": "ok"
+        }
+      ],
+      "message": "Beta Show episode 1",
+      "status": "ok"
+    },
+    {
+      "id": "attached-integrity",
+      "label": "Shared Libraries",
+      "state": "done",
+      "done": 3,
+      "total": 3,
+      "details": [
+        {
+          "text": "Trip: 3 items ok",
+          "status": "ok"
+        }
+      ],
+      "message": "Trip",
+      "status": "ok"
+    },
+    {
+      "id": "library-sync",
+      "label": "Sync owned or claimed libraries",
+      "state": "done",
+      "done": 1,
+      "total": 1,
+      "details": [
+        {
+          "text": "Trip: Drive synced; Shikimori updated",
+          "status": "ok"
+        }
+      ],
+      "status": "ok"
+    }
+  ]
+}

@@ -4,6 +4,9 @@
 
 import type { ShikiUserRateStatus } from '../shikimori'
 
+// `RateValues.status` is the app's canonical status vocabulary: Shikimori's six
+// statuses. Every tracker maps its own statuses to and from these
+// (`trackers/scores.ts`, `docs/trackers.md`).
 export interface RateValues {
   episodes: number
   status: ShikiUserRateStatus
@@ -19,6 +22,18 @@ export const NO_RATE_BEFORE: RateValues = {
   status: 'planned',
   score: 0,
   rewatches: 0
+}
+
+// How far along each status is, for the drain's drift check
+// (`shouldApplyOnDrift`): watching and rewatching are one rank, as are on hold
+// and dropped.
+export const STATUS_ORDER: Record<ShikiUserRateStatus, number> = {
+  planned: 0,
+  watching: 1,
+  rewatching: 1,
+  on_hold: 2,
+  dropped: 2,
+  completed: 3
 }
 
 export function rateValues(rate: {

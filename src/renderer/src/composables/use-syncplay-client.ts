@@ -137,7 +137,7 @@ export type SyncplayBridgeApi = Pick<
   Api,
   | 'getSetting'
   | 'setSetting'
-  | 'shikimoriGetUser'
+  | 'trackerListAccounts'
   | 'syncplayConnect'
   | 'syncplayDisconnect'
   | 'syncplayPlayerClosed'
@@ -2120,11 +2120,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const room = syncplayRoomInput.value.trim() || cfg?.lastRoom || ''
     let username = cfg?.username?.trim() || ''
     if (!username) {
-      const shiki = await api.shikimoriGetUser()
-      if (shiki?.nickname) {
-        username = shiki.nickname
-        await api.setSetting('syncplay', { ...(cfg || {}), username })
-      }
+      // The primary tracker's nickname (#699). An expired session keeps its
+      // user, so its nickname is still there, as the Shikimori seed's was.
+      const { accounts, primary } = await api.trackerListAccounts()
+      username = accounts.find((a) => a.trackerId === primary)?.user?.nickname ?? ''
+      if (username) await api.setSetting('syncplay', { ...(cfg || {}), username })
     }
     if (!room) {
       showSyncplayToast('Enter a room name first')

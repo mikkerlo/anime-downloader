@@ -1,18 +1,23 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 import { useLibraryStore, type LibraryView } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { labelOf, useTrackersStore, type TrackerSyncBreakdownRow } from '../../stores/trackers';
 import { useDownloadsStore } from '../../stores/downloads';
 import { useOfflineStore } from '../../stores/offline';
 import SidebarUpdateBanner from './SidebarUpdateBanner.vue';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
+const trackersStore = useTrackersStore();
 const downloadsStore = useDownloadsStore();
 const offlineStore = useOfflineStore();
 const { currentView } = storeToRefs(libraryStore);
-const { user, loggedIn, offlineQueueLength, syncStatus } = storeToRefs(shikimoriStore);
+// The nav group stays on the Shikimori login until #707 replaces it.
+const { loggedIn } = storeToRefs(shikimoriStore);
+const { accounts, primary, anyAccount, aggregateSyncState } = storeToRefs(trackersStore);
 const { groups } = storeToRefs(downloadsStore);
 const { isOffline, isManual, retrying } = storeToRefs(offlineStore);
 
@@ -98,26 +103,77 @@ const downloadCount = computed(
     ).length
 );
 
+// The chip is the primary account's (#699): for a Shikimori-only user, today's.
+const user = computed(
+  () => accounts.value.find((a) => a.trackerId === primary.value)?.user ?? null
+);
 const userInitial = computed(() => user.value?.nickname?.charAt(0).toUpperCase() ?? '?');
 
-// Reflect the real Shikimori sync state rather than always reading "Synced":
-// the app has an offline queue, so pending changes / an in-flight sync should
-// show instead of a misleading green dot.
-const fullySynced = computed(
-  () => syncStatus.value.state !== 'syncing' && offlineQueueLength.value === 0
-);
+// The worst state across the connected trackers, pending counts summed, so
+// pending changes or an in-flight sync never read as a green "Synced".
+const syncLabel = computed(() => aggregateSyncState.value.label);
+const fullySynced = computed(() => aggregateSyncState.value.state === 'synced');
 // Gated on `sessionExpired` alone, not `&& queueLength > 0`: with an empty queue
 // the drain returns immediately and never runs, so an expired user with nothing
 // pending would otherwise get no indication anywhere (#244).
-const sessionExpired = computed(() => syncStatus.value.sessionExpired);
-const syncLabel = computed(() => {
-  if (sessionExpired.value) return 'Session expired';
-  if (syncStatus.value.state === 'syncing') return 'Syncing…';
-  if (offlineQueueLength.value > 0) {
-    return `${offlineQueueLength.value} pending`;
-  }
-  return 'Synced';
+const sessionExpired = computed(() => aggregateSyncState.value.state === 'session-expired');
+const syncRows = computed(() => aggregateSyncState.value.trackers);
+// One tracker: the chip as it always was. Two or more: it opens the breakdown.
+const multiTracker = computed(() => syncRows.value.length >= 2);
+const expiredTitle = computed(() => {
+  const row = syncRows.value.find((r) => r.state === 'session-expired');
+  return `${TRACKER_LABELS[row?.trackerId ?? 'shikimori']} rejected the stored session — sign in again`;
 });
+
+function rowTitle(row: TrackerSyncBreakdownRow): string {
+  const name = TRACKER_LABELS[row.trackerId];
+  return row.state === 'session-expired'
+    ? `${name} rejected the stored session — sign in again`
+    : `${name} needs setup — open Settings`;
+}
+
+// ---- The 2+-tracker popover -------------------------------------------------
+const popoverOpen = ref(false);
+const chipRef = ref<HTMLButtonElement | null>(null);
+const popoverRef = ref<HTMLElement | null>(null);
+
+function onDocKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') closePopover();
+}
+function onDocPointerdown(e: Event): void {
+  const target = e.target as Node | null;
+  if (target && (popoverRef.value?.contains(target) || chipRef.value?.contains(target))) return;
+  closePopover();
+}
+function unlisten(): void {
+  document.removeEventListener('keydown', onDocKeydown);
+  document.removeEventListener('pointerdown', onDocPointerdown, true);
+}
+
+function openPopover(): void {
+  popoverOpen.value = true;
+  document.addEventListener('keydown', onDocKeydown);
+  document.addEventListener('pointerdown', onDocPointerdown, true);
+}
+function closePopover(): void {
+  if (!popoverOpen.value) return;
+  popoverOpen.value = false;
+  unlisten();
+  void nextTick(() => chipRef.value?.focus());
+}
+function togglePopover(): void {
+  if (popoverOpen.value) closePopover();
+  else openPopover();
+}
+function openTrackerSettings(): void {
+  closePopover();
+  libraryStore.navigateToSettingsTab('connectors');
+}
+
+watch(multiTracker, (multi) => {
+  if (!multi) closePopover();
+});
+onBeforeUnmount(unlisten);
 </script>
 
 <template>
@@ -195,17 +251,67 @@ const syncLabel = computed(() => {
       >
         <span class="dot"></span>{{ retrying ? 'Checking…' : offlineLabel }}
       </button>
-      <div v-if="loggedIn && user" class="sidebar-foot">
+      <div v-if="anyAccount && user" class="sidebar-foot">
+        <div
+          v-if="multiTracker && popoverOpen"
+          ref="popoverRef"
+          class="sync-popover"
+          role="dialog"
+          aria-label="Sync status per tracker"
+          data-testid="sync-popover"
+        >
+          <div
+            v-for="row in syncRows"
+            :key="row.trackerId"
+            class="sync-row"
+            :data-tracker="row.trackerId"
+          >
+            <span class="sync-row-name">{{ TRACKER_LABELS[row.trackerId] }}</span>
+            <span
+              class="u-sync"
+              :class="{
+                offline: row.state !== 'synced' && row.state !== 'session-expired',
+                expired: row.state === 'session-expired'
+              }"
+            >
+              <span class="dot"></span>{{ labelOf(row.state, row.queueLength) }}
+            </span>
+            <span v-if="row.state !== 'pending' && row.queueLength > 0" class="sync-row-pending"
+              >{{ row.queueLength }} pending</span
+            >
+            <button
+              v-if="row.state === 'session-expired' || row.state === 'needs-setup'"
+              type="button"
+              class="sync-row-link"
+              :title="rowTitle(row)"
+              @click="openTrackerSettings"
+            >
+              Settings
+            </button>
+          </div>
+        </div>
         <div class="user-chip">
           <img v-if="user.avatar" :src="user.avatar" :alt="user.nickname" class="user-avatar" />
           <div v-else class="user-avatar">{{ userInitial }}</div>
           <div class="user-meta">
             <div class="u-name">{{ user.nickname }}</div>
             <button
-              v-if="sessionExpired"
+              v-if="multiTracker"
+              ref="chipRef"
+              type="button"
+              class="u-sync toggle"
+              :class="{ offline: !fullySynced && !sessionExpired, expired: sessionExpired }"
+              aria-haspopup="dialog"
+              :aria-expanded="popoverOpen"
+              @click="togglePopover"
+            >
+              <span class="dot"></span>{{ syncLabel }}
+            </button>
+            <button
+              v-else-if="sessionExpired"
               type="button"
               class="u-sync expired"
-              title="Shikimori rejected the stored session — sign in again"
+              :title="expiredTitle"
               @click="libraryStore.navigateToSettingsTab('connectors')"
             >
               <span class="dot"></span>{{ syncLabel }}

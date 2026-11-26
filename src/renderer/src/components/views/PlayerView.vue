@@ -901,9 +901,9 @@ async function markEpisodeWatched(episodeInt: string): Promise<void> {
   const epNum = parseInt(episodeInt, 10);
   if (!Number.isFinite(epNum) || epNum <= 0) return;
   try {
-    await window.api.shikimoriMarkEpisodeWatched(props.malId, epNum);
+    await window.api.trackerMarkEpisodeWatched(props.malId, epNum);
   } catch (err) {
-    console.warn('[player] failed to update Shikimori episode count:', err);
+    console.warn('[player] failed to update the tracker episode count:', err);
   }
 }
 
@@ -916,7 +916,7 @@ async function maybeMarkWatched(): Promise<void> {
   if (cumulativePlayTime < WATCH_THRESHOLD_SECONDS) return;
 
   // A re-watch of an episode that was already watched when it opened gets its
-  // `sync.watched` stamp from the save below, but no Shikimori mark (#572).
+  // `sync.watched` stamp from the save below, but no tracker mark (#572).
   const rewatch = watchedReported;
   completedThisOpen = true;
   completionPending = true;
@@ -926,16 +926,16 @@ async function maybeMarkWatched(): Promise<void> {
   if (rewatch || !props.malId) return;
   // #371 — the PLAYING episode, matching `saveProgress(true)` above. Both halves
   // of this function share one completion; if they keyed differently
-  // it would report episode N+1 watched to Shikimori while writing episode N's
+  // it would report episode N+1 watched to the trackers while writing episode N's
   // progress row. "Which episode did the user actually watch" has one answer,
   // and it is the one that was decoding while `cumulativePlayTime` accrued.
   const epNum = parseInt(playingEpisodeInt.value, 10);
   if (!Number.isFinite(epNum) || epNum <= 0) return;
   try {
-    // Sends or queues in main, so an offline or expired-session mark isn't lost (#565).
-    await window.api.shikimoriMarkEpisodeWatched(props.malId, epNum);
+    // Main fans it out and sends or queues each, so an offline or expired mark isn't lost (#565).
+    await window.api.trackerMarkEpisodeWatched(props.malId, epNum);
   } catch (err) {
-    console.warn('[player] failed to update Shikimori episode count:', err);
+    console.warn('[player] failed to update the tracker episode count:', err);
   }
 }
 

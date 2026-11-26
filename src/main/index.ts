@@ -83,6 +83,7 @@ import { createTrackerRates } from './services/trackers/rates'
 import { createTrackerChoices } from './services/trackers/choices'
 import { createShikimoriEventBridge } from './trackers/events'
 import { createTrackerLifecycle } from './trackers/lifecycle'
+import { connectedAccounts } from './trackers/primary'
 import { createTrackerAuthSessions } from './trackers/auth-session'
 import { createShikimoriProvider } from './trackers/shikimori.provider'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
@@ -101,6 +102,7 @@ import { createSyncRunner, type SyncRunner } from './services/sync-runner'
 import { createRunnerRateRefresh } from './services/sync-runner/rate-refresh'
 import { createLocalFiles } from './services/sync-runner/local-files'
 import { createMountCandidates, mountParents } from './lib/shared-library/mount-candidates'
+import { ownerAccountsOf } from './lib/shared-library/owner'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -420,7 +422,13 @@ const trackerLifecycle = createTrackerLifecycle({
   trackerRates,
   cancelAttempt: (id) => trackerAuth.cancel(id),
   broadcast: broadcastToAll,
-  accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED
+  accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED,
+  // An AniList or MAL login runs the Shared Library login run too (#714), as
+  // Shikimori's does from its own steps: it drops a claim, then merges.
+  afterLogin: () =>
+    void syncRunner
+      ?.runAll('login')
+      .catch((err) => console.error('[sync] the login run failed:', err))
 })
 // AniList (#703) and MyAnimeList (#702) add their providers here: the sign-in
 // flows, and the capabilities `tracker:set-feature-source` checks (#696).
@@ -492,12 +500,13 @@ const sharedLibraryExport = createSharedLibraryExportService({
   sanitizeFilename,
   mergeStatus: (translationId) => downloadManager.getMergeStatus(translationId),
   presence: playerPresenceService,
+  // Every connected account (#714): the export creates or takes over a
+  // library for the owner the user picked, never through a claim.
   actor: () => ({
     installId: store.ensureInstallId(),
     appVersion: app.getVersion(),
-    shikimoriUserId: (store.get('shikimoriUser') as { id: number } | null)?.id ?? null,
-    claim: null,
-    trackerAccounts: []
+    ...ownerAccountsOf(connectedAccounts(store)),
+    claim: null
   }),
   broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
   onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root),

@@ -19,10 +19,11 @@ import { readLibrary, readMeta, LIBRARY_DIR } from '../../lib/shared-library/rea
 import {
   isOwnedBy,
   isTrackerOwner,
+  ownerAccountsOf,
   ownerOf,
-  shikimoriOwnerId,
-  type OwnerAccounts
+  shikimoriOwnerId
 } from '../../lib/shared-library/owner'
+import { connectedAccounts, type ConnectedAccount } from '../../trackers/primary'
 import { discoverLibraries } from '../../lib/shared-library/discover'
 import {
   absoluteOverflow,
@@ -204,30 +205,38 @@ const episodeOrder = (a: string, b: string): number => {
   return Number.isNaN(d) || d === 0 ? a.localeCompare(b) : d
 }
 
-// The accounts this PC presents to an owner check: its Shikimori user only, so
-// every v2 owner is `foreign` here (#713).
-const accountsOf = (userId: number | null): OwnerAccounts => ({
-  shikimoriUserId: userId,
-  trackerAccounts: []
-})
+/**
+ * Whether the record's claim names its owner (#714): a v1 claim (`claim`) only
+ * a v1 owner, a v2 claim (`trackerClaim`) only a v2 owner, by `(provider, userId)`.
+ */
+function claimMatches(rec: AttachedLibraryRecord): boolean {
+  if (rec.trackerOwner) {
+    const c = rec.trackerClaim
+    return !!c && c.provider === rec.trackerOwner.provider && c.userId === rec.trackerOwner.userId
+  }
+  const ownerId = shikimoriOwnerId(rec.owner)
+  return ownerId !== null && rec.claim?.ownerId === ownerId
+}
 
-function roleOf(rec: AttachedLibraryRecord, userId: number | null): AttachedLibraryRole {
+/**
+ * Mine when any connected account owns it, by `(provider, userId)` (#714); a
+ * claim only on a PC with no account. A v2 record's owner is `trackerOwner`.
+ */
+function roleOf(rec: AttachedLibraryRecord, accounts: ConnectedAccount[]): AttachedLibraryRole {
   if (rec.mode === 'videos') return 'videos'
-  // Before the `owner: null` return: a v2 record keeps its owner here.
-  if (rec.trackerOwner) return isOwnedBy(rec.trackerOwner, accountsOf(userId)) ? 'owner' : 'foreign'
-  if (!rec.owner) return 'videos'
-  if (userId !== null) return isOwnedBy(rec.owner, accountsOf(userId)) ? 'owner' : 'foreign'
-  return rec.claim?.ownerId === shikimoriOwnerId(rec.owner) ? 'claim' : 'videos'
+  const owner = rec.trackerOwner ?? rec.owner
+  if (!owner) return 'videos'
+  if (accounts.length > 0) return isOwnedBy(owner, ownerAccountsOf(accounts)) ? 'owner' : 'foreign'
+  return claimMatches(rec) ? 'claim' : 'videos'
 }
 
 function identityOf(
   manifest: SharedLibraryManifest,
-  userId: number | null
+  accounts: ConnectedAccount[]
 ): SharedLibraryCandidate['identity'] {
   if (manifest.mode === 'videos' || !manifest.owner) return 'videos'
-  // A v2 library can't be claimed: no `choose` for it, even with no account.
-  if (userId === null && !isTrackerOwner(manifest.owner)) return 'choose'
-  return isOwnedBy(manifest.owner, accountsOf(userId)) ? 'owner' : 'foreign'
+  if (accounts.length === 0) return 'choose'
+  return isOwnedBy(manifest.owner, ownerAccountsOf(accounts)) ? 'owner' : 'foreign'
 }
 
 function snapshotAnime(
@@ -299,22 +308,22 @@ export function createAttachedLibraryService(
     (deps.store.get(STORE_KEY) as Record<string, AttachedLibraryRecord> | undefined) ?? {}
   const save = (next: Record<string, AttachedLibraryRecord>): void =>
     deps.store.set(STORE_KEY, next)
-  const userId = (): number | null =>
-    (deps.store.get('shikimoriUser') as { id?: number } | null | undefined)?.id ?? null
+  const accounts = (): ConnectedAccount[] => connectedAccounts(deps.store)
 
   /**
-   * A claim lasts while the PC has no account. A login as the same id makes it
-   * plain ownership, as a different id the library turns foreign; either way
-   * the claim is dropped. The library base (`sync-bases/`) is S9's and is kept.
+   * A claim lasts while the PC has no tracker account. A login to any tracker
+   * drops every claim (#714): as the owner the library is plain ownership,
+   * otherwise it turns foreign. The library base (`sync-bases/`) is S9's and
+   * is kept.
    */
   function reconcileClaims(): void {
-    const id = userId()
-    if (id === null) return
+    if (accounts().length === 0) return
     const recs = records()
     let changed = false
     for (const rec of Object.values(recs)) {
-      if (rec.claim) {
+      if (rec.claim || rec.trackerClaim) {
         delete rec.claim
+        delete rec.trackerClaim
         changed = true
       }
     }
@@ -418,7 +427,12 @@ export function createAttachedLibraryService(
       name: rec.name,
       mode: rec.mode,
       ownerNickname: (rec.owner ?? rec.trackerOwner)?.nickname ?? null,
-      role: roleOf(rec, userId()),
+      ownerProvider: rec.owner ? 'shikimori' : (rec.trackerOwner?.provider ?? null),
+      // Sound only while #713's envelope rule holds: a v2 manifest always has
+      // a non-null v2 owner, so a v2 record always has `trackerOwner` and a v1
+      // one never does. Loosen that rule and this breaks too.
+      layoutVersion: rec.trackerOwner ? 2 : 1,
+      role: roleOf(rec, accounts()),
       access: rec.access,
       ...(rec.accessReason ? { accessReason: rec.accessReason } : {}),
       ...(o?.message ? { message: o.message } : {}),
@@ -662,9 +676,10 @@ export function createAttachedLibraryService(
       libraryId: manifest?.libraryId ?? null,
       name: manifest?.name ?? path.basename(root),
       ownerNickname: manifest?.owner?.nickname ?? null,
+      ownerProvider: ownerOf(manifest?.owner)?.provider ?? null,
       mode: manifest?.mode ?? null,
       titleCount: manifest?.titles.length ?? 0,
-      identity: manifest ? identityOf(manifest, userId()) : 'videos',
+      identity: manifest ? identityOf(manifest, accounts()) : 'videos',
       ...(readOnly ? { readOnly } : {})
     }
   }
@@ -696,18 +711,17 @@ export function createAttachedLibraryService(
       return { ok: false, error: 'This library changed on disk. Open the folder again.' }
     }
     logRead(root, read)
-    const id = userId()
-    let claim: AttachedLibraryRecord['claim']
+    // A v1 owner's claim is `claim: { ownerId, at }`, a v2 owner's is
+    // `trackerClaim: { provider, userId, at }` (#714).
+    let claims: Pick<AttachedLibraryRecord, 'claim' | 'trackerClaim'> = {}
     if (choice === 'claim') {
-      if (id !== null || manifest.mode !== 'metadata' || !manifest.owner) {
-        return { ok: false, error: 'Only a PC without a Shikimori account can claim a library.' }
+      if (accounts().length > 0 || manifest.mode !== 'metadata' || !manifest.owner) {
+        return { ok: false, error: 'Only a PC without a tracker account can claim a library.' }
       }
-      // Only a v1 (Shikimori) owner can be claimed.
-      const ownerId = shikimoriOwnerId(manifest.owner)
-      if (ownerId === null) {
-        return { ok: false, error: 'This library belongs to another account and can’t be claimed.' }
-      }
-      claim = { ownerId, at: now() }
+      const owner = manifest.owner
+      claims = isTrackerOwner(owner)
+        ? { trackerClaim: { provider: owner.provider, userId: owner.userId, at: now() } }
+        : { claim: { ownerId: owner.shikimoriId, at: now() } }
     }
     // A v2 owner is kept apart, with `owner: null`, so a downgraded v6 reads `videos`.
     const owners: Pick<AttachedLibraryRecord, 'owner' | 'trackerOwner'> = isTrackerOwner(
@@ -721,7 +735,7 @@ export function createAttachedLibraryService(
       mode: manifest.mode,
       ...owners,
       ...(await accessOf(root, read)),
-      ...(claim ? { claim } : {}),
+      ...claims,
       lastSeenAt: now(),
       lastSyncAt: records()[libraryId]?.lastSyncAt ?? null
     }
@@ -817,7 +831,7 @@ export function createAttachedLibraryService(
   async function ratesFor(libraryId: string): Promise<Map<number, AttachedTitleRate>> {
     const out = new Map<number, AttachedTitleRate>()
     const rec = records()[libraryId]
-    if (!deps.syncBases || !rec || roleOf(rec, userId()) !== 'claim') return out
+    if (!deps.syncBases || !rec || roleOf(rec, accounts()) !== 'claim') return out
     try {
       const base = await deps.syncBases.read(`library-${libraryId}`)
       for (const [key, title] of Object.entries(base?.doc?.titles ?? {})) {

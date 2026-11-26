@@ -175,12 +175,18 @@ interface SharedLibraryActor {
   installId: string
   appVersion: string
   shikimoriUserId: number | null
-  // A claim only ever names a v1 (Shikimori) owner.
-  claim: { libraryId: string; ownerId: number } | null
-  // The accounts that match a v2 owner (#713). Production actors pass `[]`
-  // until #715, so every v2 library is `foreign` to them.
+  // A v1 claim names a v1 (Shikimori) owner, a v2 claim (#714) a v2 owner by
+  // `(provider, userId)`. The writer matches only a v1 claim until #715.
+  claim: SharedLibraryActorClaim | null
+  // The accounts that match a v2 owner (#713): every connected account (#714),
+  // Shikimori's included, so a hand-written v2 `provider: 'shikimori'` owner
+  // matches it.
   trackerAccounts: { provider: string; userId: string }[]
 }
+
+type SharedLibraryActorClaim =
+  | { libraryId: string; ownerId: number }
+  | { libraryId: string; provider: string; userId: string }
 
 /** `resolveItem` / `resolveWriteTarget`: an absolute path, or why there is none. */
 type SharedLibraryResolved = string | 'missing' | 'escapes'
@@ -188,9 +194,10 @@ type SharedLibraryResolved = string | 'missing' | 'escapes'
 // --- Attached libraries: the open flow (S7a #578) ---------------------------------
 
 /**
- * How this PC uses an attached library: `owner` (logged in as its owner, or
- * the session expired), `claim` (no account, claimed locally), `foreign`
- * (logged in as someone else: used as videos, its state ignored), or `videos`.
+ * How this PC uses an attached library: `owner` (one of its connected
+ * accounts is the owner, an expired session included), `claim` (no tracker
+ * account, claimed locally), `foreign` (accounts, none of them the owner: used
+ * as videos, its state ignored), or `videos`.
  */
 type AttachedLibraryRole = 'videos' | 'owner' | 'claim' | 'foreign'
 
@@ -227,6 +234,9 @@ interface AttachedLibraryRecord {
   access: 'read-write' | 'read-only'
   accessReason?: AttachedLibraryAccessReason
   claim?: { ownerId: number; at: number }
+  // A no-account PC's claim of a v2 library (#714), beside `trackerOwner`, so a
+  // v1 claim keeps exactly `{ ownerId, at }` and a 6.x never reads this one.
+  trackerClaim?: { provider: string; userId: string; at: number }
   lastSeenAt: number
   lastSyncAt: number | null
 }
@@ -238,9 +248,12 @@ interface SharedLibraryCandidate {
   libraryId: string | null
   name: string
   ownerNickname: string | null
+  // The owner's tracker (#714): `'shikimori'` for a v1 owner, a v2 owner's
+  // `provider` (an open string); null with no owner.
+  ownerProvider: string | null
   mode: SharedLibraryMode | null
   titleCount: number
-  // `choose`: a With-metadata library on a PC with no Shikimori account.
+  // `choose`: a With-metadata library on a PC with no tracker account (#714).
   identity: 'videos' | 'owner' | 'foreign' | 'choose'
   readOnly?: { reason: SharedLibraryReadOnlyReason; message: string }
 }
@@ -286,6 +299,13 @@ interface AttachedLibraryInfo {
   name: string
   mode: SharedLibraryMode
   ownerNickname: string | null
+  // The owner's tracker (#714): `'shikimori'` for a v1 owner, a v2 owner's
+  // `provider`, null with no owner. A hand-written v2 `provider: 'shikimori'`
+  // library is `'shikimori'` too, so the Shikimori leg also checks `layoutVersion`.
+  ownerProvider: string | null
+  // 2 for a v2 library (`trackerOwner`), 1 otherwise (#714). Until #715 only a
+  // v1 library runs a leg, joins the Shikimori leg or offers Sync now.
+  layoutVersion: 1 | 2
   role: AttachedLibraryRole
   access: 'read-write' | 'read-only'
   accessReason?: AttachedLibraryAccessReason
@@ -469,6 +489,9 @@ interface ExportPrefetchView {
  *   first, then widened, always With metadata (a Videos only add is routed here);
  * - `claimed`: a library this PC uses through a local claim (S7a #578), never
  *   written; the export goes into a library at `root`, next to it;
+ * - `other-owner` (#714): a With metadata library another of this PC's
+ *   accounts owns (`owner`), never written; the export goes into the picked
+ *   owner's library at `root`, next to it;
  * - `foreign`: a With metadata library owned by someone else, never written;
  *   the export goes into a new library at `root`, next to it;
  * - `read-only`: a library this version can't write (a newer major, over a cap,
@@ -480,6 +503,7 @@ type ExportTargetKind =
   | 'upgrade'
   | 'own-metadata'
   | 'claimed'
+  | 'other-owner'
   | 'foreign'
   | 'read-only'
 
@@ -499,8 +523,20 @@ interface ExportTarget {
   mode: ExportMode
   /** The library's name: the existing one's, or the one to create. */
   libraryName: string
-  /** `foreign` or `claimed`, or a library next to one: whose library is at the picked folder. */
+  /** `foreign`, `claimed` or `other-owner`, or a library next to one: whose library is at the picked folder. */
   ownerNickname?: string
+  /**
+   * The owner of the library the target names (#714): the library at `root`
+   * for `own-metadata`, the one at the picked folder for `other-owner`. The
+   * dialog preselects it in the owner picker.
+   */
+  owner?: { provider: string; nickname: string | null }
+  /**
+   * Why the export goes into a separate library instead of taking over the
+   * Videos-only one at the picked folder (#714): set when the takeover can't
+   * be offered for the picked owner (the library is at a newer layout minor).
+   */
+  separateReason?: string
   /** Why the export is blocked (`read-only`); null when it isn't. */
   blocked: string | null
   /** Free bytes on the target's filesystem, or null when `statfs` failed. */
@@ -535,6 +571,22 @@ interface ExportPlanRequest {
   codec?: string
   /** `videos` by default (S6e #586). */
   mode?: ExportMode
+  /**
+   * The owner a new With metadata library gets (#714), one of the plan's
+   * `owners`. Left out: an own library at the folder keeps its owner, else
+   * `defaultOwner`.
+   */
+  owner?: TrackerId
+  /** "Create a separate library instead" (#714): never take over the Videos-only library there. */
+  sibling?: boolean
+}
+
+/** One account the export can make the owner of a new With metadata library (#714). */
+interface ExportOwnerOption {
+  provider: TrackerId
+  nickname: string
+  /** A Shikimori owner: the library stays v1, which older versions of the app open. */
+  olderVersions: boolean
 }
 
 /**
@@ -596,10 +648,17 @@ interface ExportPlan {
   prefetch: ExportPrefetchGate
   /** Free bytes where pre-fetched episodes download (the hot root), or null when unknown. */
   localFree: number | null
-  /** A Shikimori account is set (`shikimoriUser`, an expired session included): With metadata is offered (S6e #586). */
+  /**
+   * An account the export can make the owner is set (`shikimoriUser` until
+   * #715, an expired session included): With metadata is offered (S6e #586).
+   */
   canExportMetadata: boolean
-  /** That account's nickname, for the default library name; null logged out. */
+  /** `defaultOwner`'s nickname, for the default library name; null with no owner. */
   nickname: string | null
+  /** The accounts the owner picker offers (#714): Shikimori only until #715. */
+  owners: ExportOwnerOption[]
+  /** The primary when it is offered, else the first offered owner; null with none (#714). */
+  defaultOwner: TrackerId | null
 }
 
 interface ExportStartRequest {
@@ -616,6 +675,9 @@ interface ExportStartRequest {
   mode?: ExportMode
   /** The user confirmed becoming the owner of a Videos-only library (`upgrade`, owner decision 9). */
   confirmTakeover?: boolean
+  /** As on the plan (#714); `start` refuses an owner that isn't connected and offered. */
+  owner?: TrackerId
+  sibling?: boolean
 }
 
 type ExportStartResult = { ok: true; job: ExportJobView } | { ok: false; reason: string }

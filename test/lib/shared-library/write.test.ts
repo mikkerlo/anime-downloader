@@ -834,6 +834,28 @@ describe('layout v2 (#713)', () => {
     ).rejects.toBeInstanceOf(NotOwnerError)
   })
 
+  // #714: a v2 claim names the v2 owner by `(provider, userId)`, and the
+  // writer refuses it until #715 runs v2 legs; a v1 claim still writes v1.
+  it('a v2 claim is refused by writeState and writeManifest; a v1 claim still writes a v1 library', async () => {
+    const v2Claim: SharedLibraryActor = {
+      ...LOGGED_OUT,
+      claim: { libraryId: LIB, ...ANILIST_ACTOR.trackerAccounts[0] },
+      trackerAccounts: []
+    }
+    expect(v2Claim.claim).toEqual({ libraryId: LIB, provider: 'anilist', userId: V2_USER_ID })
+    const root = fixtureV2('golden-metadata')
+    const m = (await ok(root)).manifest
+    await refuses(root, () => writeState(root, EMPTY_DOC, v2Claim, 1), NotOwnerError)
+    await refuses(root, () => writeManifest(root, m, v2Claim, 3), NotOwnerError)
+
+    const v1 = fixture('golden-metadata')
+    await writeState(v1, EMPTY_DOC, CLAIMANT, 4)
+    const after = await ok(v1)
+    expect(after.manifest.layoutVersion).toBe(1)
+    await writeManifest(v1, after.manifest, CLAIMANT, after.manifest.generation)
+    expect((await ok(v1)).manifest.layoutVersion).toBe(1)
+  })
+
   it('an identity change between two v2 owners (AniList 5 → MAL 5) needs a takeover', async () => {
     const root = fixtureV2('golden-metadata')
     const m = (await ok(root)).manifest

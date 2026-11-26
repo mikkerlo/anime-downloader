@@ -109,6 +109,12 @@ export interface TrackerLifecycleDeps {
   broadcast?: (channel: string, ...args: unknown[]) => void
   /** `EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED`, passed in by `index.ts` (#696). */
   accountsChangedChannel?: string
+  /**
+   * The `afterLogin` step of a tracker with no steps of its own (AniList,
+   * MAL): the Shared Library login run (#714), which drops a claim and merges
+   * the owner's libraries. Shikimori's router sets its own.
+   */
+  afterLogin?: (trackerId: TrackerId) => void
 }
 
 export interface TrackerLifecycle {
@@ -182,14 +188,17 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
   function stepsOf(id: TrackerId): TrackerSessionSteps {
     const own = registered.get(id)
     if (own) return own
+    const afterLogin = deps.afterLogin
+    const login = afterLogin ? { afterLogin: () => afterLogin(id) } : {}
     const t = trackerRates.instance(id)
-    if (!t) return NO_STEPS
+    if (!t) return { ...NO_STEPS, ...login }
     return {
       startTimer: () => t.startSyncTimer(),
       drain: () => void t.syncQueue(),
       stopTimer: () => t.stopSyncTimer(),
       broadcastStatus: () => t.broadcastSyncStatus(),
-      broadcastQueue: () => t.broadcastQueueChanged()
+      broadcastQueue: () => t.broadcastQueueChanged(),
+      ...login
     }
   }
 

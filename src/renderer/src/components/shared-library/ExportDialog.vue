@@ -4,8 +4,9 @@
 // the target is re-planned when the folder or the library name changes. The
 // preflight (#575) comes with each plan and is narrowed to the selection here.
 // Unmerged pairs (#576) are merged into MKV by default when this PC has ffmpeg.
-// With metadata (#586) needs a Shikimori account; an own With metadata target
-// switches to it, and a Videos-only one is upgraded only once confirmed.
+// With metadata (#586) needs an account the owner picker offers (#714); an own
+// With metadata target switches to it, and a Videos-only one is upgraded only
+// once confirmed. With 2 or more owners the picker sets a new library's owner.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { availableCodecs } from '@shared/video-codecs';
 import {
@@ -13,16 +14,23 @@ import {
   LOG_IN_FOR_METADATA,
   METADATA_HELP,
   ROUTED_TO_METADATA,
+  SEPARATE_LIBRARY,
+  V2_TAKEOVER_WARNING,
+  V7_ONLY_NOTE,
   exportEstimate,
   fitsFreeSpace,
   mayBeSkippedWarning,
+  metadataHelp,
   metadataLibraryName,
+  otherOwnerTarget,
   overflowWarning,
+  ownerOptionLabel,
   preflightForSelection,
   renamedWarning,
   requiredBytes,
   skippedWarning,
-  takeoverWarning
+  takeoverWarning,
+  trackerName
 } from '@shared/shared-library-export';
 import { formatBytes } from '../../utils';
 import { useExportStore } from '../../stores/export';
@@ -71,12 +79,37 @@ const choice = computed(() => ({
   reencode: codec.value !== 'copy'
 }));
 
-// With metadata (#586): offered with a Shikimori account. The target decides
+// With metadata (#586): offered with an owner account. The target decides
 // the mode it really runs in: an own With metadata library is always With metadata.
 const mode = ref<ExportMode>('videos');
 const canExportMetadata = ref(false);
 const nickname = ref<string | null>(null);
 const confirmTakeover = ref(false);
+// The owner picker (#714): the plan's owners, the default (the primary), and
+// the user's own pick. With no pick, an own library's owner is preselected.
+const owners = ref<ExportOwnerOption[]>([]);
+const defaultOwner = ref<TrackerId | null>(null);
+const pickedOwner = ref<TrackerId | null>(null);
+// "Create a separate library instead": never take over the Videos-only library.
+const sibling = ref(false);
+const selectedOwner = computed<TrackerId | null>(() => {
+  if (pickedOwner.value) return pickedOwner.value;
+  const t = target.value;
+  const own = t?.kind === 'own-metadata' ? t.owner?.provider : undefined;
+  const offered = owners.value.find((o) => o.provider === own);
+  return offered ? offered.provider : defaultOwner.value;
+});
+const selectedOption = computed(
+  () => owners.value.find((o) => o.provider === selectedOwner.value) ?? null
+);
+const showPicker = computed(() => mode.value === 'metadata' && owners.value.length >= 2);
+// An AniList or MAL owner makes the library v2 (#713): only v7 or later opens it.
+const v2Owner = computed(
+  () =>
+    effectiveMode.value === 'metadata' &&
+    !!selectedOption.value &&
+    !selectedOption.value.olderVersions
+);
 const effectiveMode = computed<ExportMode>(() => target.value?.mode ?? mode.value);
 // A Videos only add into an own With metadata library is routed to With metadata.
 const ownMetadata = computed(() => target.value?.kind === 'own-metadata');
@@ -87,7 +120,22 @@ const mergesOnly = computed(
     effectiveMode.value === 'metadata' &&
     (target.value?.kind === 'upgrade' || target.value?.kind === 'own-metadata')
 );
-const ownerName = computed(() => nickname.value || 'this account');
+const ownerName = computed(
+  () => selectedOption.value?.nickname || nickname.value || 'this account'
+);
+// An AniList or MAL takeover rewrites a v1 library as v2 (#714).
+const takeoverText = computed(() =>
+  v2Owner.value
+    ? `${takeoverWarning(ownerName.value)} ${V2_TAKEOVER_WARNING}`
+    : takeoverWarning(ownerName.value)
+);
+const modeHelp = computed(() => {
+  if (!canExportMetadata.value) return LOG_IN_FOR_METADATA;
+  const tracker = trackerName(selectedOption.value?.provider);
+  return tracker && selectedOption.value?.provider !== 'shikimori'
+    ? metadataHelp(tracker)
+    : METADATA_HELP;
+});
 
 const preflight = computed(() =>
   planPreflight.value ? preflightForSelection(planPreflight.value, selected.value) : null
@@ -172,6 +220,15 @@ const targetLine = computed(() => {
         : `Adds to '${t.libraryName}' (With metadata)`;
     case 'claimed':
       return CLAIMED_TARGET;
+    case 'other-owner': {
+      // The user's own library under another account (#714), never the foreign line.
+      const picked = selectedOption.value;
+      const tracker = trackerName(picked?.provider);
+      return otherOwnerTarget(
+        trackerName(t.owner?.provider),
+        picked ? (tracker ? `${picked.nickname} (${tracker})` : picked.nickname) : 'this account'
+      );
+    }
     case 'foreign':
       return `This drive has ${t.ownerNickname}'s library. Your export goes into a new library next to it.`;
     case 'read-only':
@@ -198,6 +255,15 @@ const blockedReason = computed(() => {
   return null;
 });
 
+/** The owner pick and "separate" (#714), on With metadata only. */
+function ownerFields(): Pick<ExportPlanRequest, 'owner' | 'sibling'> {
+  if (mode.value !== 'metadata') return {};
+  return {
+    ...(pickedOwner.value ? { owner: pickedOwner.value } : {}),
+    ...(sibling.value ? { sibling: true } : {})
+  };
+}
+
 async function replan(): Promise<void> {
   if (!dir.value) return;
   planning.value = true;
@@ -210,7 +276,8 @@ async function replan(): Promise<void> {
       session,
       unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
       codec: codec.value,
-      mode: mode.value
+      mode: mode.value,
+      ...ownerFields()
     });
     // Another library: its upgrade is confirmed again.
     if (plan.target?.root !== target.value?.root) confirmTakeover.value = false;
@@ -239,6 +306,8 @@ onMounted(async () => {
     unmerged.value = mergeSupport.value.available ? 'merge' : 'copy-as-is';
     canExportMetadata.value = plan.canExportMetadata ?? false;
     nickname.value = plan.nickname ?? null;
+    owners.value = plan.owners ?? [];
+    defaultOwner.value = plan.defaultOwner ?? null;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -254,7 +323,27 @@ async function pickFolder(): Promise<void> {
   const picked = await window.api.exportPickTarget();
   if (!picked) return;
   dir.value = picked;
+  sibling.value = false;
   await replan();
+}
+
+// A pick of another owner (#714): the default name follows it, and the target
+// is planned again for it.
+function pickOwner(provider: TrackerId): void {
+  const before = selectedOption.value;
+  const after = owners.value.find((o) => o.provider === provider);
+  if (!after || provider === before?.provider) return;
+  if (before && name.value === metadataLibraryName(before.nickname)) {
+    name.value = metadataLibraryName(after.nickname);
+  }
+  pickedOwner.value = provider;
+  sibling.value = false;
+  void replan();
+}
+
+function createSeparate(): void {
+  sibling.value = true;
+  void replan();
 }
 
 function onNameInput(): void {
@@ -268,7 +357,8 @@ watch([unmerged, codec], () => void replan());
 // With metadata's default name is "Anime Library (<nickname>)"; a name the
 // user typed is kept. The mode changes how the target is classified.
 watch(mode, (m) => {
-  const own = nickname.value ? metadataLibraryName(nickname.value) : null;
+  const nick = selectedOption.value?.nickname || nickname.value;
+  const own = nick ? metadataLibraryName(nick) : null;
   if (m === 'metadata' && own && name.value === DEFAULT_NAME) name.value = own;
   else if (m === 'videos' && own && name.value === own) name.value = DEFAULT_NAME;
   void replan();
@@ -288,6 +378,7 @@ async function startExport(): Promise<void> {
       unmerged: choice.value.merge ? 'merge' : 'copy-as-is',
       codec: codec.value,
       mode: effectiveMode.value,
+      ...ownerFields(),
       ...(target.value?.kind === 'upgrade' && confirmTakeover.value
         ? { confirmTakeover: true }
         : {})
@@ -374,15 +465,40 @@ async function startExport(): Promise<void> {
         </label>
       </div>
       <div class="hint" data-testid="export-mode-hint">
-        {{ canExportMetadata ? METADATA_HELP : LOG_IN_FOR_METADATA }}
+        {{ modeHelp }}
       </div>
+      <div v-if="showPicker" class="mode owner-picker" data-testid="export-owner">
+        <span class="label">Owner</span>
+        <label v-for="o in owners" :key="o.provider">
+          <input
+            type="radio"
+            :data-testid="`export-owner-${o.provider}`"
+            :checked="selectedOwner === o.provider"
+            @change="pickOwner(o.provider)"
+          />
+          {{ ownerOptionLabel(o) }}
+        </label>
+      </div>
+      <div v-if="v2Owner" class="hint" data-testid="export-v7-note">{{ V7_ONLY_NOTE }}</div>
       <div v-if="routed" class="hint" data-testid="export-mode-routed">
         {{ ROUTED_TO_METADATA }}
       </div>
+      <div v-if="target?.separateReason" class="hint" data-testid="export-separate-reason">
+        {{ target.separateReason }}
+      </div>
       <label v-if="target?.kind === 'upgrade'" class="takeover" data-testid="export-takeover">
         <input v-model="confirmTakeover" type="checkbox" data-testid="export-takeover-confirm" />
-        <span>{{ takeoverWarning(ownerName) }}</span>
+        <span>{{ takeoverText }}</span>
       </label>
+      <div v-if="target?.kind === 'upgrade' && v2Owner" class="field">
+        <button
+          class="btn btn-outline btn-sm"
+          data-testid="export-separate"
+          @click="createSeparate"
+        >
+          {{ SEPARATE_LIBRARY }}
+        </button>
+      </div>
 
       <div
         v-if="estimate.unmerged > 0 || mergedThere > 0"
@@ -604,6 +720,15 @@ async function startExport(): Promise<void> {
 
 .mode .disabled {
   opacity: 0.5;
+}
+
+.owner-picker {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.owner-picker .label {
+  color: var(--text-2);
 }
 
 .takeover {

@@ -554,9 +554,11 @@ pending-verifier key exists.
   switch or a restore, then the timer, a drain and the status broadcast.
   Shikimori's router sets its own steps (`setSteps('shikimori', …)`: 6.x's
   `sync.*` calls, the prefetch abort and snapshots in the reset, and the Shared
-  Library login run, which stays on the Shikimori login only). Any other
-  tracker uses its sync instance, looked up through `services/trackers` at
-  call time; with no instance every step is skipped, never thrown.
+  Library login run). Any other tracker uses its sync instance, looked up
+  through `services/trackers` at call time; with no instance every step is
+  skipped, never thrown. Its `afterLogin` is the lifecycle's `afterLogin` dep,
+  which `index.ts` sets to the same Shared Library login run (#714), so an
+  AniList or MAL login drops a claim and merges that account's libraries too.
 - **Logout** cancels any attempt held for the tracker, parks the live queue
   under the user (`pending: 'keep'`, the default) or drops it (`'discard'`),
   clears the credentials (`vault.commit(key, null)` for AniList and MAL: no

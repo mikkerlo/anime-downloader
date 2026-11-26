@@ -52,6 +52,8 @@ function library(titles: AttachedLibraryTitle[]): AttachedLibraryInfo {
     name: 'Fixture library',
     mode: 'metadata',
     ownerNickname: 'owner',
+    ownerProvider: 'shikimori',
+    layoutVersion: 1,
     role: 'owner',
     access: 'read-write',
     available: true,
@@ -66,10 +68,22 @@ function library(titles: AttachedLibraryTitle[]): AttachedLibraryInfo {
 let changed: (() => void) | null
 let list: AttachedLibraryInfo[]
 
+// The identity warning reads the connected trackers (#714): none here.
+const NO_TRACKERS: TrackerAccountsState = {
+  accounts: [],
+  primary: null,
+  mirror: {},
+  featureSources: {}
+}
+
 function stubApi(overrides: Record<string, unknown>): void {
-  ;(window as unknown as { api: unknown }).api = new Proxy(overrides, {
-    get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : () => () => {})
-  })
+  ;(window as unknown as { api: unknown }).api = new Proxy(
+    { trackerListAccounts: async () => NO_TRACKERS, ...overrides },
+    {
+      get: (target, prop, recv) =>
+        prop in target ? Reflect.get(target, prop, recv) : () => () => {}
+    }
+  )
 }
 
 function mountLibrary(opts: {
@@ -229,6 +243,7 @@ describe('OpenLibraryDialog', () => {
       libraryId,
       name,
       ownerNickname: identity === 'videos' ? null : 'owner',
+      ownerProvider: identity === 'videos' ? null : 'shikimori',
       mode: identity === 'videos' ? 'videos' : 'metadata',
       titleCount: 2,
       identity

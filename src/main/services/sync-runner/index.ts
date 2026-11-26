@@ -1176,7 +1176,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   const titlesOf = (lib: AttachedLibraryInfo): AttachedLibraryTitle[] =>
     attached.get(lib.libraryId)?.titles ?? lib.titles
 
-  /** Owned or claimed metadata libraries that are a party to `rec` or hold its title. */
+  /**
+   * Owned or claimed metadata libraries that are a party to `rec` or hold its
+   * title; v1 only until #715 runs v2 legs (#714).
+   */
   function conflictLibraries(rec: SyncConflictRecord): AttachedLibraryInfo[] {
     return attached
       .list()
@@ -1184,6 +1187,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         (l) =>
           l.mode === 'metadata' &&
           (l.role === 'owner' || l.role === 'claim') &&
+          l.layoutVersion === 1 &&
           (`library:${l.libraryId}` in rec.parties ||
             titlesOf(l).some((t) => String(t.animeId) === rec.animeId))
       )
@@ -1293,7 +1297,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const animeId = fromMal === null ? rec.animeId : null
     const libs = animeId === null ? [] : conflictLibraries(rec)
     const isRate = field !== 'watched'
-    if (isRate && !isOwnerPc && !libs.some((l) => l.role === 'claim')) {
+    // A claim unlocks a rate conflict only for the owner it names: a v1 claim
+    // on a library whose v1 owner is `rec.ownerScope` (#714).
+    const attachedRecs = store.get<Record<string, AttachedLibraryRecord> | undefined>(
+      'attachedLibraries'
+    )
+    const claimsScope = (l: AttachedLibraryInfo): boolean =>
+      l.role === 'claim' && shikimoriOwnerId(attachedRecs?.[l.libraryId]?.owner) === ownerId
+    if (isRate && !isOwnerPc && !libs.some(claimsScope)) {
       return { failed: "Sign in as the library's owner to resolve this.", notes, queued: false }
     }
     if (!isRate && animeId === null) return { failed: 'Unknown title.', notes, queued: false }
@@ -1562,6 +1573,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   // --- runs ------------------------------------------------------------------------------------
 
+  /** An owned library whose merge leg is the Shikimori leg: a v1 Shikimori owner (#714). */
+  const shikimoriOwned = (lib: AttachedLibraryInfo): boolean =>
+    lib.role === 'owner' && lib.ownerProvider === 'shikimori' && lib.layoutVersion === 1
+
   async function run(
     trigger: SyncTrigger,
     pick: (lib: AttachedLibraryInfo) => boolean,
@@ -1622,10 +1637,12 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         }
         return o
       })
-      // One Shikimori leg per owner, over the union of that owner's in-scope titles.
+      // One Shikimori leg per owner, over the union of that owner's in-scope
+      // titles: a v1 library the Shikimori account owns only (#714), never
+      // another tracker's library, nor a v2 one until #715.
       const owners = new Map<number, string[]>()
       for (const lib of fresh) {
-        if (lib.mode !== 'metadata' || lib.role !== 'owner') continue
+        if (lib.mode !== 'metadata' || !shikimoriOwned(lib)) continue
         const id = lib.libraryId
         const ownerId = userId()
         if (ownerId === null) continue
@@ -1653,7 +1670,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       }
       for (const lib of fresh) {
         const o = outcomes.get(lib.libraryId)!
-        const s = lib.role === 'owner' && userId() !== null ? shiki.get(userId()!) : undefined
+        const s = shikimoriOwned(lib) && userId() !== null ? shiki.get(userId()!) : undefined
         const shikiPart: Pick<SyncLibraryResult, 'shikimori' | 'shikimoriReason'> = s
           ? {
               shikimori: s.shikimori,
@@ -1739,6 +1756,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       ...target,
       mode: 'metadata',
       ownerNickname: null,
+      // The leg reads the owner from the manifest; a v2 one is skipped (#713).
+      ownerProvider: 'shikimori',
+      layoutVersion: 1,
       role: 'owner',
       access: 'read-write',
       available: true,
@@ -1832,6 +1852,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         (l) =>
           l.mode === 'metadata' &&
           (l.role === 'owner' || l.role === 'claim') &&
+          // v1 only until #715 runs v2 legs (#714).
+          l.layoutVersion === 1 &&
           l.titles.some((t) => t.animeId === animeId),
         String(animeId)
       ),

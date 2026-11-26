@@ -1,10 +1,20 @@
-import { app, dialog, shell, BrowserWindow, Notification, protocol, session } from 'electron'
+import {
+  app,
+  dialog,
+  shell,
+  BrowserWindow,
+  Notification,
+  protocol,
+  safeStorage,
+  session
+} from 'electron'
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { createStorageService, type MainStorageService } from './store'
 import { unreadableConfigMessage } from './store/config-recovery'
-import { STORE_DEFAULTS } from './store/defaults'
+import { STORE_DEFAULTS, WRITE_THROUGH_KEYS } from './store/defaults'
+import { createCredentialVault, createSafeStorageHolder } from './trackers/credential-vault'
 import { DownloadManager, sanitizeFilename } from './download-manager'
 import {
   initAutoDownloader,
@@ -101,20 +111,21 @@ applyApiBaseOverrides(process.env, app.isPackaged)
 
 const store = openStorageOrExit()
 
+// The AniList / MyAnimeList credential vault (#690). `safeStorage` is attached
+// in `bootstrap()`, after `ready`, and is first used only for a non-null
+// AniList or MAL credential, so a Shikimori-only profile never reaches it.
+const safeStorageHolder = createSafeStorageHolder()
+const credentialVault = createCredentialVault({ store, safeStorage: safeStorageHolder })
+
 function openStorageOrExit(): MainStorageService<typeof STORE_DEFAULTS> {
   const cwd = app.getPath('userData')
   try {
     return createStorageService(STORE_DEFAULTS, {
       cwd,
       // Keys whose last write must survive a crash inside the persist-coalescing
-      // window: queued offline Shikimori edits and auth material. Everything else
+      // window: queued offline tracker edits and auth material. Everything else
       // (caches, watch positions) tolerates losing the final ≤500ms before a crash.
-      writeThroughKeys: [
-        'shikimoriUpdateQueue',
-        'shikimoriParkedQueues',
-        'token',
-        'shikimoriCredentials'
-      ]
+      writeThroughKeys: WRITE_THROUGH_KEYS
     })
   } catch (err) {
     return exitOnUnreadableConfig(err, cwd)
@@ -744,6 +755,7 @@ function registerIpcHandlers(): void {
   registerIpcRouters({
     store,
     startupNotice: store.startupNotice,
+    credentialVault,
     smotretApi,
     animeCacheService,
     coldStorageService,
@@ -819,6 +831,8 @@ function createWindow(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  // A getter, so the `safeStorage` module getter runs on the vault's first use.
+  safeStorageHolder.attach(() => safeStorage)
   // Satisfy Shikimori's image hotlink protection so friend avatars (loaded by
   // the renderer straight from shikimori.io) render instead of coming back blank.
   installShikimoriReferer(session.defaultSession)

@@ -173,7 +173,7 @@ The drive comes from another PC or another person, so the reader is defensive.
 
 ### Never on the drive
 
-`token`, `shikimoriCredentials`, `syncplayPassword`, any absolute local path (S4 strips `skip`'s `filePath`), or any field from this PC that isn't on the allow-list. The forbidden names are stripped wherever unknown fields are copied (`copyUnknown`): from bags, and from the plain keys at the doc and title levels. The only off-allow-list fields that reach the drive are the ones read from this drive's chosen file, through the writer's walk.
+`token`, `shikimoriCredentials`, `syncplayPassword`, the tracker secrets `anilistCredentials`, `myanimelistCredentials`, `myanimelistClientConfig` and `myanimelistClientSecret` (#690; exact names only, so a future minor's legitimate field isn't stripped), any absolute local path (S4 strips `skip`'s `filePath`), or any field from this PC that isn't on the allow-list. The forbidden names are stripped wherever unknown fields are copied (`copyUnknown`): from bags, and from the plain keys at the doc and title levels. The only off-allow-list fields that reach the drive are the ones read from this drive's chosen file, through the writer's walk.
 
 ## The naming rule (`naming.rule = 'v1'`)
 
@@ -559,7 +559,7 @@ One action before a trip, from Settings → General and from the missing-ffmpeg 
 ## Privacy
 
 - **What a drive holds.** Videos, their names, per-title metadata snapshots and posters, and, for a *With metadata* library only, the watch state of the titles in its `titles[]`: positions, `watched`, the owner's Shikimori rates, stars, priority and its order, dismissed continue-watching and skip detections. Never any other title. `state.json` is plain JSON, so whoever holds the drive can read that watch state; that is what *With metadata* means.
-- **What never does.** `token`, `shikimoriCredentials`, `syncplayPassword`, any absolute local path, or any field off S5's allow-list ([Never on the drive](#never-on-the-drive)). `test/integration/shared-library-export-metadata.test.ts` and the two-instance e2e scan every byte on the drive for the seeded secrets.
+- **What never does.** `token`, `shikimoriCredentials`, `syncplayPassword`, any absolute local path, or any field off S5's allow-list ([Never on the drive](#never-on-the-drive)). `test/integration/shared-library-export-metadata.test.ts` and the two-instance e2e scan every byte on the drive for the seeded secrets; since #690 the integration test also seeds the AniList and MAL tokens, the MAL client ID and secret, in both vault modes (plain fallback and `safeStorage`).
 - **What stays on the PC.** The bases (`sync-bases/`), the pending store (`sync-pending/`), the conflicts (`sync-state/`), the sync log (`sync-log/`), the snapshot cache (`shared-library-cache/`), a claim, and the job files ([Storage](./storage.md)). Opening, playing, searching and copying make no network request, and neither does a merge's library leg; only the Shikimori leg below talks to the network.
 - **Shikimori** only ever hears from the owner's logged-in PC, through the existing queue. A claim PC never sends, and a foreign one never merges.
 

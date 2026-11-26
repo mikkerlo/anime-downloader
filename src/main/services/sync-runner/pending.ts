@@ -10,6 +10,7 @@
 import { promises as fsp } from 'fs'
 import * as path from 'path'
 import type { StorageService } from '../../store/types'
+import { rateClockKey } from '../../store/sync-meta'
 import type { CachedRateEntry } from '../../lib/shikimori-rate-cache'
 
 export interface PendingField {
@@ -113,7 +114,10 @@ export function overlay(
 ): Partial<Record<SyncRateField, SyncRateFieldClock>> | undefined {
   const fields = rates[String(malId)]
   if (!fields) return undefined
-  const stamps = store.get<SyncMeta | undefined>('syncMeta')?.rates?.[`${ownerId}:${malId}`] ?? {}
+  const stamps =
+    store.get<SyncMeta | undefined>('syncMeta')?.rates?.[
+      rateClockKey('shikimori', ownerId, malId)
+    ] ?? {}
   const out: Partial<Record<SyncRateField, SyncRateFieldClock>> = {}
   for (const [f, p] of Object.entries(fields) as [SyncRateField, PendingField][]) {
     const stamp = stamps[f]

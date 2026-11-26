@@ -206,3 +206,36 @@ The drain's drift ranking, `STATUS_ORDER`, lives beside `RateValues` in
   format would round a stale low raw to 0. Otherwise the stored raw is kept
   (`anilistRawToStore`), so it is never part of `changedFields` and never a
   reconcile diff.
+
+## Store keys, key maps and the credential vault
+
+#690 (T1) adds the AniList and MyAnimeList store keys, every one at its
+default, with no migration: conf merges the defaults under an existing
+`config.json`, so the first start adds them and a downgrade to 6.x carries them
+forward untouched. Shikimori's keys don't change. [Settings](settings.md) lists
+each key with its type, default and owner.
+
+- **Key maps.** `src/main/trackers/keys.ts` exports `SHIKIMORI_KEYS`,
+  `ANILIST_KEYS` and `MYANIMELIST_KEYS`: credentials, user, session-expired
+  flag, rate cache, queue, parked queues and details, plus AniList's id map and
+  MAL's client config. #691 (T2a)'s `createTrackerSyncService(provider, keys,
+  deps)` takes one of them. MAL's keys are `myanimelist*`, never `mal*`,
+  because `malIdMap` already means "a cache keyed by MAL id".
+- **Rate clocks.** `rateClockKey(tracker, userId, malId)`
+  (`src/main/store/sync-meta.ts`) builds the `syncMeta.rates` key, and
+  `stampRateClocks` takes it. Shikimori keeps `<userId>:<malId>`, so its stamps
+  and its two readers (`projectRate` and the sync runner's pending overlay) see
+  exactly the 6.x bytes; AniList and MAL use `<provider>:<userId>:<malId>`.
+- **The credential vault** (`src/main/trackers/credential-vault.ts`) holds
+  `anilistCredentials`, `myanimelistCredentials` and `myanimelistClientSecret`
+  as `{ v: 1, enc, data }` blobs, encrypted with `safeStorage` or, with no
+  keyring, in plain text with a warning. It is lazy, never touched for a
+  Shikimori-only user, and a blob it can't decrypt reads as `locked` until the
+  user signs in again or disconnects. [Storage](storage.md#tracker-credential-vault-690)
+  has the full contract: the encrypt/commit split, the conditional write, the
+  guarded write-back and the plain upgrade.
+- **Guards.** `set-setting` refuses the vault keys, `myanimelistClientConfig`,
+  `trackerPrimary`, `trackerMirror` and `trackerFeatureSource`, and
+  `get-setting` refuses the vault keys, both by the key's first path segment.
+  A Shared Library export never carries the vault keys or the client config
+  (`FORBIDDEN_FIELDS`).

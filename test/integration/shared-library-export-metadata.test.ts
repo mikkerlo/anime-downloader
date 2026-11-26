@@ -28,6 +28,10 @@ import {
   sel,
   type ExportEnv
 } from '../helpers/shared-library-export'
+import { InMemoryStorage } from '../helpers/in-memory-storage'
+import { createFakeSafeStorage } from '../helpers/fake-safe-storage'
+import { createCredentialVault } from '../../src/main/trackers/credential-vault'
+import { setClientConfig } from '../../src/main/trackers/client-config'
 
 const ME = { id: 4242, nickname: 'akira', avatar: '' }
 const FRIEND: SharedLibraryOwner = { shikimoriId: 777, nickname: 'friend' }
@@ -301,6 +305,62 @@ describe('With metadata: what leaves this PC', () => {
       for (const s of SECRETS) expect(bytes.includes(s), `${rel} holds ${s}`).toBe(false)
     }
   })
+
+  // #690: the AniList and MAL secrets, seeded through the real vault. The plain
+  // fallback is the case that matters (ciphertext would pass the scan
+  // trivially): its blobs hold the clear values.
+  for (const mode of ['plain', 'safeStorage'] as const) {
+    it(`no file under the library holds the AniList or MAL tokens, the MAL client ID or secret, or their blobs (${mode} vault)`, async () => {
+      const tracker = ['al-SECRET-5', 'mal-SECRET-6', 'malref-SECRET-7', 'malsec-SECRET-8']
+      const clientId = 'malcid-SECRET-9'
+      const scratch = new InMemoryStorage()
+      const fake = createFakeSafeStorage({ available: mode === 'safeStorage' })
+      const vault = createCredentialVault({
+        store: scratch,
+        safeStorage: fake.holder,
+        warn: () => {}
+      })
+      await vault.write('anilistCredentials', { access_token: tracker[0] })
+      await vault.write('myanimelistCredentials', {
+        access_token: tracker[1],
+        refresh_token: tracker[2]
+      })
+      await setClientConfig(scratch, vault, { clientId, secret: tracker[3] })
+      const seeded = {
+        anilistCredentials: scratch.get('anilistCredentials'),
+        myanimelistCredentials: scratch.get('myanimelistCredentials'),
+        myanimelistClientConfig: scratch.get('myanimelistClientConfig'),
+        myanimelistClientSecret: scratch.get('myanimelistClientSecret')
+      }
+      for (const blob of [
+        seeded.anilistCredentials,
+        seeded.myanimelistCredentials,
+        seeded.myanimelistClientSecret
+      ])
+        expect(blob).toMatchObject({ v: 1, enc: mode })
+      if (mode === 'plain') {
+        expect(JSON.stringify(seeded)).toContain(tracker[0])
+        expect(JSON.stringify(seeded)).toContain(tracker[3])
+      }
+      const blobStrings = [
+        seeded.anilistCredentials,
+        seeded.myanimelistCredentials,
+        seeded.myanimelistClientSecret
+      ].map((b) => (b as { data: string }).data)
+
+      const r = rig({ store: seeded })
+      const root = path.join(r.env.drive, 'Trip')
+      await startMeta(r, [r.a1, r.b1])
+      expect((await pairOf(root)).state).not.toBeNull()
+      const files = Object.keys(scan(root))
+      expect(files).toContain(path.join(LIBRARY_DIR, 'state.json'))
+      for (const rel of files) {
+        const bytes = fs.readFileSync(path.join(root, rel))
+        for (const s of [...tracker, clientId, ...blobStrings])
+          expect(bytes.includes(s), `${rel} holds ${s}`).toBe(false)
+      }
+    })
+  }
 })
 
 describe('With metadata: the kills', () => {

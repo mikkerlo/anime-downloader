@@ -5,6 +5,8 @@ import type { ParkedQueues } from '../lib/shikimori-queue'
 import type { ShowSkipDetections, CachedFingerprint } from '../skip-detector'
 import type { Mp4StreamingStats } from '../mp4-faststart'
 import type { AutoDownloadSubscription } from '../index'
+import type { VaultBlob } from '../trackers/credential-vault'
+import type { MalClientConfig } from '../trackers/client-config'
 import type { PersistedStoreKey } from './keys'
 
 // The electron-store defaults. They live outside `src/main/index.ts` so a test
@@ -119,8 +121,55 @@ export const STORE_DEFAULTS = {
   workOffline: false,
   attachedLibraries: {} as Record<string, AttachedLibraryRecord>,
   sharedLibraryPromptDismissed: [] as string[],
-  prepareOfflineLastRun: null as PrepareOfflineLastRun | null
+  prepareOfflineLastRun: null as PrepareOfflineLastRun | null,
+  // AniList, MyAnimeList and the shared tracker choices (#690, epic #688). No
+  // migration: conf merges these under an existing file at their defaults.
+  // The two credential keys and `myanimelistClientSecret` hold only the
+  // credential vault's blob (`trackers/credential-vault.ts`), never a secret.
+  anilistCredentials: null as VaultBlob | null,
+  anilistUser: null as TrackerUser | null,
+  anilistSessionExpired: false,
+  anilistUserRates: [] as unknown[],
+  anilistUpdateQueue: [] as unknown[],
+  anilistParkedQueues: {} as ParkedQueues,
+  anilistAnimeDetails: {} as Record<string, unknown>,
+  anilistIdMap: {} as Record<string, unknown>,
+  myanimelistCredentials: null as VaultBlob | null,
+  myanimelistUser: null as TrackerUser | null,
+  myanimelistSessionExpired: false,
+  myanimelistUserRates: [] as unknown[],
+  myanimelistUpdateQueue: [] as unknown[],
+  myanimelistParkedQueues: {} as ParkedQueues,
+  myanimelistAnimeDetails: {} as Record<string, unknown>,
+  myanimelistClientConfig: null as MalClientConfig | null,
+  myanimelistClientSecret: null as VaultBlob | null,
+  // Null until #696 (T3c) resolves it: the stored primary if connected, else
+  // the first connected tracker. A missing `trackerMirror` entry means on; a
+  // missing `trackerFeatureSource` entry means automatic.
+  trackerPrimary: null as TrackerId | null,
+  trackerMirror: {} as Partial<Record<TrackerId, boolean>>,
+  trackerFeatureSource: {} as Record<string, TrackerId>
 }
+
+/**
+ * Top-level keys persisted synchronously on every write instead of debounced:
+ * queued offline edits and auth material, whose last write must survive a
+ * crash inside the coalescing window. `myanimelistClientConfig` is not one: it
+ * holds only the client ID, which is in every authorize URL.
+ */
+export const WRITE_THROUGH_KEYS = [
+  'shikimoriUpdateQueue',
+  'shikimoriParkedQueues',
+  'token',
+  'shikimoriCredentials',
+  'anilistUpdateQueue',
+  'anilistParkedQueues',
+  'anilistCredentials',
+  'myanimelistUpdateQueue',
+  'myanimelistParkedQueues',
+  'myanimelistCredentials',
+  'myanimelistClientSecret'
+] as const satisfies readonly PersistedStoreKey[]
 
 // Compile-time guard: `STORE_DEFAULTS` keys must equal `PERSISTED_STORE_KEYS`.
 // Renaming a default key without updating the tuple breaks this assertion,

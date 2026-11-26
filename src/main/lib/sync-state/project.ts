@@ -3,6 +3,7 @@
 // result. No `fs`: file identities come from `deps.resolveEpisodeFile`.
 
 import type { StorageService } from '../../store/types'
+import { rateClockKey } from '../../store/sync-meta'
 import type { CachedRateEntry } from '../shikimori-rate-cache'
 import type { QueuedShikimoriUpdate } from '../shikimori-queue'
 import { LEGACY_ORIGIN, watchSyncOf } from './clock'
@@ -109,7 +110,9 @@ export function projectRate(
     if (RATE_FIELDS.some((f) => pending[f] === undefined)) return undefined
     values = { episodes: 0, status: '', score: 0, rewatches: 0 }
   }
-  const stamps = store.get<SyncMeta | undefined>('syncMeta')?.rates?.[`${owner}:${malId}`] ?? {}
+  const stamps =
+    store.get<SyncMeta | undefined>('syncMeta')?.rates?.[rateClockKey('shikimori', owner, malId)] ??
+    {}
   const serverAt = cached?.rate.serverUpdatedAt ? Date.parse(cached.rate.serverUpdatedAt) : NaN
   const shikimoriClock = { at: Number.isFinite(serverAt) ? serverAt : 0, origin: SHIKIMORI_ORIGIN }
   const field = <K extends SyncRateField>(f: K): SyncField<Rates[K]> => {

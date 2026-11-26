@@ -254,6 +254,78 @@ describe('settings IPC — set-setting root-key denylist (#450)', () => {
     })
   })
 
+  // The tracker keys (#690). Red on 6.1.0: `set-setting('anilistCredentials', …)`
+  // wrote the blob key straight through, and `get-setting` read it back, which
+  // with the vault's plain fallback is the AniList token in clear.
+  describe('tracker keys (#690)', () => {
+    const BLOB = { v: 1, enc: 'plain', data: '{"access_token":"tok"}' }
+
+    beforeEach(() => {
+      store.set('anilistCredentials', BLOB)
+      store.set('myanimelistCredentials', BLOB)
+      store.set('myanimelistClientConfig', { clientId: 'cid' })
+      store.set('myanimelistClientSecret', BLOB)
+      store.set('trackerPrimary', 'shikimori')
+      store.set('trackerMirror', {})
+      store.set('trackerFeatureSource', {})
+    })
+
+    const SET_REFUSED = [
+      ['anilistCredentials', /tracker:begin-auth and tracker:complete-auth, or tracker:logout/],
+      ['myanimelistCredentials', /tracker:begin-auth and tracker:complete-auth, or tracker:logout/],
+      ['myanimelistClientConfig', /tracker:set-client-config/],
+      ['myanimelistClientSecret', /tracker:set-client-config/],
+      ['trackerPrimary', /tracker:set-primary/],
+      ['trackerMirror', /tracker:set-mirror/],
+      ['trackerFeatureSource', /tracker:set-feature-source/]
+    ] as const
+
+    it.each(SET_REFUSED)('set-setting refuses %s and names its owner', async (key, owner) => {
+      const before = JSON.stringify(store.get(key))
+      await expect(setSetting(key, { clientId: 'x' })).rejects.toThrow(owner)
+      await expect(setSetting(key, null)).rejects.toThrow(`set-setting refuses '${key}'`)
+      expect(JSON.stringify(store.get(key))).toBe(before)
+    })
+
+    it.each(SET_REFUSED)('set-setting refuses a dot path under %s', async (key, owner) => {
+      const before = JSON.stringify(store.get(key))
+      await expect(setSetting(`${key}.data`, 'x')).rejects.toThrow(owner)
+      await expect(setSetting(`${key}.a.b`, 'x')).rejects.toThrow(owner)
+      expect(JSON.stringify(store.get(key))).toBe(before)
+    })
+
+    it.each(['anilistCredentials', 'myanimelistCredentials', 'myanimelistClientSecret'])(
+      'get-setting refuses %s, also through a dot path',
+      async (key) => {
+        await expect(getSetting(key)).rejects.toThrow(`get-setting refuses '${key}'`)
+        await expect(getSetting(`${key}.data`)).rejects.toThrow(`get-setting refuses '${key}.data'`)
+      }
+    )
+
+    it('names the owner in the read refusal too', async () => {
+      await expect(getSetting('myanimelistClientSecret')).rejects.toThrow(
+        /tracker:set-client-config/
+      )
+      await expect(getSetting('anilistCredentials')).rejects.toThrow(/tracker:logout/)
+    })
+
+    it('keeps myanimelistClientConfig and the three choices readable', async () => {
+      expect(await getSetting('myanimelistClientConfig')).toEqual({ clientId: 'cid' })
+      expect(await getSetting('trackerPrimary')).toBe('shikimori')
+      expect(await getSetting('trackerMirror')).toEqual({})
+      expect(await getSetting('trackerFeatureSource')).toEqual({})
+    })
+
+    it('leaves the other tracker keys and Shikimori’s keys as they were', async () => {
+      await setSetting('anilistSessionExpired', true)
+      expect(store.get('anilistSessionExpired')).toBe(true)
+      await setSetting('anilistCredentialsExtra', 'x')
+      expect(store.get('anilistCredentialsExtra')).toBe('x')
+      await setSetting('shikimoriCredentials', { access_token: 'a' })
+      expect(await getSetting('shikimoriCredentials')).toEqual({ access_token: 'a' })
+    })
+  })
+
   it('keeps `storageMode` out of ROOT_KEYS, so the denylist adds it by hand', () => {
     // The denylist is `[...ROOT_KEYS, 'storageMode']`, so a root key cannot
     // reach the pickers' guard and miss `set-setting`. `storageMode` sits

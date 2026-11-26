@@ -1126,7 +1126,7 @@ later slice keeps green.
   hold only keys the golden lacks: an existing key on it would drop out of the
   comparison on both sides, so the golden test fails on one.
 - **Sensitivity**, each proved red at #689: an extra field on the queue entry
-  `queueRate` builds (`ipc/shikimori.ipc.ts:624`), a renamed `shikimori-rates`
+  `queueRate` builds (`ipc/shikimori.ipc.ts:629`), a renamed `shikimori-rates`
   step id or label, one changed byte in the manifest the v1 writer emits, and a
   new `STORE_DEFAULTS` key without the allow-list.
 - **The `STORE_DEFAULTS` dump.** `STORE_DEFAULTS` moved out of

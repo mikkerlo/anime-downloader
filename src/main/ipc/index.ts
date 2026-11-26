@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { markSlow, SLOW_IPC_MS } from '../lib/perf'
 import type { StorageService } from '../store/types'
+import type { CredentialVault } from '../trackers/credential-vault'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
 import type { ColdStorageService } from '../services/cold-storage'
@@ -65,6 +66,11 @@ export interface AppDeps {
   store: StorageService
   /** Why this launch didn't start from the `config.json` it found, or null (#648). */
   startupNotice: StartupNotice | null
+  /**
+   * The AniList / MyAnimeList credential vault (#690). No router uses it yet;
+   * #695 (T3b)'s auth and client-config channels do.
+   */
+  credentialVault: CredentialVault
   smotretApi: SmotretApi
   animeCacheService: AnimeCacheService
   coldStorageService: ColdStorageService

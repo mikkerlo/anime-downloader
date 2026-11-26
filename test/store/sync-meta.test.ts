@@ -6,7 +6,12 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { createStorageService } from '../../src/main/store'
-import { ensureInstallId, stampRateClocks, updateSyncMeta } from '../../src/main/store/sync-meta'
+import {
+  ensureInstallId,
+  rateClockKey,
+  stampRateClocks,
+  updateSyncMeta
+} from '../../src/main/store/sync-meta'
 import { TOMBSTONE_MAX_AGE_MS } from '../../src/main/lib/sync-state/gc'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
@@ -152,7 +157,7 @@ describe('stampRateClocks', () => {
 
   it('keys by the owner the caller captured, not the user signed in at stamp time', () => {
     const store = new InMemoryStorage({ installId: 'install-a', shikimoriUser: { id: 8 } })
-    stampRateClocks(store, 7, 42, before, after, NOW)
+    stampRateClocks(store, rateClockKey('shikimori', 7, 42), before, after, NOW)
     expect((store.get('syncMeta') as SyncMeta).rates).toEqual({
       '7:42': { episodes: { value: 4, at: NOW, origin: 'install-a' } }
     })
@@ -160,8 +165,21 @@ describe('stampRateClocks', () => {
 
   it('writes nothing when nothing changed', () => {
     const store = new InMemoryStorage({ installId: 'install-a' })
-    stampRateClocks(store, 7, 42, before, { ...before }, NOW)
+    stampRateClocks(store, rateClockKey('shikimori', 7, 42), before, { ...before }, NOW)
     expect(store.get('syncMeta')).toBeUndefined()
+  })
+
+  // #690: AniList and MAL stamp beside Shikimori under a provider prefix.
+  it('an AniList stamp writes rates["anilist:<id>:<malId>"] beside the Shikimori one, and neither moves the other', () => {
+    const store = new InMemoryStorage({ installId: 'install-a' })
+    stampRateClocks(store, rateClockKey('shikimori', 7, 42), before, after, NOW)
+    stampRateClocks(store, rateClockKey('anilist', 7, 42), before, { ...before, score: 9 }, NOW + 1)
+    stampRateClocks(store, rateClockKey('mal', 7, 42), before, { ...before, status: 'x' }, NOW + 2)
+    expect((store.get('syncMeta') as SyncMeta).rates).toEqual({
+      '7:42': { episodes: { value: 4, at: NOW, origin: 'install-a' } },
+      'anilist:7:42': { score: { value: 9, at: NOW + 1, origin: 'install-a' } },
+      'mal:7:42': { status: { value: 'x', at: NOW + 2, origin: 'install-a' } }
+    })
   })
 
   it('a stamp after a backwards clock step lands just past the clock it replaces', () => {
@@ -174,12 +192,42 @@ describe('stampRateClocks', () => {
       }
     })
 
-    stampRateClocks(store, 7, 42, before, after, NOW)
+    stampRateClocks(store, rateClockKey('shikimori', 7, 42), before, after, NOW)
 
     expect((store.get('syncMeta') as SyncMeta).rates['7:42'].episodes).toEqual({
       value: 4,
       at: ahead + 1,
       origin: 'install-a'
     })
+  })
+})
+
+describe('rateClockKey (#690)', () => {
+  it('Shikimori keeps the 6.x key the two readers built by hand', () => {
+    for (const [owner, malId] of [
+      [7, 42],
+      [123456, 1],
+      ['7', '42']
+    ] as const) {
+      expect(rateClockKey('shikimori', owner, malId)).toBe(`${owner}:${malId}`)
+    }
+  })
+
+  it('AniList and MAL key under a provider prefix', () => {
+    expect(rateClockKey('anilist', 7, 42)).toBe('anilist:7:42')
+    expect(rateClockKey('mal', 7, 42)).toBe('mal:7:42')
+  })
+
+  it('never collides with a Shikimori key: those always start with a digit', () => {
+    const shiki = new Set<string>()
+    for (let user = 0; user < 30; user++)
+      for (let mal = 0; mal < 30; mal++) shiki.add(rateClockKey('shikimori', user, mal))
+    for (let user = 0; user < 30; user++)
+      for (let mal = 0; mal < 30; mal++) {
+        expect(shiki.has(rateClockKey('anilist', user, mal))).toBe(false)
+        expect(shiki.has(rateClockKey('mal', user, mal))).toBe(false)
+        expect(rateClockKey('anilist', user, mal)).not.toBe(rateClockKey('mal', user, mal))
+      }
+    for (const key of shiki) expect(key).toMatch(/^\d/)
   })
 })

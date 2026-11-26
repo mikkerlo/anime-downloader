@@ -561,7 +561,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
               (err as { status?: unknown }).status
             )
           }
-        } else {
+        } else if (policy.entry === 'drop') {
           console.warn(`${log} dropping item`, item.malId, err)
           dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts)
           settle('dropped', null, null, messageOf(err))

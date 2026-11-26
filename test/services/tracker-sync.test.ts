@@ -29,7 +29,7 @@ import {
   isShikimoriSessionGone,
   shikimoriRateCache
 } from '../../src/main/trackers/shikimori.provider'
-import { TrackerApiError } from '../../src/main/trackers/errors'
+import { TRACKER_ERROR_POLICY, TrackerApiError } from '../../src/main/trackers/errors'
 import {
   TRACKER_LABELS,
   type TrackerRateCacheCodec,
@@ -246,6 +246,14 @@ describe('changedFields', () => {
 })
 
 describe('the per-class policy (T0’s table), on the first of two queued items', () => {
+  // The drain's branches read the table: an `abort` row keeps the item, and a
+  // `continue` row drops it now, drops it after 24 h, or (no row today) keeps it.
+  it('every abort row keeps its entry', () => {
+    for (const [cls, policy] of Object.entries(TRACKER_ERROR_POLICY)) {
+      if (policy.drain === 'abort') expect(policy.entry, cls).toBe('keep')
+    }
+  })
+
   const TWO = () => [queued(1, vals(3), vals(4), 1), queued(2, vals(3), vals(4), 2)]
 
   function seeded<P extends TrackerId>(id: P) {
@@ -459,6 +467,13 @@ describe('the token step', () => {
     })
     return r
   }
+
+  it('a network-class refresh failure leaves lastSyncError unset', async () => {
+    const r = shikiWithAuthError(new TypeError('fetch failed'))
+    await drain(r.svc)
+    expect(r.calls).toEqual(['auth'])
+    expect(r.svc.getSyncStatus().lastSyncError).toBeNull()
+  })
 
   it('a gone session (ShikiAuthError) stops the timer', async () => {
     const r = shikiWithAuthError(new ShikiAuthError('Shikimori session expired', 400))
@@ -763,6 +778,23 @@ describe('the emit order: the cache update before the queue change (#697)', () =
     expect(r.fake.upserts.map((u) => u.ref.remoteId)).toEqual([onServer ? 10 : null])
     const names = r.events.map((e) => e[0]).filter((c) => c === r.ch.rate || c === r.ch.queue)
     expect(names).toEqual([r.ch.rate, r.ch.queue])
+  })
+
+  // The settle passes the settled rate's id through (§5).
+  it('a create over a stale cached row takes the created id', async () => {
+    const stale = {
+      rate: { id: 5, target_id: 1, episodes: 3, status: 'watching', score: 7, rewatches: 0 },
+      shikiAnime: { id: 1, name: '#1' },
+      smotretAnime: null
+    }
+    const r = rig('shikimori', {
+      initial: {
+        shikimoriUserRates: [stale],
+        shikimoriUpdateQueue: [queued(1, vals(3), vals(4), 1)]
+      }
+    })
+    await drain(r.svc)
+    expect((r.store.get('shikimoriUserRates') as { rate: { id: number } }[])[0].rate.id).toBe(10)
   })
 })
 

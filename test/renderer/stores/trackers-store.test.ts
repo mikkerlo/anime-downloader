@@ -679,4 +679,60 @@ describe('useTrackersStore — held-title rate state', () => {
     // 42 is still held.
     expect(store.rateStateFor('anilist', 42)).not.toBeNull()
   })
+
+  it('the latest round wins: an older round that resolves after a newer one is dropped', async () => {
+    installApi({ accounts: accountsState([account('shikimori', 1)]) })
+    const store = await makeStore()
+    const round1 = deferred<TrackerRateResult | null>()
+    api.trackerGetRate.mockReturnValueOnce(round1.promise)
+    store.holdTitle(42)
+    await flush()
+    expect(getRateCalls()).toEqual([['shikimori', 42]])
+
+    api.trackerGetRate.mockResolvedValueOnce({ values: values(2), stale: false, round: 2 })
+    emit.rateUpdated({ trackerId: 'shikimori', entry: entry('shikimori', 42, 2) })
+    await flush()
+    expect(getRateCalls()).toHaveLength(2)
+    expect(store.rateStateFor('shikimori', 42)).toMatchObject({ round: 2 })
+
+    round1.resolve({ values: values(1), stale: true, round: 1 } as TrackerRateResult)
+    await flush()
+    expect(store.rateStateFor('shikimori', 42)).toMatchObject({ round: 2 })
+  })
+
+  it('holds are counted, and each release counts once', async () => {
+    installApi({ accounts: accountsState([account('shikimori', 1)]) })
+    const store = await makeStore()
+    const first = store.holdTitle(42)
+    const second = store.holdTitle(42)
+    await flush()
+    expect(getRateCalls()).toEqual([['shikimori', 42]])
+
+    // One of two holders leaves: the title stays held and live.
+    first()
+    expect(store.rateStateFor('shikimori', 42)).not.toBeNull()
+    api.trackerGetRate.mockClear()
+    emit.rateUpdated({ trackerId: 'shikimori', entry: entry('shikimori', 42, 5) })
+    await flush()
+    expect(getRateCalls()).toEqual([['shikimori', 42]])
+    expect(store.rateStateFor('shikimori', 42)).not.toBeNull()
+
+    // A repeated release from the holder that already left changes nothing.
+    first()
+    expect(store.rateStateFor('shikimori', 42)).not.toBeNull()
+
+    second()
+    expect(store.rateStateFor('shikimori', 42)).toBeNull()
+
+    // A stale release can't drop a later holder either.
+    store.holdTitle(42)
+    await flush()
+    first()
+    second()
+    expect(store.rateStateFor('shikimori', 42)).not.toBeNull()
+    api.trackerGetRate.mockClear()
+    emit.rateUpdated({ trackerId: 'shikimori', entry: entry('shikimori', 42, 6) })
+    await flush()
+    expect(getRateCalls()).toEqual([['shikimori', 42]])
+  })
 })

@@ -19,6 +19,20 @@ import type { usePlayerStore } from '../stores/player'
 
 type TranslationListEntry = { id: number; label: string; type: string; height: number }
 
+/**
+ * The primary tracker's progress for Continue, from `useTrackerRate` (#704).
+ * `checked`: the accounts are known. `hasAccount`: any tracker has a user.
+ * `loading`: the primary's rate hasn't settled on this mount. `status`: the
+ * loaded rate's status. `episodes`: the form's episode count.
+ */
+export interface ResumeProgress {
+  checked: boolean
+  hasAccount: boolean
+  loading: boolean
+  status: ShikiUserRateStatus | null
+  episodes: number
+}
+
 type AllEpisodesEntry = {
   // Mirrors `PlayerEpisode.id` (#419) — the player fetches by upstream episode
   // id, and every entry past the current page arrives with no translations.
@@ -47,12 +61,8 @@ export function useEpisodeDownloads(deps: {
   isPaginated: ComputedRef<boolean>
   goToPage: (page: number) => Promise<void>
   loadingEpisodes: Ref<boolean>
-  // From component Shikimori state
-  shikiRate: Ref<ShikiUserRate | null>
-  shikiUser: Ref<ShikiUser | null>
-  shikiEpisodes: Ref<number>
-  shikiUserChecked: Ref<boolean>
-  shikiLoading: Ref<boolean>
+  // From useTrackerRate
+  resumeProgress: ComputedRef<ResumeProgress>
   // Stores + settings
   downloadsStore: ReturnType<typeof useDownloadsStore>
   playerStore: ReturnType<typeof usePlayerStore>
@@ -122,12 +132,12 @@ export function useEpisodeDownloads(deps: {
   }
 
   function isEpisodeWatched(episodeInt: string): boolean {
-    if (deps.shikiRate.value?.status === 'completed') return true
+    if (deps.resumeProgress.value.status === 'completed') return true
     return !!deps.watchProgress.value[episodeInt]?.watched
   }
 
   // The local `watched` flag alone. `isEpisodeWatched` also answers true for a
-  // completed Shikimori rate, which the mark-(un)watched toggle never changes.
+  // completed tracker rate, which the mark-(un)watched toggle never changes.
   function isEpisodeWatchedLocally(episodeInt: string): boolean {
     return !!deps.watchProgress.value[episodeInt]?.watched
   }
@@ -151,22 +161,19 @@ export function useEpisodeDownloads(deps: {
     const eps = deps.filteredEpisodes.value
     if (eps.length === 0) return null
 
+    const progress = deps.resumeProgress.value
+
     // Completed → "Continue" means "start rewatching from ep 1". Without this
-    // the shikiEpisodes >= eps.length branch below would land on the last
-    // episode.
-    if (deps.shikiRate.value?.status === 'completed') {
+    // the episodes >= eps.length branch below would land on the last episode.
+    if (progress.status === 'completed') {
       return eps[0]
     }
 
-    // 1) If Shikimori reports N completed episodes, jump to episode N+1.
-    // Shikimori is authoritative — ignore local saved positions for earlier
-    // episodes.
-    if (
-      deps.shikiUser.value &&
-      deps.shikiEpisodes.value > 0 &&
-      deps.shikiEpisodes.value < eps.length
-    ) {
-      return eps[deps.shikiEpisodes.value]
+    // 1) If the primary tracker reports N completed episodes, jump to episode
+    // N+1. The tracker is authoritative — ignore local saved positions for
+    // earlier episodes.
+    if (progress.hasAccount && progress.episodes > 0 && progress.episodes < eps.length) {
+      return eps[progress.episodes]
     }
 
     // 2) Prefer an episode with an unfinished saved position (most recent).
@@ -198,8 +205,9 @@ export function useEpisodeDownloads(deps: {
   const continueReady = computed<boolean>(() => {
     if (!deps.anime.value || deps.filteredEpisodes.value.length === 0) return false
     if (deps.loadingEpisodes.value) return false
-    if (deps.anime.value.myAnimeListId && !deps.shikiUserChecked.value) return false
-    if (deps.shikiUser.value && deps.shikiLoading.value) return false
+    const progress = deps.resumeProgress.value
+    if (deps.anime.value.myAnimeListId && !progress.checked) return false
+    if (progress.hasAccount && progress.loading) return false
     return continueTarget.value !== null
   })
 

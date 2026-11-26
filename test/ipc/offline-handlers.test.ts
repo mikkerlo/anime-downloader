@@ -13,7 +13,7 @@ import type { AppDeps } from '../../src/main/ipc/index'
 import { SmotretApi } from '../../src/main/smotret-api'
 import * as shikimori from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
-import { shikimoriOnlyFanOut } from '../helpers/tracker-fan-out'
+import { shikimoriOnlyTrackers } from '../helpers/tracker-fan-out'
 import { createOfflineService, type OfflineService } from '../../src/main/services/offline'
 import { setOfflineCheck } from '../../src/main/lib/net'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
@@ -78,7 +78,7 @@ function harness(initial: Record<string, unknown> = {}): Harness {
     animeCacheService: { getEntry: () => undefined, updateAnimeDetail: vi.fn() },
     rememberAnimeMeta: vi.fn(),
     shikimoriSyncService: sync,
-    trackers: shikimoriOnlyFanOut(store as never, sync),
+    ...shikimoriOnlyTrackers(store as never, sync, offline.isOffline),
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => undefined),
     runAutoDownloadTick: vi.fn(async () => ({})),

@@ -63,6 +63,12 @@ export interface TrackerRateEntry<TNative> {
   native: TNative
 }
 
+/**
+ * A listed entry as the `tracker:*` IPC carries it (the ambient
+ * `TrackerRateEntry`, #694): every normalized field, without `native`.
+ */
+export type TrackerRateEntryPayload = Omit<TrackerRateEntry<unknown>, 'native'>
+
 export interface TrackerListOptions {
   status?: RateValues['status']
 }
@@ -167,6 +173,11 @@ export interface TrackerRateCacheCodec<TNative, TRow> {
    * `remoteId`, when given, becomes the row's id; otherwise the id is left alone.
    */
   patch(row: TRow, values: RateValues, remoteId?: number): TRow
+  /**
+   * A cached row as the read side normalizes it (#694): what `tracker:*`
+   * replies and broadcasts carry. It reads the row and writes nothing.
+   */
+  entryOf(row: TRow): TrackerRateEntryPayload
 }
 
 /**

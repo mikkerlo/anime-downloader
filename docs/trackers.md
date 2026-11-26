@@ -387,6 +387,75 @@ stripped entry for `f` to `before[f]` = the `after[f]` of the nearest survivor
 before it that has `f` (else that earliest stripped `before[f]`), and also
 `after[f]` when it doesn't carry `f`. Non-`via` survivors are never rebased.
 
+## The IPC surface
+
+#694 (T3a) adds the tracker-generic rate, sync-status and queue channels
+(`tracker:*`, each naming its `trackerId`); [IPC](./ipc.md) lists them. Their
+handlers live in `src/main/ipc/trackers.ipc.ts`, and the work behind each one
+is a shared function in `src/main/services/trackers/rates.ts`
+(`createTrackerRates({ store, trackers, isOffline })`, `AppDeps.trackerRates`).
+
+- **An instance's lifetime isn't tied to sign-in.** An instance exists for
+  every tracker whose provider has landed, whatever its user and credentials
+  hold. A signed-out or expired tracker answers through its instance's own
+  checks: an expired session still queues `update-rate` and
+  `mark-episode-watched`, serves `get-rate` from the cache and reports
+  `sessionExpired: true`. "No instance" means only a provider that hasn't
+  landed (AniList and MAL before T6/T7).
+- **With no instance**, `get-rate` answers `null`, `get-rates` an empty
+  snapshot, `trigger-sync` does nothing, and `update-rate` throws
+  `Not logged in to <Tracker>`. `get-sync-status` returns a default idle status
+  whose `queueLength` and `sessionExpired` come from the tracker's store keys,
+  and `get-offline-queue-length` reads the same queue key, so the two agree.
+- **Parked queues never go through an instance.** `get-parked-queues` and
+  `discard-parked-queue` read and edit the tracker's parked-queue key, signed in
+  or not: logout is what fills it. The generic summary keeps the bucket key as a
+  string `ownerId` (`null` for the unknown-account bucket).
+- **Writes.** `update-rate` calls `applyChange` with `cause: 'user'` on the
+  primary, and the fan-out reaches the mirrors. With `only` it writes that one
+  tracker with no fan-out (`applyChange`'s `mirrors: false`; a non-primary
+  tracker takes the § 3a copy). It replies with the values written or queued.
+  `mark-episode-watched` goes to the primary and resolves `null`, calling no
+  provider, when no tracker is connected.
+- **`get-rate`'s per-title fields.** The result is `{ values, stale, mediaId? }`,
+  with `values` null when a connected tracker has no row for the title.
+  `mediaId` is the tracker's own media id where it isn't the MAL id (T7 fills
+  it for AniList). T8b (#705) adds `queued`, `unmapped` and `differs`. A
+  queued-only change emits `tracker:offline-queue-changed` and no
+  `tracker:rate-updated`, so the renderer refetches the result on both events.
+- **The `shikimori:*` aliases** (get-rate, update-rate, mark-episode-watched,
+  get-anime-rates, the queue length, the sync status, trigger-sync and the two
+  parked-queue channels) call the same functions with `'shikimori'` and reply
+  in 6.x's shape, signed out included: `shikimori:get-rate` still rejects with
+  the not-connected error, and `shikimori:mark-episode-watched` resolves `null`.
+  #717 (T14) removes them.
+
+**The double-emit.** `src/main/trackers/events.ts`
+(`createShikimoriEventBridge`) wraps the `broadcast` that `index.ts` hands to
+every Shikimori emitter: the sync service, the sync-runner, the runner's
+wholesale refresh (`services/sync-runner/rate-refresh.ts`) and
+`AppDeps.broadcast`. For the four Shikimori rate, queue and status broadcasts
+it sends the `shikimori:*` event with today's payload, then its `tracker:*`
+twin with `trackerId: 'shikimori'`; every other channel passes through,
+`shikimori:anime-details-updated` included. The legacy event goes first, so a
+view still on `shikimori:*` sees 6.x's sequence. A twin's payload:
+
+- `tracker:rate-updated` and `tracker:rates-refreshed` carry the normalized
+  read-side entries (the codec's `entryOf`, `smotretAnime` included; never
+  written to the cache) and `raw`, the persisted `CachedRateEntry` row or rows,
+  the same objects the legacy event carries. `raw` is Shikimori's alone, for the
+  views that read `shikiAnime.*` until T9, and goes away with the aliases.
+- `tracker:offline-queue-changed` carries `{ trackerId, length, queuedAfter }`.
+  `queuedAfter` is read from the live queue at emit time, never from the
+  caller, so no emitter can send a stale overlay.
+- `tracker:sync-status` carries the status with `needsSetup` from a getter on
+  the Shikimori instance, which the legacy payload doesn't carry.
+
+The `tracker:*` event channels are config on the bridge in `index.ts`, and
+`trackers.ipc.ts` names none of them, so the emitter scan in
+`test/ipc-channels.test.ts` finds them only there. AniList and MAL instances
+(T6/T7) emit `tracker:*` only.
+
 ## Boot, the online edge and Prepare
 
 `src/main/services/trackers/edges.ts` (#693, T2c) decides which trackers take

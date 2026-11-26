@@ -18,17 +18,36 @@ export interface PlainRow {
   values: RateValues
 }
 
-export const plainCodec: TrackerRateCacheCodec<unknown, PlainRow> = {
-  fromEntries: (entries) =>
-    entries.map((e) => ({ malId: e.malId, remoteId: e.remoteId, values: { ...e.values } })),
-  malIdOf: (row) => row.malId,
-  indexOf: (rows, malId) => rows.findIndex((r) => r.malId === malId),
-  read: (row) => ({ remoteId: row.remoteId, values: { ...row.values } }),
-  patch: (row, values, remoteId) => ({
-    ...row,
-    ...(remoteId !== undefined ? { remoteId } : {}),
-    values: { ...values }
-  })
+/** `entryOf` (#694) names `trackerId`, which a row doesn't carry. */
+export function plainCodec(trackerId: TrackerId): TrackerRateCacheCodec<unknown, PlainRow> {
+  return {
+    fromEntries: (entries) =>
+      entries.map((e) => ({ malId: e.malId, remoteId: e.remoteId, values: { ...e.values } })),
+    malIdOf: (row) => row.malId,
+    indexOf: (rows, malId) => rows.findIndex((r) => r.malId === malId),
+    read: (row) => ({ remoteId: row.remoteId, values: { ...row.values } }),
+    patch: (row, values, remoteId) => ({
+      ...row,
+      ...(remoteId !== undefined ? { remoteId } : {}),
+      values: { ...values }
+    }),
+    entryOf: (row) => ({
+      trackerId,
+      malId: row.malId,
+      remoteId: row.remoteId,
+      values: { ...row.values },
+      updatedAt: null,
+      anime: {
+        title: `#${row.malId}`,
+        poster: null,
+        kind: null,
+        episodes: null,
+        episodesAired: null,
+        status: null
+      },
+      smotretAnime: null
+    })
+  }
 }
 
 export const GENERIC_KEYS = { anilist: ANILIST_KEYS, mal: MYANIMELIST_KEYS } as const
@@ -42,7 +61,7 @@ export function createGenericTracker<P extends 'anilist' | 'mal'>(
   const sync = createTrackerSyncService(
     {
       ...fake.provider,
-      rateCache: plainCodec,
+      rateCache: plainCodec(id),
       isSessionGone: () => false
     } as never,
     GENERIC_KEYS[id],

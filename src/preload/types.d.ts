@@ -338,6 +338,30 @@ interface Api {
     callback: (data: { malId: number; details: ShikiAnimeDetails }) => void
   ) => Unsubscribe
 
+  // Trackers (#694)
+  trackerGetRate: (trackerId: TrackerId, malId: number) => Promise<TrackerRateResult | null>
+  trackerGetRates: (
+    trackerId: TrackerId,
+    status?: ShikiUserRateStatus
+  ) => Promise<TrackerRatesSnapshot>
+  trackerUpdateRate: (
+    malId: number,
+    change: TrackerRateValues,
+    opts?: TrackerUpdateRateOptions
+  ) => Promise<TrackerRateValues>
+  trackerMarkEpisodeWatched: (malId: number, epNum: number) => Promise<TrackerRateValues | null>
+  trackerGetSyncStatus: (trackerId: TrackerId) => Promise<TrackerSyncStatus>
+  trackerGetOfflineQueueLength: (trackerId: TrackerId) => Promise<number>
+  trackerTriggerSync: (trackerId?: TrackerId) => Promise<void>
+  trackerGetParkedQueues: (trackerId: TrackerId) => Promise<TrackerParkedQueueSummary[]>
+  trackerDiscardParkedQueue: (trackerId: TrackerId, ownerId: string | null) => Promise<void>
+  onTrackerRateUpdated: (callback: (data: TrackerRateUpdatedEvent) => void) => Unsubscribe
+  onTrackerRatesRefreshed: (callback: (data: TrackerRatesRefreshedEvent) => void) => Unsubscribe
+  onTrackerSyncStatus: (callback: (data: TrackerSyncStatusEvent) => void) => Unsubscribe
+  onTrackerOfflineQueueChanged: (
+    callback: (data: TrackerOfflineQueueChangedEvent) => void
+  ) => Unsubscribe
+
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>
   syncplayDisconnect: () => Promise<void>

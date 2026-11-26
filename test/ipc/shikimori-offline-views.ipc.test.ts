@@ -45,7 +45,7 @@ import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { ShikiApiError } from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
-import { shikimoriOnlyFanOut } from '../helpers/tracker-fan-out'
+import { shikimoriOnlyTrackers } from '../helpers/tracker-fan-out'
 import { createOfflineService, type OfflineService } from '../../src/main/services/offline'
 
 const MAL = 5114
@@ -132,7 +132,7 @@ function harness(snapshotsPath?: string): Harness {
   register({
     store,
     shikimoriSyncService: sync,
-    trackers: shikimoriOnlyFanOut(store as never, sync),
+    ...shikimoriOnlyTrackers(store as never, sync, offline.isOffline),
     lookupByMalIds,
     maybeBroadcastCleanupPrompt: vi.fn(async () => undefined),
     runAutoDownloadTick: vi.fn(async () => ({})),

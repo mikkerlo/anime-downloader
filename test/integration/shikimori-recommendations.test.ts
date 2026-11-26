@@ -37,6 +37,7 @@ vi.mock('../../src/main/shikimori', async () => {
 
 import { register } from '../../src/main/ipc/shikimori.ipc'
 import { createTrackerFanOut } from '../../src/main/services/trackers/fan-out'
+import { createTrackerRates } from '../../src/main/services/trackers/rates'
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 
@@ -113,11 +114,13 @@ function boot(initial: Record<string, unknown>) {
     getCachedCalendar: vi.fn(() => null),
     setCachedCalendar: vi.fn()
   }
+  const fanOut = createTrackerFanOut({ store: store as never, trackers: [] })
   register({
     store,
     shikimoriSyncService: sync,
     // No rate is written here: a fan-out with no tracker takes the primary branch.
-    trackers: createTrackerFanOut({ store: store as never, trackers: [] }),
+    trackers: fanOut,
+    trackerRates: createTrackerRates({ store: store as never, trackers: fanOut }),
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(),
     runAutoDownloadTick: vi.fn(async () => undefined),

@@ -36,10 +36,16 @@ vi.mock('../../src/main/shikimori', async () => {
 
 import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
-import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
+import {
+  NOT_CONNECTED_MESSAGE,
+  ShikiApiError,
+  ShikiAuthError,
+  SESSION_EXPIRED_MESSAGE
+} from '../../src/main/shikimori'
 import type { ShikiUser } from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
-import { shikimoriOnlyFanOut } from '../helpers/tracker-fan-out'
+import { shikimoriOnlyTrackers } from '../helpers/tracker-fan-out'
+import type { TrackerRates } from '../../src/main/services/trackers/rates'
 
 type SyncStub = {
   broadcastSyncStatus: Mock
@@ -68,6 +74,7 @@ function registerRouter(initial: Record<string, unknown> = {}): {
   broadcast: Mock
   sync: SyncStub
   funnels: ReturnType<typeof register>
+  trackerRates: TrackerRates
 } {
   const store = new InMemoryStorage({
     shikimoriUser: { id: 7, nickname: 'me' },
@@ -121,10 +128,11 @@ function registerRouter(initial: Record<string, unknown> = {}): {
       }
     })()
   }
+  const wiring = shikimoriOnlyTrackers(store, { tracker: realTracker! })
   const funnels = register({
     store,
     shikimoriSyncService: sync,
-    trackers: shikimoriOnlyFanOut(store, { tracker: realTracker! }),
+    ...wiring,
     lookupByMalIds: vi.fn(async () => new Map()),
     maybeBroadcastCleanupPrompt: vi.fn(async () => undefined),
     runAutoDownloadTick: vi.fn(async () => ({})),
@@ -139,7 +147,8 @@ function registerRouter(initial: Record<string, unknown> = {}): {
     store,
     broadcast,
     sync,
-    funnels
+    funnels,
+    trackerRates: wiring.trackerRates
   }
 }
 
@@ -1265,5 +1274,94 @@ describe('shikimori IPC — the background rate refresh goes through refreshRate
     // Its own tail stays: the drain and the details prefetch.
     await vi.waitFor(() => expect(sync.syncShikimoriQueue).toHaveBeenCalled())
     expect(sync.prefetchShikimoriDetails).toHaveBeenCalled()
+  })
+})
+
+// The nine handlers are aliases of their `tracker:*` channels (#694): each calls
+// the shared function with 'shikimori' and keeps today's reply shape.
+describe('shikimori IPC — the aliases call the shared tracker functions with shikimori (#694)', () => {
+  it.each([
+    ['SHIKIMORI_GET_RATE', 'readRate', [42], ['shikimori', 42]],
+    ['SHIKIMORI_GET_ANIME_RATES', 'getRates', ['watching'], ['shikimori', 'watching']],
+    [
+      'SHIKIMORI_UPDATE_RATE',
+      'updateRate',
+      [42, 4, 'watching', 7, 0],
+      [42, expect.anything(), 'shikimori']
+    ],
+    ['SHIKIMORI_MARK_EPISODE_WATCHED', 'markEpisodeWatched', [42, 4], [42, 4, 'shikimori']],
+    ['SHIKIMORI_GET_SYNC_STATUS', 'getSyncStatus', [], ['shikimori']],
+    ['SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH', 'getOfflineQueueLength', [], ['shikimori']],
+    ['SHIKIMORI_TRIGGER_SYNC', 'triggerSync', [], ['shikimori']],
+    ['SHIKIMORI_GET_PARKED_QUEUES', 'getParkedQueues', [], ['shikimori']],
+    ['SHIKIMORI_DISCARD_PARKED_QUEUE', 'discardParkedQueue', [9], ['shikimori', '9']]
+  ] as const)('%s → trackerRates.%s', async (channel, fn, args, expected) => {
+    const { invoke, trackerRates } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    const spy = vi
+      .spyOn(trackerRates, fn as keyof TrackerRates)
+      .mockImplementation((() => undefined) as never)
+    await invoke(CHANNELS[channel], ...args).catch(() => undefined)
+    expect(spy).toHaveBeenCalledWith(...expected)
+  })
+
+  it('get-sync-status keeps its five fields: no needsSetup', async () => {
+    const { invoke } = registerRouter()
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_SYNC_STATUS)).toEqual({
+      state: 'idle',
+      queueLength: 0,
+      lastSyncAt: 0,
+      lastSyncError: null,
+      sessionExpired: false
+    })
+  })
+})
+
+// Signed out, from the store logout leaves behind (#694): the parked queues go
+// through the store key, never an instance, and every other alias answers as
+// 6.x did. Today's parked-queue case above runs signed in.
+describe('shikimori IPC — the aliases signed out (#694)', () => {
+  function signedOut() {
+    const h = registerRouter({
+      shikimoriUser: null,
+      shikimoriCredentials: null,
+      shikimoriSessionExpired: false,
+      // `resetUserScopedState` empties the rate cache on logout.
+      shikimoriUserRates: [],
+      shikimoriParkedQueues: {
+        '7': { nickname: 'me', entries: seed(), parkedAt: 5 }
+      }
+    })
+    ensureFreshToken.mockRejectedValue(new ShikiAuthError(NOT_CONNECTED_MESSAGE))
+    return h
+  }
+
+  it('get-parked-queues lists the bucket logout kept', async () => {
+    const { invoke } = signedOut()
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_PARKED_QUEUES)).toEqual([
+      { ownerId: 7, nickname: 'me', count: 3, parkedAt: 5 }
+    ])
+  })
+
+  it('discard-parked-queue removes it', async () => {
+    const { invoke, store } = signedOut()
+    await invoke(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, 7)
+    expect(parkedOf(store)).toEqual({})
+  })
+
+  it('trigger-sync resolves without throwing', async () => {
+    const { invoke } = signedOut()
+    await expect(invoke(CHANNELS.SHIKIMORI_TRIGGER_SYNC)).resolves.toBeUndefined()
+  })
+
+  it('mark-episode-watched resolves null', async () => {
+    const { invoke, store } = signedOut()
+    expect(await invoke(CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED, 42, 4)).toBeNull()
+    expect(queueOf(store)).toEqual([])
+    expect(getUserRate).not.toHaveBeenCalled()
+  })
+
+  it('get-rate rejects with the not-connected error, as today', async () => {
+    const { invoke } = signedOut()
+    await expect(invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).rejects.toThrow(NOT_CONNECTED_MESSAGE)
   })
 })

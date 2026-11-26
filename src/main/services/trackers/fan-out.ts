@@ -72,10 +72,11 @@ export interface PrimaryResults {
 
 /**
  * What `applyChange` did: the primary branch ran (`result` null when it wrote
- * nothing), or the change was queued only (`entry` null when nothing differed).
+ * nothing; `after`, the values it wrote or queued, when it wrote), or the change
+ * was queued only (`entry` null when nothing differed).
  */
 export type ApplyOutcome<T = unknown> =
-  | { kind: 'primary'; result: T | null }
+  | { kind: 'primary'; result: T | null; after?: RateValues }
   | { kind: 'queued'; entry: QueuedTrackerUpdate | null }
 
 export interface FanOutTracker {
@@ -96,12 +97,13 @@ export interface TrackerFanOut {
    * Writes one change. A `'user'` change to the primary runs the primary
    * branch (`kind: 'primary'`); every other change is queued only
    * (`kind: 'queued'`). A caller replying to a request owns the reply's shape
-   * for both kinds.
+   * for both kinds. `mirrors: false` writes the primary alone, with no fan-out
+   * (#694's `tracker:update-rate` with `only`).
    */
   applyChange<K extends TrackerId>(
     malId: number,
     change: RateChange,
-    opts: { target: K; cause: ChangeCause }
+    opts: { target: K; cause: ChangeCause; mirrors?: boolean }
   ): Promise<ApplyOutcome<PrimaryResults[K]>>
   setPrimaryWriter<K extends TrackerId>(
     trackerId: K,
@@ -312,7 +314,7 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
   async function applyChange<K extends TrackerId>(
     malId: number,
     change: RateChange,
-    opts: { target: K; cause: ChangeCause }
+    opts: { target: K; cause: ChangeCause; mirrors?: boolean }
   ): Promise<ApplyOutcome<PrimaryResults[K]>> {
     const target = byId(opts.target)
     if (opts.cause === 'merge') {
@@ -338,9 +340,9 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
       if (!writer) throw new Error(`${TRACKER_LABELS[opts.target]} has no primary write path`)
       const wrote = await writer(malId, change)
       if (!wrote) return { kind: 'primary', result: null }
-      fanOut(opts.target, malId, change, wrote)
+      if (opts.mirrors !== false) fanOut(opts.target, malId, change, wrote)
       // `setPrimaryWriter` types each tracker's writer by `PrimaryResults`.
-      return { kind: 'primary', result: wrote.result as PrimaryResults[K] }
+      return { kind: 'primary', result: wrote.result as PrimaryResults[K], after: wrote.after }
     }
     if (change.kind !== 'set') throw new Error(`A ${opts.cause} change is a set`)
     return { kind: 'queued', entry: queueDiffed(target, malId, change, opts.cause, false) }

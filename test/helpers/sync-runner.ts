@@ -12,6 +12,10 @@ import { createSyncBaseStore } from '../../src/main/lib/sync-state/bases'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { createSyncRunner, type SyncRunnerDeps } from '../../src/main/services/sync-runner'
+import { queuedAfterOf } from '../../src/main/services/trackers/rates'
+import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
+import { createShikimoriEventBridge } from '../../src/main/trackers/events'
+import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from './in-memory-storage'
 import { tempRoot } from './shared-library'
 import { T0, iso, server, vals, type Vals } from './fake-shikimori'
@@ -140,6 +144,12 @@ export function makePc(
     store?: Record<string, unknown>
     runner?: Partial<SyncRunnerDeps>
     writable?: (root: string) => Promise<{ kind: 'writable' } | { kind: 'read-only'; code: string }>
+    /**
+     * Wire the Shikimori emitters as `index.ts` does (#694): the real channel
+     * names, the runner's trackers from the sync instance, and both services'
+     * broadcast through the bridge. `broadcast` then records both events.
+     */
+    bridge?: boolean
   } = {}
 ): Pc {
   const user = opts.user === undefined ? OWNER : opts.user
@@ -166,6 +176,19 @@ export function makePc(
     ...opts.store
   })
   const broadcast = vi.fn()
+  const emit = opts.bridge
+    ? createShikimoriEventBridge({
+        broadcast,
+        channels: {
+          rateUpdated: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
+          ratesRefreshed: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
+          syncStatus: EVENT_CHANNELS.TRACKER_SYNC_STATUS,
+          offlineQueueChanged: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
+        },
+        needsSetup: () => sync.tracker.needsSetup(),
+        queuedAfter: () => queuedAfterOf(store.get('shikimoriUpdateQueue') as never)
+      })
+    : broadcast
   const quiet = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
   const bases = createSyncBaseStore(path.join(userData, 'sync-bases'), fs.promises)
   const attached = createAttachedLibraryService({
@@ -179,11 +202,21 @@ export function makePc(
   const clock = { t: T0 + 10_000_000 }
   const sync = createShikimoriSyncService({
     store: store as never,
-    broadcast,
-    syncStatusChannel: 's',
-    offlineQueueChangedChannel: 'q',
-    rateUpdatedChannel: 'r',
-    animeDetailsUpdatedChannel: 'd',
+    broadcast: emit,
+    ...(opts.bridge
+      ? {
+          syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
+          offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
+          rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+          animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
+          ratesRefreshedChannel: EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED
+        }
+      : {
+          syncStatusChannel: 's',
+          offlineQueueChangedChannel: 'q',
+          rateUpdatedChannel: 'r',
+          animeDetailsUpdatedChannel: 'd'
+        }),
     isOffline: () => offline.value
   })
   const runner = createSyncRunner({
@@ -192,7 +225,8 @@ export function makePc(
     attached,
     sync,
     isOffline: () => offline.value,
-    broadcast,
+    broadcast: emit,
+    ...(opts.bridge ? { trackers: [sync.tracker as TrackerSyncService<unknown, unknown>] } : {}),
     appVersion: '5.0.39',
     now: () => clock.t,
     log: quiet,

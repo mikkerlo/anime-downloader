@@ -79,6 +79,8 @@ import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createTrackerFanOut } from './services/trackers/fan-out'
+import { createTrackerRates } from './services/trackers/rates'
+import { createShikimoriEventBridge } from './trackers/events'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
@@ -92,8 +94,8 @@ import { createAvailabilityPoller } from './services/attached-library/poller'
 import { createSnapshotCache, SNAPSHOT_DIR } from './services/attached-library/snapshot-cache'
 import { createSyncBaseStore } from './lib/sync-state/bases'
 import { createSyncRunner, type SyncRunner } from './services/sync-runner'
+import { createRunnerRateRefresh } from './services/sync-runner/rate-refresh'
 import { createLocalFiles } from './services/sync-runner/local-files'
-import { buildRateCacheEntries } from './lib/shikimori-rate-cache'
 import { createMountCandidates, mountParents } from './lib/shared-library/mount-candidates'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
@@ -350,9 +352,25 @@ const isOffline = (): boolean => offlineService.isOffline()
 setOfflineCheck(isOffline)
 setNetworkObserver(offlineService.observer)
 
+// The Shikimori broadcast bridge (#694): every Shikimori emitter gets this one,
+// which double-emits the four rate, queue and status broadcasts as their
+// `tracker:*` twins with `trackerId: 'shikimori'` (#717 removes it).
+const shikimoriBroadcast = createShikimoriEventBridge({
+  broadcast: broadcastToAll,
+  channels: {
+    rateUpdated: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
+    ratesRefreshed: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
+    syncStatus: EVENT_CHANNELS.TRACKER_SYNC_STATUS,
+    offlineQueueChanged: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
+  },
+  needsSetup: () => shikimoriSyncService.tracker.needsSetup(),
+  // `trackerRates` is declared below; the getter runs at emit time, and nothing
+  // emits while this module is being set up.
+  queuedAfter: () => trackerRates.queuedAfter('shikimori')
+})
 const shikimoriSyncService = createShikimoriSyncService({
   store,
-  broadcast: broadcastToAll,
+  broadcast: shikimoriBroadcast,
   syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
   offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
   rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
@@ -373,6 +391,8 @@ const trackerFanOut = createTrackerFanOut({
   store,
   trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }]
 })
+// The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
+const trackerRates = createTrackerRates({ store, trackers: trackerFanOut, isOffline })
 let downloadManager: DownloadManager
 
 // First refreshed by the background ffmpeg-ensure task in `bootstrap()`. The
@@ -389,6 +409,12 @@ const syncLocalFiles = createLocalFiles({
   sanitizeFilename,
   displayName: (anime) => getDisplayName(anime)
 })
+// The runner's wholesale refresh, through the bridge like every other Shikimori emitter (#694).
+const runnerRateRefresh = createRunnerRateRefresh({
+  store,
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  broadcast: shikimoriBroadcast
+})
 syncRunner = createSyncRunner({
   store,
   userDataDir: app.getPath('userData'),
@@ -404,24 +430,12 @@ syncRunner = createSyncRunner({
       wasOffline = offline
     })
   },
-  broadcast: broadcastToAll,
+  broadcast: shikimoriBroadcast,
   runFinishedChannel: EVENT_CHANNELS.SYNC_RUN_FINISHED,
   appVersion: app.getVersion(),
   localEpisodeFile: syncLocalFiles.localEpisodeFile,
   resolveEpisodeFile: syncLocalFiles.resolveEpisodeFile,
-  refreshRates: () => {
-    void (async () => {
-      const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-      if (!user) return
-      const token = await shikimori.ensureFreshToken(store)
-      const rows = await shikimori.getUserAnimeRates(token, user.id)
-      const malMap = await lookupByMalIds(rows.map((r) => r.anime.id))
-      if ((store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id !== user.id) return
-      const entries = buildRateCacheEntries(rows, malMap)
-      store.set('shikimoriUserRates', entries)
-      broadcastToAll(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, entries)
-    })().catch((err) => console.warn('[sync] the rate refresh failed:', err))
-  }
+  refreshRates: () => void runnerRateRefresh()
 })
 
 // Export to a Shared Library (#574). Reads the merge status lazily, so the
@@ -791,10 +805,11 @@ function registerIpcHandlers(): void {
     getDisplayName,
     shikimoriSyncService,
     trackers: trackerFanOut,
+    trackerRates,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,
-    broadcast: broadcastToAll,
+    broadcast: shikimoriBroadcast,
     checkEpisodeFiles,
     invalidateFileCacheByDirName,
     clearFileCache: fileScanner.clear,

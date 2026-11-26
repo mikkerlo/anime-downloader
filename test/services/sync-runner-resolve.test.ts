@@ -29,6 +29,8 @@ import {
   type Pc
 } from '../helpers/sync-runner'
 import { projectRate } from '../../src/main/lib/sync-state/project'
+import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
+import { expectQueueTwin, expectRateTwin, onlyTwin } from '../helpers/tracker-events'
 import { writeState as realWriteState } from '../../src/main/lib/shared-library/write'
 import {
   createLibrarySyncStep,
@@ -103,10 +105,13 @@ async function ownerSetup(o: {
   server: RateV
   shikiBase?: RateV
   cache?: RateV
+  /** `makePc`'s `index.ts` wiring through the Shikimori bridge (#694). */
+  bridge?: boolean
 }) {
   server.set(MAL, o.server, T0)
   const { root, libraryId } = await makeLibrary({ doc: titleDoc({ rate: r(o.drive, T0 + 500) }) })
   const pc = makePc({
+    bridge: o.bridge,
     store: { shikimoriUserRates: [cacheEntry(MAL, ANIME, o.cache ?? o.server, T0)] }
   })
   await pc.attach(root)
@@ -116,13 +121,14 @@ async function ownerSetup(o: {
 }
 
 /** S9's Shikimori-side fixture: this PC and the library at 8, shikimori.one at 9, base 7. */
-async function shikimoriSideConflict() {
+async function shikimoriSideConflict(bridge = false) {
   const s = await ownerSetup({
     base: { score: 7 },
     drive: { score: 8 },
     server: { score: 9, episodes: 3 },
     shikiBase: { score: 7, episodes: 3 },
-    cache: { score: 7, episodes: 3 }
+    cache: { score: 7, episodes: 3 },
+    bridge
   })
   await s.pc.runner.runAll('manual')
   const [rec] = await conflicts(s.pc)
@@ -805,5 +811,53 @@ describe('the history records the values', () => {
     })
     const name = pc.attached.get(libraryId)!.name
     expect(page.entries[0].details).toContain(`Frieren: score ★ 6 → ★ 8 from ${name}`)
+  })
+})
+
+// The double-emit table (#694), the runner's resolution rows. With `index.ts`'s
+// wiring (`makePc({ bridge })`) each emit goes through the Shikimori bridge.
+describe('the resolution double-emits through the Shikimori bridge (#694)', () => {
+  it('Keep mine: the display patch and the queued resolution, each followed by its twin', async () => {
+    const { pc, rec } = await shikimoriSideConflict(true)
+    pc.offline.value = true
+    pc.broadcast.mockClear()
+
+    await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
+
+    const calls = pc.broadcast.mock.calls
+    const patch = onlyTwin(calls, EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED)
+    expect((patch.legacy as any).rate).toMatchObject({ target_id: MAL, score: 8 })
+    expectRateTwin(patch)
+    const changed = onlyTwin(calls, EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED)
+    expect(changed.legacy).toEqual({ length: 1 })
+    expectQueueTwin(changed, { [MAL]: vals({ score: 8, episodes: 3 }) })
+  })
+
+  it("stripQueued (Keep theirs over a queued merge entry): the sync instance's queue change and its twin", async () => {
+    const { pc, rec, libraryId } = await shikimoriSideConflict(true)
+    pc.store.set('shikimoriUpdateQueue', [
+      {
+        malId: MAL,
+        rateId: MAL * 10,
+        before: vals({ score: 7, episodes: 3 }),
+        after: vals({ score: 8, episodes: 4 }),
+        queuedAt: 5,
+        fields: ['score', 'episodes'],
+        origin: {
+          kind: 'sync-merge',
+          provenance: { score: { libraryId }, episodes: { libraryId } }
+        }
+      }
+    ])
+    pc.offline.value = true
+    pc.broadcast.mockClear()
+
+    await pc.runner.resolve([rec.id], { [rec.id]: keep('shikimori') })
+
+    const calls = pc.broadcast.mock.calls
+    expectRateTwin(onlyTwin(calls, EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED))
+    const changed = onlyTwin(calls, EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED)
+    expect(changed.legacy).toEqual({ length: 1 })
+    expectQueueTwin(changed, { [MAL]: vals({ score: 7, episodes: 4 }) })
   })
 })

@@ -38,7 +38,7 @@ vi.mock('../../src/main/shikimori', async () => {
 })
 
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
-import { shikimoriOnlyFanOut } from '../helpers/tracker-fan-out'
+import { shikimoriOnlyTrackers } from '../helpers/tracker-fan-out'
 import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
@@ -325,7 +325,7 @@ describe('Shikimori offline queue — kept per owner across accounts (#588)', ()
     register({
       store,
       shikimoriSyncService: svc,
-      trackers: shikimoriOnlyFanOut(store as never, svc),
+      ...shikimoriOnlyTrackers(store as never, svc),
       lookupByMalIds: vi.fn(async () => new Map()),
       maybeBroadcastCleanupPrompt: vi.fn(async () => undefined),
       runAutoDownloadTick: vi.fn(async () => ({})),

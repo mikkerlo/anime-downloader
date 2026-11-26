@@ -456,6 +456,136 @@ The `tracker:*` event channels are config on the bridge in `index.ts`, and
 `test/ipc-channels.test.ts` finds them only there. AniList and MAL instances
 (T6/T7) emit `tracker:*` only.
 
+## Accounts and sign-in
+
+#695 (T3b) adds the account channels (`tracker:list-accounts`,
+`tracker:begin-auth`, `tracker:complete-auth`, `tracker:cancel-auth`,
+`tracker:logout`, `tracker:get-client-config`, `tracker:set-client-config`;
+[IPC](./ipc.md) has the payloads). Two modules sit behind them:
+`src/main/trackers/lifecycle.ts` (`AppDeps.trackerLifecycle`), and the sign-in
+attempts in `src/main/trackers/auth-session.ts` (`AppDeps.trackerAuth`).
+`index.ts` builds both, and each calls the other only at call time.
+
+**`authFlow` beside `auth`.** A provider's sign-in is its optional `authFlow`
+member (`TrackerAuthFlow` in `trackers/types.ts`): what a paste is (`'url'`,
+`'token'` or `'code'`), `needsSetup()` (MAL with no client ID), `begin()` (the
+authorize URL and, for a `'url'` flow, the `state` and verifier), `loopback()`
+(MAL's port and callback path) and `exchange(input, attempt)`, which runs the
+code or token exchange and the user read and writes nothing. `auth` stays the
+session getter every drain tick calls. Shikimori's `authFlow`
+(`shikimoriAuthFlow` in `shikimori.provider.ts`) wraps `getAuthUrl`, then
+`exchangeCode` and `getUser`, in `SHIKIMORI_EXCHANGE_CODE`'s order.
+
+**The attempt state machine.** `idle → binding → waiting → exchanging →
+connected | cancelled | error`, one attempt per tracker, in memory only: a
+restart or a lost window loses it, and the user presses Connect again. No
+pending-verifier key exists.
+
+- `BEGIN` refuses while offline (`offline`, with no bind and no browser) and
+  with nothing to set up from (`needs-setup`). A second `BEGIN` cancels the
+  first, which resolves `cancelled`; that is also how a reloaded window's old
+  `BEGIN` is released.
+- **Bind, then open.** A loopback flow binds `127.0.0.1` and then `::1` on the
+  same port before `shell.openExternal`: with PKCE `plain` the verifier is in
+  the authorize URL, so whoever holds the port receives the code.
+  `EADDRNOTAVAIL` or `EAFNOSUPPORT` on `::1` means the host has no IPv6
+  loopback, and the flow continues on `127.0.0.1`. Any other bind failure
+  (`EADDRINUSE` on either address included) is `port-busy`: the browser is
+  never opened automatically, the `127.0.0.1` listener is closed, and the
+  attempt stays held with `authorizeUrl` for T6's "Open anyway", Copy link and
+  paste field. A failed `openExternal` is `open-failed`, also with the URL and
+  the attempt held.
+- **Completing.** The loopback callback and a `'url'` paste must carry the
+  held `state` and a `code`; otherwise the callback gets a static refusal page,
+  the paste an `error` / `auth` result, and the attempt keeps waiting. A
+  callback or paste that arrives while the attempt is `exchanging` runs no
+  second exchange: it resolves that one exchange's result, and the loopback
+  answers with the static page.
+- **After it connected.** Only a replay, the same code or token again while
+  its credential is still stored, gets the connected result back with no
+  exchange (a double submit, or a late paste of the URL the loopback took).
+  Anything else drops the attempt and is a new sign-in: a different token is
+  an account switch, and any paste after an expiry cleared the credential runs
+  a fresh exchange. For MAL that means a URL from another attempt is refused
+  as expired, like a paste with no attempt held.
+- **No attempt held.** A `'token'` or `'code'` completion (AniList, Shikimori)
+  registers an implicit attempt that starts in `exchanging`, so cancel, logout
+  and a new `BEGIN` stop it like any other. A `'url'` completion (MAL) returns
+  `error` / `auth` and writes nothing: the verifier went with the attempt.
+- **Results.** An error from the exchange or the user read takes its `kind`
+  from the provider's `classifyError` (`config` is the card's "Needs setup").
+  `CANCEL` closes the loopback, drops the attempt and resolves the pending
+  `BEGIN` `cancelled`.
+
+**The account lifecycle.** `completeLogin(trackerId, load, { attempt })` and
+`logout(trackerId, opts)` generalize 6.x's `SHIKIMORI_EXCHANGE_CODE` /
+`SHIKIMORI_LOGOUT` with #588's rules, keyed by `TRACKER_KEYS[trackerId]`:
+
+- **Login.** Nothing is written until `load` (the exchange and the user read)
+  resolves and, for AniList and MAL, until `vault.encrypt(credentials)`
+  resolves. Then one synchronous block runs, with no `await` in it: the head
+  checks; the park and reset on a switch; the credential (`vault.commit` for
+  AniList and MAL, a plain `store.set` for Shikimori), the user,
+  `<provider>SessionExpired = false` and the generation bump; then the restore.
+  The login never calls `vault.write`, whose store would land a step before
+  the user.
+- **The head of the block.** The stale-attempt check: the attempt's identity
+  and `generation(trackerId)`, both captured before `completeLogin`'s first
+  `await`, must be unchanged, or the login writes nothing, bumps nothing and
+  resolves `cancelled`. That stops a sign-in the user cancelled, logged out of
+  or restarted while it was exchanging, reading the user or encrypting. #701
+  (T5b)'s second-tracker check goes beside it, and #696 (T3c)'s primary write
+  goes with the commit after both. The `SHIKIMORI_EXCHANGE_CODE` alias passes
+  no attempt and stays unguarded, as in 6.x.
+- **A switch.** A different user is an account switch for every tracker: the
+  live queue is parked under the previous owner (`parkEntries`), or under
+  `UNKNOWN_OWNER` when there was no user, and the tracker's user-scoped state
+  is reset. A same-user reconnect parks nothing and keeps the caches.
+- **The restore.** `takeParked` for the new user, merged into the live queue
+  (`mergeQueues`), the queue broadcast, a background rate refresh after a
+  switch or a restore, then the timer, a drain and the status broadcast.
+  Shikimori's router sets its own steps (`setSteps('shikimori', …)`: 6.x's
+  `sync.*` calls, the prefetch abort and snapshots in the reset, and the Shared
+  Library login run, which stays on the Shikimori login only). Any other
+  tracker uses its sync instance, looked up through `services/trackers` at
+  call time; with no instance every step is skipped, never thrown.
+- **Logout** cancels any attempt held for the tracker, parks the live queue
+  under the user (`pending: 'keep'`, the default) or drops it (`'discard'`),
+  clears the credentials (`vault.commit(key, null)` for AniList and MAL: no
+  decrypt), the user, the live queue and the user-scoped state, sets
+  `<provider>SessionExpired` to false, bumps the generation, stops the timer
+  and broadcasts the queue and the status. A tracker never connected
+  (credentials and user both null) is a no-op: no vault, no bump, but its held
+  attempt is still cancelled. The `SHIKIMORI_LOGOUT` alias clears even then,
+  as 6.x does.
+- **The session generation** is per tracker and in memory: bumped by every
+  committed login and every logout that had something to clear, never by a
+  refused or failed login, and never by another tracker's. #702 (T6)'s refresh
+  captures `generation(trackerId)` when it starts and stores its tokens only if
+  it is unchanged.
+- **User-scoped state** (`USER_SCOPED_STATE`): Shikimori's `shikimoriUserRates`,
+  `shikimoriAnimeDetails`, `shikimoriProfile`, `shikimoriFriends`,
+  `shikimoriRecommendations`; AniList's `anilistUserRates`,
+  `anilistAnimeDetails`; MAL's `myanimelistUserRates`,
+  `myanimelistAnimeDetails`. T11b, T11d and T12 add theirs.
+- **What survives a logout:** `anilistIdMap`, the rate clocks in
+  `syncMeta.rates`, the parked queues, and MAL's client config and secret
+  (they describe the user's MAL app registration, not the session).
+
+**The accounts state.** One builder, `accountsState()`, answers
+`tracker:list-accounts` (T3c's `tracker:accounts-changed` reuses it). It reads
+the store only: `hasCredentials` is whether the credential key is non-null,
+`credentialState` is `'locked'` only when the vault's `isLocked(key)` says the
+last read failed on the blob still stored (asked only when one is stored), and
+`needsSetup` is MAL's missing client ID or the instance's `needsSetup()`. On a
+Shikimori-only profile, listing, a Shikimori login and a logout never call the
+vault.
+
+**The MAL client config.** `tracker:get-client-config` and
+`tracker:set-client-config` are the only reader and writer of
+`myanimelistClientConfig` and `myanimelistClientSecret` for the renderer
+(`setClientConfig`, [Storage](./storage.md)). The secret is never returned.
+
 ## Boot, the online edge and Prepare
 
 `src/main/services/trackers/edges.ts` (#693, T2c) decides which trackers take

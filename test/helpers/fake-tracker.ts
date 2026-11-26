@@ -7,7 +7,8 @@
 //
 // Each personality has its own server rows, its own session from `auth()`,
 // error injection by class, and records every `upsertEntry` call with its
-// session. The AniList and MAL error replies encode the epic's documented
+// session, and each has an `authFlow` (#695) driven through `signIn`. The
+// AniList and MAL error replies encode the epic's documented
 // behaviour only; #703 (T7) and #702 (T6) replace them with captured fixtures.
 
 import { ShikiApiError, ShikiAuthError } from '../../src/main/shikimori'
@@ -28,6 +29,8 @@ import {
 } from '../../src/main/trackers/scores'
 import {
   TRACKER_CAPABILITIES,
+  type TrackerAuthAttempt,
+  type TrackerAuthFlow,
   type TrackerCapabilities,
   type TrackerEntry,
   type TrackerProvider,
@@ -173,9 +176,44 @@ export interface FakeTracker<P extends TrackerId> {
   fail(reply: ReplyName<P>, opts?: { times?: number; member?: FakeMember }): void
   native(malId: number): NativeOf[P]
   reset(): void
+  /** The sign-in flow's controls (#695). */
+  readonly signIn: FakeSignIn
 }
 
 export type FakeMember = 'auth' | 'listEntries' | 'getEntry' | 'upsertEntry'
+
+/** One `authFlow.exchange` call. */
+export interface FakeExchangeCall {
+  input: string
+  attempt: TrackerAuthAttempt | null
+}
+
+/**
+ * The fake `authFlow` (#695): Shikimori pastes a code, AniList a token, and
+ * MAL the full redirect URL, with a loopback. Each input names the account it
+ * signs in as (`accounts`, else `user`); `'bad'` is rejected as `auth` by the
+ * user read, as a rejected AniList token is by `Viewer`.
+ */
+export interface FakeSignIn {
+  readonly calls: FakeExchangeCall[]
+  /** Input → the account it signs in as. Unlisted inputs sign in as `fake.user`. */
+  readonly accounts: Map<string, TrackerUser>
+  /** Awaited at each step: a test holds one to land a cancel or a logout there. */
+  gate: ((step: 'exchange' | 'user') => Promise<void>) | null
+  /** The exchange's next failure, by class name, once. */
+  failNext: string | null
+  /** MAL: whether the flow can start (no client ID saved means false). */
+  ready: () => boolean
+  /** MAL's loopback; null turns it off (a paste-only flow). */
+  loopback: { port: number; path: string } | null
+  /** The attempts `begin` made, in order. */
+  readonly begun: TrackerAuthAttempt[]
+}
+
+/** The credentials an exchange returns for `input`. */
+export function fakeCredentials(id: TrackerId, input: string): { access_token: string } {
+  return { access_token: `${id}-token-for-${input}` }
+}
 
 export function createFakeTracker<P extends TrackerId>(id: P): FakeTracker<P> {
   const replies = REPLIES[id] as Record<string, () => unknown>
@@ -279,10 +317,62 @@ export function createFakeTracker<P extends TrackerId>(id: P): FakeTracker<P> {
     return malId * 10
   }
 
+  const signIn: FakeSignIn = {
+    calls: [],
+    accounts: new Map(),
+    gate: null,
+    failNext: null,
+    ready: () => true,
+    loopback: id === 'mal' ? { port: 0, path: '/callback' } : null,
+    begun: []
+  }
+
+  const AUTHORIZE: Record<TrackerId, string> = {
+    shikimori: 'https://shikimori.one/oauth/authorize',
+    anilist: 'https://anilist.co/api/v2/oauth/authorize',
+    mal: 'https://myanimelist.net/v1/oauth2/authorize'
+  }
+
+  const authFlow: TrackerAuthFlow = {
+    paste: id === 'mal' ? 'url' : id === 'anilist' ? 'token' : 'code',
+    ...(id === 'mal' ? { needsSetup: () => !signIn.ready() } : {}),
+    begin() {
+      const n = signIn.begun.length + 1
+      const attempt: TrackerAuthAttempt =
+        id === 'mal'
+          ? {
+              authorizeUrl: `${AUTHORIZE[id]}?state=state-${n}`,
+              state: `state-${n}`,
+              verifier: `verifier-${n}`
+            }
+          : { authorizeUrl: `${AUTHORIZE[id]}?attempt=${n}` }
+      signIn.begun.push(attempt)
+      return attempt
+    },
+    ...(id === 'mal' ? { loopback: () => signIn.loopback } : {}),
+    async exchange(input, attempt) {
+      signIn.calls.push({ input, attempt })
+      await signIn.gate?.('exchange')
+      if (signIn.failNext) {
+        const reply = signIn.failNext
+        signIn.failNext = null
+        throw replies[reply]()
+      }
+      await signIn.gate?.('user')
+      if (input === 'bad') throw replies.auth()
+      const account = signIn.accounts.get(input) ?? fake.user
+      return {
+        credentials: fakeCredentials(id, input),
+        user: { id: account.id, nickname: account.nickname, avatar: account.avatar }
+      }
+    }
+  }
+
   const fake: FakeTracker<P> = {
     id,
     rows,
     upserts,
+    signIn,
     user: { id: 1, nickname: `${id}-user`, avatar: null, token: `fake-access-token-${id}` },
     set(malId, values, opts = {}) {
       const prev = rows.get(malId)
@@ -325,6 +415,7 @@ export function createFakeTracker<P extends TrackerId>(id: P): FakeTracker<P> {
     provider: {
       id,
       capabilities: NO_CAPABILITIES,
+      authFlow,
       async auth() {
         maybeFail('auth')
         return { token: fake.user.token, userId: fake.user.id }

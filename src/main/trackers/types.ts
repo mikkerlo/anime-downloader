@@ -95,6 +95,50 @@ export type TrackerCapability = (typeof TRACKER_CAPABILITIES)[number]
 export type TrackerCapabilities = Readonly<Record<TrackerCapability, boolean>>
 
 /**
+ * One sign-in attempt's parameters (#695), held in memory by
+ * `trackers/auth-session.ts` and never stored. `state` is what a loopback
+ * callback or a pasted redirect URL must carry back; `verifier` is the PKCE
+ * verifier a code exchange needs (MAL, #702).
+ */
+export interface TrackerAuthAttempt {
+  authorizeUrl: string
+  state?: string
+  verifier?: string
+}
+
+/**
+ * How a tracker signs in (#695): the flow `trackers/auth-session.ts` runs.
+ * Separate from `auth`, which is the session getter every drain tick calls.
+ */
+export interface TrackerAuthFlow {
+  /**
+   * What a pasted completion is: the full redirect URL, whose `state` must
+   * match the held attempt (MAL); a token (AniList); or a code (Shikimori).
+   * A `'url'` flow can't complete without a held attempt.
+   */
+  readonly paste: 'url' | 'token' | 'code'
+  /** True when the flow can't start yet (MAL with no client ID saved). */
+  needsSetup?(): boolean
+  /** A new attempt: its authorize URL and, for a `'url'` flow, its `state`. */
+  begin(): TrackerAuthAttempt
+  /**
+   * The loopback to bind on `127.0.0.1` and `::1` before the browser opens
+   * (MAL); null for a paste-only attempt.
+   */
+  loopback?(): { port: number; path: string } | null
+  /**
+   * The exchange and the user read. Resolves only once the account is known
+   * and writes nothing. `input` is the code (a `'url'` flow's, taken from the
+   * callback or the pasted URL after the `state` check) or the pasted token;
+   * `attempt` is null for a completion with no attempt held.
+   */
+  exchange(
+    input: string,
+    attempt: TrackerAuthAttempt | null
+  ): Promise<{ credentials: unknown; user: TrackerUser }>
+}
+
+/**
  * A tracker. `auth()` returns the provider's session; a caller takes one
  * session per run and passes it to every data member, so an account switch
  * mid-run never mixes one account's item with another's token (#588). An
@@ -109,6 +153,8 @@ export interface TrackerProvider<TSession, TNative, TRate = unknown> {
 
   /** The session for this run. Throws what the provider's token refresh throws. */
   auth(): Promise<TSession>
+  /** How the tracker signs in (#695). Absent until its provider ships one. */
+  authFlow?: TrackerAuthFlow
   /** The account a token belongs to; this is what produces a session's user id (sign-in). */
   getUser(token: string): Promise<TrackerUser>
   /** Pure: what an error from this provider means (`docs/trackers.md`). */

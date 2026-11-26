@@ -2,6 +2,8 @@ import { ipcMain } from 'electron'
 import { markSlow, SLOW_IPC_MS } from '../lib/perf'
 import type { StorageService } from '../store/types'
 import type { CredentialVault } from '../trackers/credential-vault'
+import type { TrackerLifecycle } from '../trackers/lifecycle'
+import type { TrackerAuthSessions } from '../trackers/auth-session'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
 import type { ColdStorageService } from '../services/cold-storage'
@@ -70,8 +72,8 @@ export interface AppDeps {
   /** Why this launch didn't start from the `config.json` it found, or null (#648). */
   startupNotice: StartupNotice | null
   /**
-   * The AniList / MyAnimeList credential vault (#690). No router uses it yet;
-   * #695 (T3b)'s auth and client-config channels do.
+   * The AniList / MyAnimeList credential vault (#690): the settings guard and
+   * `tracker:set-client-config` (#695) use it.
    */
   credentialVault: CredentialVault
   smotretApi: SmotretApi
@@ -111,6 +113,14 @@ export interface AppDeps {
    * (#694), shared with their `shikimori:*` aliases.
    */
   trackerRates: TrackerRates
+  /**
+   * The account lifecycle per tracker (#695): login, switch and logout with
+   * #588's park/restore, the session generation, and the accounts state. The
+   * Shikimori router sets Shikimori's timer, drain and status steps on it.
+   */
+  trackerLifecycle: TrackerLifecycle
+  /** The sign-in attempts behind `tracker:begin-auth` / `complete-auth` / `cancel-auth` (#695). */
+  trackerAuth: TrackerAuthSessions
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

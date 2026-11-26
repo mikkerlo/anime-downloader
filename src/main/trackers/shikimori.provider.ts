@@ -13,6 +13,7 @@ import { classifyShikimoriError } from './shikimori.errors'
 import { TRACKER_CAPABILITIES, type TrackerCapabilities, type TrackerEntry } from './types'
 import type {
   ShikimoriSession,
+  TrackerAuthFlow,
   TrackerRateCacheCodec,
   TrackerRateEntry,
   TrackerRateEntryPayload,
@@ -82,6 +83,21 @@ export const shikimoriRateCache: TrackerRateCacheCodec<
       anime: animeOf(row.shikiAnime),
       smotretAnime: row.smotretAnime ?? null
     } satisfies TrackerRateEntryPayload
+  }
+}
+
+/**
+ * Shikimori's sign-in (#695): today's out-of-band code paste. `begin` is
+ * `getAuthUrl()`, and `exchange` is `SHIKIMORI_EXCHANGE_CODE`'s two calls in
+ * its order: the code exchange, then `getUser` with the new access token.
+ */
+export const shikimoriAuthFlow: TrackerAuthFlow = {
+  paste: 'code',
+  begin: () => ({ authorizeUrl: shikimori.getAuthUrl() }),
+  async exchange(code) {
+    const credentials = await shikimori.exchangeCode(code)
+    const user = await shikimori.getUser(credentials.access_token)
+    return { credentials, user }
   }
 }
 
@@ -162,6 +178,7 @@ export function createShikimoriProvider(deps: ShikimoriProviderDeps): ShikimoriP
     },
 
     getUser: (token) => shikimori.getUser(token),
+    authFlow: shikimoriAuthFlow,
 
     classifyError: classifyShikimoriError,
     isSessionGone: isShikimoriSessionGone,

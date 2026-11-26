@@ -27,6 +27,7 @@ import {
 } from '../../src/main/services/trackers/sync'
 import { createTrackerFanOut, type PrimaryWriter } from '../../src/main/services/trackers/fan-out'
 import { createTrackerRates } from '../../src/main/services/trackers/rates'
+import { trackerAccounts } from '../helpers/tracker-fan-out'
 import { ANILIST_KEYS, MYANIMELIST_KEYS, SHIKIMORI_KEYS } from '../../src/main/trackers/keys'
 import { TrackerApiError } from '../../src/main/trackers/errors'
 import { shikimoriRateCache } from '../../src/main/trackers/shikimori.provider'
@@ -148,6 +149,7 @@ function rig(initial: Record<string, unknown> = {}) {
     shikimoriSyncService: shiki,
     trackers: fan,
     trackerRates: rates,
+    ...trackerAccounts(store as never, rates, isOffline),
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => {}),
     runAutoDownloadTick: vi.fn(async () => ({})),

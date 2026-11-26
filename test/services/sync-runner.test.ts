@@ -884,17 +884,35 @@ describe('pending per owner, on top of S0b', () => {
     expect(Object.keys((await driveDoc(root))!.titles![ID].watch!).sort()).toEqual(['1', '2'])
   })
 
-  it('the logout handler has no runner call (source scan)', () => {
-    const src = fs.readFileSync(
-      path.resolve(__dirname, '../../src/main/ipc/shikimori.ipc.ts'),
-      'utf8'
+  // The login and logout moved into the tracker lifecycle (#695). The runner
+  // call is Shikimori's `afterLogin` step, which the lifecycle runs after the
+  // restore and never from the logout.
+  it('the logout has no runner call, and the login runs it after the restore (source scan)', () => {
+    const read = (p: string): string => fs.readFileSync(path.resolve(__dirname, p), 'utf8')
+    const router = read('../../src/main/ipc/shikimori.ipc.ts')
+    const lifecycle = read('../../src/main/trackers/lifecycle.ts')
+
+    const alias = router.indexOf('CHANNELS.SHIKIMORI_LOGOUT')
+    const aliasBody = router.slice(alias, router.indexOf('ipcMain.handle', alias + 1))
+    expect(aliasBody).toMatch(/trackerLifecycle\.logout\('shikimori'/)
+    expect(aliasBody).not.toMatch(/syncRunner|runAll|runLibrary/)
+    const logout = lifecycle.slice(
+      lifecycle.indexOf('function logout('),
+      lifecycle.indexOf('function account(')
     )
-    const start = src.indexOf('CHANNELS.SHIKIMORI_LOGOUT')
-    const body = src.slice(start, src.indexOf('ipcMain.handle', start + 1))
-    expect(body.length).toBeGreaterThan(100)
-    expect(body).not.toMatch(/syncRunner|runAll|runLibrary/)
-    const login = src.slice(src.indexOf('CHANNELS.SHIKIMORI_EXCHANGE_CODE'), start)
-    expect(login.indexOf("runAll('login')")).toBeGreaterThan(login.indexOf('takeParked'))
+    expect(logout.length).toBeGreaterThan(100)
+    expect(logout).not.toMatch(/syncRunner|runAll|runLibrary|afterLogin/)
+
+    // `runAll('login')` lives only in Shikimori's `afterLogin` step.
+    expect(router.split("runAll('login')")).toHaveLength(2)
+    const step = router.slice(router.indexOf('afterLogin()'), router.indexOf("runAll('login')"))
+    expect(step.length).toBeGreaterThan(0)
+    expect(step.length).toBeLessThan(200)
+    const login = lifecycle.slice(
+      lifecycle.indexOf('async function completeLogin('),
+      lifecycle.indexOf('function logout(')
+    )
+    expect(login.indexOf('afterLogin?.()')).toBeGreaterThan(login.indexOf('takeParked'))
   })
 })
 

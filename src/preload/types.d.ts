@@ -361,6 +361,17 @@ interface Api {
   onTrackerOfflineQueueChanged: (
     callback: (data: TrackerOfflineQueueChangedEvent) => void
   ) => Unsubscribe
+  // Accounts, auth and logout (#695)
+  trackerListAccounts: () => Promise<TrackerAccountsState>
+  trackerBeginAuth: (trackerId: TrackerId) => Promise<TrackerAuthResult>
+  trackerCompleteAuth: (trackerId: TrackerId, urlOrToken: string) => Promise<TrackerAuthResult>
+  trackerCancelAuth: (trackerId: TrackerId) => Promise<void>
+  trackerLogout: (trackerId: TrackerId, opts?: TrackerLogoutOptions) => Promise<void>
+  trackerGetClientConfig: (trackerId: TrackerId) => Promise<TrackerClientConfig>
+  trackerSetClientConfig: (
+    trackerId: TrackerId,
+    config: TrackerClientConfigInput
+  ) => Promise<TrackerClientConfig>
 
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>

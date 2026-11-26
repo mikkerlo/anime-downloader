@@ -72,6 +72,8 @@ Fields the Shikimori API does not expose are deliberately omitted: scouting (#18
 
 ### Unsynced changes on logout and account switch
 
+The rules below run in the tracker-generic account lifecycle (`src/main/trackers/lifecycle.ts`, #695), keyed by each tracker's own store keys, so AniList and MyAnimeList follow them too; `shikimori:exchange-code` and `shikimori:logout` delegate to it. [Trackers › Accounts and sign-in](./trackers.md#accounts-and-sign-in) has the generic form.
+
 The live `shikimoriUpdateQueue` only ever holds entries owned by the current `shikimoriUser.id` (#588). Changes kept for anyone else wait in `shikimoriParkedQueues` (`Record<ownerId, { nickname, entries, parkedAt }>`), which the drain never reads. Entries are moved as whole objects, never rebuilt, so every field on them survives park and restore. The pure helpers (`mergeQueues`, `parkEntries`, `takeParked`, `dropFromParked`) live in `src/main/lib/shikimori-queue.ts`; `mergeQueues` stable-sorts by `queuedAt`, because `consolidateQueue` takes the last entry's `after`.
 
 - **Logout** takes `{ pending: 'keep' | 'discard' }`; a missing argument means `keep`. Keep parks the live queue under the user's id, Discard drops it. Settings → Connectors asks first when the queue is non-empty (`ShikimoriPendingDialog.vue`: Keep / Discard / Cancel); with nothing pending, Disconnect works as before.

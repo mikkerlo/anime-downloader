@@ -11,14 +11,6 @@ import {
   type RecommendationCandidate,
   type TasteRate
 } from '../recommendations'
-import {
-  mergeQueues,
-  parkEntries,
-  takeParked,
-  UNKNOWN_OWNER,
-  type ParkedQueues,
-  type QueuedShikimoriUpdate
-} from '../lib/shikimori-queue'
 import { rateFromCacheEntry, type StoredRateEntry } from '../lib/shikimori-rate-cache'
 import {
   CALENDAR_CACHE_TTL_MS,
@@ -33,6 +25,7 @@ import {
   syntheticRate
 } from '../services/trackers/shikimori-primary'
 import type { TrackerStatus } from '../services/trackers/rates'
+import { shikimoriAuthFlow } from '../trackers/shikimori.provider'
 import type { AppDeps } from './index'
 
 const SHIKI_BASE = SHIKIMORI_ORIGIN
@@ -42,6 +35,8 @@ export function register({
   shikimoriSyncService: sync,
   trackers,
   trackerRates,
+  trackerLifecycle,
+  trackerAuth,
   lookupByMalIds,
   maybeBroadcastCleanupPrompt,
   runAutoDownloadTick,
@@ -471,25 +466,28 @@ export function register({
     return (store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id
   }
 
-  function getParkedQueues(): ParkedQueues {
-    return (store.get('shikimoriParkedQueues') as ParkedQueues | undefined) ?? {}
-  }
-
-  function ownerKey(user: shikimori.ShikiUser): { id: string; nickname: string } {
-    return { id: String(user.id), nickname: user.nickname }
-  }
-
-  // Everything that describes the signed-in account's list. Cleared on logout
-  // and on an account switch, where B would otherwise inherit A's list (#588).
-  function resetUserScopedState(): void {
-    store.set('shikimoriUserRates', [])
-    store.set('shikimoriAnimeDetails', {})
-    store.set('shikimoriProfile', null)
-    store.set('shikimoriFriends', [])
-    store.set('shikimoriRecommendations', [])
-    sync.abortPrefetch()
-    sync.clearOfflineSnapshots()
-  }
+  // Shikimori's steps in the account lifecycle (#695), which runs login,
+  // switch and logout for every tracker: today's `sync.*` calls, the
+  // user-scoped reset's prefetch abort and snapshots, and the Shared Library
+  // login run (#584), which stays on the Shikimori login only.
+  trackerLifecycle.setSteps('shikimori', {
+    resetExtra() {
+      sync.abortPrefetch()
+      sync.clearOfflineSnapshots()
+    },
+    startTimer: () => sync.startSyncTimer(),
+    drain: () => void sync.syncShikimoriQueue(),
+    stopTimer: () => sync.stopSyncTimer(),
+    broadcastStatus: () => sync.broadcastSyncStatus(),
+    broadcastQueue: (length) =>
+      broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length }),
+    afterLogin() {
+      // The merge on login (#584), after S0b's restore: its Shikimori leg drains first.
+      void syncRunner
+        ?.runAll('login')
+        .catch((err) => console.error('[sync] the login run failed:', err))
+    }
+  })
 
   // The primary branch of `applyChange` for Shikimori (#692): 6.x's
   // `sendRate` / `queueRate`, moved to `services/trackers`, with this router's
@@ -511,78 +509,29 @@ export function register({
   // dashboard fills in its favorite-genres panel without a manual refresh (#183).
   sync.setOnDetailsPrefetched(refreshShikimoriProfileInBackground)
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => {
-    return shikimori.getAuthUrl()
-  })
+  // The four account aliases (#695) delegate to the tracker lifecycle and
+  // Shikimori's `authFlow`, with today's payloads, until v7.0 (#717). Unlike
+  // `tracker:begin-auth`, none of them refuses while offline.
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => shikimoriAuthFlow.begin().authorizeUrl)
 
-  // The live queue only ever holds the signed-in user's changes (#588). Nothing
-  // is written until `getUser` resolves: saving B's credentials while
-  // `shikimoriUser` is still A would let a drain tick send A's queue with B's
-  // token. From there on everything is synchronous.
+  // The live queue only ever holds the signed-in user's changes (#588); the
+  // lifecycle writes nothing until `getUser` resolves (`trackers/lifecycle.ts`).
+  // Unguarded, as in 6.x: it only cancels a `tracker:begin-auth('shikimori')`
+  // still held, so that `BEGIN` doesn't stay pending.
   ipcMain.handle(CHANNELS.SHIKIMORI_EXCHANGE_CODE, async (_event, code: string) => {
-    const creds = await shikimori.exchangeCode(code)
-    const user = await shikimori.getUser(creds.access_token)
-
-    const prev = (store.get('shikimoriUser') as shikimori.ShikiUser | null) ?? null
-    const live = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
-    const switched = prev !== null && prev.id !== user.id
-    if (switched || (!prev && live.length > 0)) {
-      // Ownerless entries can't be replayed for whoever signs in, so they wait
-      // in a bucket that is never restored automatically.
-      const owner = prev ? ownerKey(prev) : { id: UNKNOWN_OWNER, nickname: '' }
-      store.set('shikimoriParkedQueues', parkEntries(getParkedQueues(), owner, live, Date.now()))
-      store.set('shikimoriUpdateQueue', [])
-    }
-    if (switched) resetUserScopedState()
-
-    store.set('shikimoriCredentials', creds)
-    store.set('shikimoriUser', user)
-    // A fresh session ends the expired state, and the queue the expiry retained
-    // can drain now (#244).
-    store.set('shikimoriSessionExpired', false)
-
-    const restored = takeParked(getParkedQueues(), String(user.id))
-    const queue = mergeQueues(
-      store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[],
-      restored.entries
+    trackerAuth.cancel('shikimori')
+    const outcome = await trackerLifecycle.completeLogin('shikimori', () =>
+      shikimoriAuthFlow.exchange(code, null)
     )
-    if (restored.entries.length > 0) {
-      store.set('shikimoriUpdateQueue', queue)
-      store.set('shikimoriParkedQueues', restored.parked)
-    }
-    broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
-    if (switched || restored.entries.length > 0) refreshShikimoriRatesInBackground()
-
-    sync.startSyncTimer()
-    void sync.syncShikimoriQueue()
-    sync.broadcastSyncStatus()
-    // The merge on login (#584), after S0b's restore: its Shikimori leg drains first.
-    void syncRunner
-      ?.runAll('login')
-      .catch((err) => console.error('[sync] the login run failed:', err))
-    return user
+    if (outcome.status !== 'connected') throw new Error('The Shikimori sign-in was cancelled')
+    return outcome.user as shikimori.ShikiUser
   })
 
   ipcMain.handle(CHANNELS.SHIKIMORI_LOGOUT, (_event, opts?: ShikiLogoutOptions) => {
-    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-    if (user && opts?.pending !== 'discard') {
-      const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
-      store.set(
-        'shikimoriParkedQueues',
-        parkEntries(getParkedQueues(), ownerKey(user), queue, Date.now())
-      )
-    }
-    store.set('shikimoriCredentials', null)
-    store.set('shikimoriUser', null)
-    store.set('shikimoriUpdateQueue', [])
-    resetUserScopedState()
-    // Or disconnecting while expired would leave a sticky flag with no user.
-    store.set('shikimoriSessionExpired', false)
-    sync.stopSyncTimer()
-    broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: 0 })
-    sync.broadcastSyncStatus()
+    trackerLifecycle.logout('shikimori', { pending: opts?.pending, clearWhenSignedOut: true })
   })
 
+  // `tracker:list-accounts` carries the same `shikimoriUser` read as its `user`.
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_USER, () => {
     return store.get('shikimoriUser') as shikimori.ShikiUser | null
   })

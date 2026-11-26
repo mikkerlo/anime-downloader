@@ -17,13 +17,20 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { useShikimoriStore } from '../stores/shikimori'
+import type { useTrackersStore } from '../stores/trackers'
 
 export type LoadRelatedFn = (malId: number) => Promise<void>
 
 export function useShikimori(deps: {
   anime: Ref<AnimeDetail | null>
   shikimoriStore: ReturnType<typeof useShikimoriStore>
+  trackersStore: ReturnType<typeof useTrackersStore>
 }): {
+  /**
+   * A non-Shikimori `details` or `airing` source's details (#706), or null for
+   * Shikimori, no source, or a miss not yet filled by `tracker:details-updated`.
+   */
+  trackerDetailsFor: (id: TrackerId | null) => TrackerDetails | null
   shikiUser: Ref<ShikiUser | null>
   shikiRate: Ref<ShikiUserRateResult | null>
   /** The rate came from main's cached list (#570): offline, or the read failed. */
@@ -235,7 +242,68 @@ export function useShikimori(deps: {
     }
   )
 
+  // ---- A non-Shikimori `details` / `airing` source (#706) -------------------
+  // Read once per source from main's cache (`tracker:get-details`, which kicks
+  // the prefetch on a miss), then rewritten from the trackers store's
+  // `tracker:details-updated` entries, as the Shikimori watch above is. Keyed
+  // on the resolved sources as well as the MAL id, so a source switch reads
+  // the new tracker.
+  const trackerDetails = ref<Partial<Record<TrackerId, TrackerDetails>>>({})
+  const otherSources = computed<TrackerId[]>(() => {
+    const ids = new Set<TrackerId>()
+    for (const feature of ['details', 'airing'] as const) {
+      const id = deps.trackersStore.featureSource(feature)
+      if (id && id !== 'shikimori') ids.add(id)
+    }
+    return [...ids]
+  })
+  let detailsMalId: number | null = null
+
+  watch(
+    () => [deps.anime.value?.myAnimeListId ?? null, otherSources.value.join(',')] as const,
+    ([malId]) => {
+      if (malId !== detailsMalId) {
+        detailsMalId = malId
+        trackerDetails.value = {}
+      }
+      if (!malId) return
+      for (const id of otherSources.value) {
+        if (trackerDetails.value[id]) continue
+        void window.api
+          .trackerGetDetails(malId, id)
+          .then((details) => {
+            // A newer broadcast, or another title, wins over this read.
+            if (!details || detailsMalId !== malId || trackerDetails.value[id]) return
+            trackerDetails.value = { ...trackerDetails.value, [id]: details }
+          })
+          .catch((err) => console.error('Failed to load tracker details:', err))
+      }
+    },
+    { immediate: true }
+  )
+
+  watch(
+    () => {
+      const malId = deps.anime.value?.myAnimeListId
+      if (!malId) return []
+      return otherSources.value.map((id) => [id, deps.trackersStore.detailsFor(id, malId)] as const)
+    },
+    (entries) => {
+      for (const [id, details] of entries) {
+        if (details && trackerDetails.value[id] !== details) {
+          trackerDetails.value = { ...trackerDetails.value, [id]: details }
+        }
+      }
+    }
+  )
+
+  function trackerDetailsFor(id: TrackerId | null): TrackerDetails | null {
+    if (!id || id === 'shikimori') return null
+    return trackerDetails.value[id] ?? null
+  }
+
   return {
+    trackerDetailsFor,
     shikiUser,
     shikiRate,
     shikiRateStale,

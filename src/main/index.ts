@@ -85,6 +85,7 @@ import { createShikimoriEventBridge } from './trackers/events'
 import { createTrackerLifecycle } from './trackers/lifecycle'
 import { createTrackerAuthSessions } from './trackers/auth-session'
 import { createShikimoriProvider } from './trackers/shikimori.provider'
+import { createAiringDep } from './trackers/feature-source'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
@@ -423,8 +424,16 @@ const trackerLifecycle = createTrackerLifecycle({
   accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED
 })
 // AniList (#703) and MyAnimeList (#702) add their providers here: the sign-in
-// flows, and the capabilities `tracker:set-feature-source` checks (#696).
-const trackerProviders = { shikimori: createShikimoriProvider({ store }) }
+// flows, and the `airing` source's `getAiringInfo` (#706). Their sync
+// constructions pass the `tracker:details-updated` channel as
+// `detailsUpdatedChannel`, and AniList's passes `createTickIfAiringSource`'s
+// check as `onRatesRefreshed` (#706).
+const trackerProviders = {
+  shikimori: createShikimoriProvider({
+    store,
+    refreshDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId)
+  })
+}
 const trackerAuth = createTrackerAuthSessions({
   lifecycle: trackerLifecycle,
   providers: trackerProviders,
@@ -435,8 +444,7 @@ const trackerAuth = createTrackerAuthSessions({
 const trackerChoices = createTrackerChoices({
   store,
   trackers: trackerFanOut,
-  lifecycle: trackerLifecycle,
-  providers: trackerProviders
+  lifecycle: trackerLifecycle
 })
 let downloadManager: DownloadManager
 
@@ -1088,8 +1096,8 @@ async function bootstrap(): Promise<void> {
     smotretApi,
     downloadManager,
     broadcast: broadcastToAll,
-    isShikimoriLoggedIn: () => Boolean(store.get('shikimoriCredentials')),
-    refreshShikimoriDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId),
+    // The resolved `airing` source and its provider (#706).
+    airing: createAiringDep({ store, providers: trackerProviders }),
     isOffline
   })
   offlineKickoff = createOfflineKickoff({

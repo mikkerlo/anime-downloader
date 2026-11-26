@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import AnimeDetailView from '../../../src/renderer/src/components/views/AnimeDetailView.vue'
 import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
+import { trackerAccounts } from '../../helpers/tracker-accounts'
 
 /** A callable that also carries `then`/`catch`/`finally`. The three are optional
  *  so the bare arrow can be assigned before they are filled in below. */
@@ -71,10 +72,25 @@ interface ApiOverrides {
   getAnimeCache?: ReturnType<typeof vi.fn>
   getAnime?: ReturnType<typeof vi.fn>
   offline?: OfflineApi
+  /** `tracker:list-accounts` (#706); no account by default. */
+  accounts?: TrackerAccountsState
+  extra?: Record<string, ReturnType<typeof vi.fn>>
 }
 
+/** The `onTrackerDetailsUpdated` listeners the trackers store registered. */
+let detailsListeners: ((e: TrackerDetailsUpdatedEvent) => void)[] = []
+
 function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typeof vi.fn>> {
+  detailsListeners = []
   const base: Record<string, ReturnType<typeof vi.fn>> = {
+    trackerListAccounts: vi.fn().mockResolvedValue(overrides.accounts ?? trackerAccounts()),
+    onTrackerDetailsUpdated: vi.fn((cb: (e: TrackerDetailsUpdatedEvent) => void) => {
+      detailsListeners.push(cb)
+      return () => {}
+    }),
+    trackerGetDetails: vi.fn().mockResolvedValue(null),
+    shikimoriGetAnimeDetails: vi.fn().mockResolvedValue(null),
+    shikimoriGetRelated: vi.fn().mockResolvedValue([]),
     getAnimeCache: overrides.getAnimeCache ?? vi.fn().mockResolvedValue(null),
     getAnime: overrides.getAnime ?? vi.fn().mockResolvedValue({ source: 'api', data: detail() }),
     getEpisodesBatchCached: vi
@@ -94,7 +110,8 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
     autoDlGetSubscription: vi.fn().mockResolvedValue(null),
     shikimoriGetUser: vi.fn().mockResolvedValue(null),
     shikimoriGetSyncStatus: vi.fn().mockResolvedValue({ state: 'idle', queueLength: 0 }),
-    shikimoriGetOfflineQueueLength: vi.fn().mockResolvedValue(0)
+    shikimoriGetOfflineQueueLength: vi.fn().mockResolvedValue(0),
+    ...overrides.extra
   }
   const target = { ...(overrides.offline ?? offlineApi()).api, ...base }
   ;(window as unknown as { api: unknown }).api = new Proxy(target, {
@@ -373,6 +390,115 @@ describe('AnimeDetailView — offline (#568)', () => {
     offline.emit('online')
     await flushPromises()
     expect(getAnime).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+})
+
+// The hero's description and genres fall back to the `details` source (#706).
+// smotret still comes first; these titles have none of their own.
+describe('AnimeDetailView — the details source (#706)', () => {
+  const MAL_ID = 5114
+  const bare = (): AnimeDetail => detail({ myAnimeListId: MAL_ID } as Partial<AnimeDetail>)
+  const ANILIST: TrackerDetails = {
+    description: 'An English synopsis from AniList.',
+    genres: ['Action', 'Fantasy'],
+    status: 'ongoing',
+    episodes: 12,
+    episodesAired: 6,
+    kind: 'tv'
+  }
+
+  function mountWith(opts: {
+    accounts: TrackerAccountsState
+    trackerGetDetails?: ReturnType<typeof vi.fn>
+    extra?: Record<string, ReturnType<typeof vi.fn>>
+  }) {
+    const api = installApi({
+      getAnime: vi.fn().mockResolvedValue({ source: 'api', data: bare() }),
+      accounts: opts.accounts,
+      extra: {
+        ...(opts.trackerGetDetails ? { trackerGetDetails: opts.trackerGetDetails } : {}),
+        ...opts.extra
+      }
+    })
+    return { api, wrapper: mount(AnimeDetailView, { props: { animeId: 1 } }) }
+  }
+
+  const synopsis = (w: ReturnType<typeof mount>) =>
+    w.find('.detail-synopsis').exists() ? w.find('.detail-synopsis').text() : ''
+  const genres = (w: ReturnType<typeof mount>) => w.findAll('.chip.outline').map((c) => c.text())
+
+  it('an AniList details source with no smotret description shows AniList’s text (cache seeded)', async () => {
+    const { api, wrapper } = mountWith({
+      accounts: trackerAccounts({ anilist: 'active' }),
+      trackerGetDetails: vi.fn().mockResolvedValue(ANILIST)
+    })
+    await flushPromises()
+    expect(api.trackerGetDetails).toHaveBeenCalledWith(MAL_ID, 'anilist')
+    expect(synopsis(wrapper)).toBe(ANILIST.description)
+    expect(genres(wrapper)).toEqual(['Action', 'Fantasy'])
+    wrapper.unmount()
+  })
+
+  it('miss → prefetch → event → hero, on the same mounted page; other titles and trackers change nothing', async () => {
+    const { wrapper } = mountWith({ accounts: trackerAccounts({ anilist: 'active' }) })
+    await flushPromises()
+    expect(synopsis(wrapper)).toBe('')
+    expect(genres(wrapper)).toEqual([])
+
+    const fire = (e: TrackerDetailsUpdatedEvent) => detailsListeners.forEach((l) => l(e))
+    fire({ trackerId: 'anilist', malId: MAL_ID + 1, details: ANILIST })
+    fire({ trackerId: 'mal', malId: MAL_ID, details: ANILIST })
+    await flushPromises()
+    expect(synopsis(wrapper)).toBe('')
+
+    fire({ trackerId: 'anilist', malId: MAL_ID, details: ANILIST })
+    await flushPromises()
+    expect(synopsis(wrapper)).toBe(ANILIST.description)
+    expect(genres(wrapper)).toEqual(['Action', 'Fantasy'])
+    wrapper.unmount()
+  })
+
+  it('with Shikimori it is still shikimori:get-anime-details, and tracker:get-details is never called', async () => {
+    const { api, wrapper } = mountWith({
+      accounts: trackerAccounts({ shikimori: 'active', anilist: 'active' }),
+      extra: {
+        shikimoriGetUser: vi.fn().mockResolvedValue({ id: 1, nickname: 'n', avatar: '' }),
+        shikimoriGetRate: vi.fn().mockResolvedValue(null),
+        shikimoriGetFriendsRates: vi.fn().mockResolvedValue([]),
+        shikimoriGetAnimeDetails: vi.fn().mockResolvedValue({
+          description: '[b]Русское[/b] описание',
+          genres: [{ id: 1, name: 'Action', russian: 'Экшен' }],
+          status: 'ongoing'
+        })
+      }
+    })
+    await flushPromises()
+    expect(api.shikimoriGetAnimeDetails).toHaveBeenCalledWith(MAL_ID)
+    expect(api.trackerGetDetails).not.toHaveBeenCalled()
+    expect(synopsis(wrapper)).toBe('Русское описание')
+    expect(genres(wrapper)).toEqual(['Экшен'])
+    wrapper.unmount()
+  })
+
+  it('smotret’s own description and genres still come first', async () => {
+    const api = installApi({
+      getAnime: vi.fn().mockResolvedValue({
+        source: 'api',
+        data: detail({
+          myAnimeListId: MAL_ID,
+          descriptions: [{ source: 's', value: 'smotret text' }],
+          genres: [{ id: 3, title: 'Комедия' }]
+        } as Partial<AnimeDetail>)
+      }),
+      accounts: trackerAccounts({ anilist: 'active' }),
+      extra: { trackerGetDetails: vi.fn().mockResolvedValue(ANILIST) }
+    })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(api.trackerGetDetails).toHaveBeenCalled()
+    expect(synopsis(wrapper)).toBe('smotret text')
+    expect(genres(wrapper)).toEqual(['Комедия'])
     wrapper.unmount()
   })
 })

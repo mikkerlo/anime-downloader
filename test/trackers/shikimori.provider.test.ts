@@ -177,12 +177,62 @@ describe('data members', () => {
     expect(p.classifyError(new TypeError('fetch failed'))).toBe('network')
   })
 
-  it('is the shikimori provider and implements no capability yet', () => {
+  it('is the shikimori provider and implements getAiringInfo only (#706)', () => {
     const p = provider()
     expect(p.id).toBe('shikimori')
     expect(Object.keys(p.capabilities).sort()).toEqual([...TRACKER_CAPABILITIES].sort())
-    expect(Object.values(p.capabilities).every((v) => v === false)).toBe(true)
+    expect(Object.entries(p.capabilities).filter(([, v]) => v)).toEqual([['getAiringInfo', true]])
     expect(p.deleteEntry).toBeUndefined()
+  })
+})
+
+// The auto-downloader's read before #706, moved behind the adapter unchanged.
+describe('getAiringInfo', () => {
+  const HOUR = 60 * 60 * 1000
+  const cached = (aired: number | null, total: number | null, ageMs: number) => ({
+    9: { details: { episodes_aired: aired, episodes: total }, fetchedAt: Date.now() - ageMs }
+  })
+
+  function withRefresh(returns: Partial<ShikiAnimeDetails> | null) {
+    const refreshDetails = vi.fn(async () => returns as ShikiAnimeDetails | null)
+    return {
+      p: createShikimoriProvider({ store: store as never, refreshDetails }),
+      refreshDetails
+    }
+  }
+
+  it('a cache entry younger than 6 h answers with no refresh', async () => {
+    store.set('shikimoriAnimeDetails', cached(5, 12, 5 * HOUR))
+    const { p, refreshDetails } = withRefresh({ episodes_aired: 9, episodes: 12 })
+    expect(await p.getAiringInfo!(9)).toEqual({ episodesAired: 5, episodes: 12 })
+    expect(refreshDetails).not.toHaveBeenCalled()
+  })
+
+  it('an entry older than 6 h, or none, refreshes inline', async () => {
+    store.set('shikimoriAnimeDetails', cached(5, 12, 7 * HOUR))
+    const { p, refreshDetails } = withRefresh({ episodes_aired: 9, episodes: 12 })
+    expect(await p.getAiringInfo!(9)).toEqual({ episodesAired: 9, episodes: 12 })
+    store.set('shikimoriAnimeDetails', {})
+    expect(await p.getAiringInfo!(9)).toEqual({ episodesAired: 9, episodes: 12 })
+    expect(refreshDetails).toHaveBeenCalledTimes(2)
+  })
+
+  it('a failed refresh keeps the stale entry; with no entry it is null', async () => {
+    store.set('shikimoriAnimeDetails', cached(5, null, 7 * HOUR))
+    const { p } = withRefresh(null)
+    expect(await p.getAiringInfo!(9)).toEqual({ episodesAired: 5, episodes: 0 })
+    store.set('shikimoriAnimeDetails', {})
+    expect(await p.getAiringInfo!(9)).toBeNull()
+  })
+
+  it('missing counts read as 0, as the tick read them', async () => {
+    store.set('shikimoriAnimeDetails', cached(null, null, 0))
+    expect(await provider().getAiringInfo!(9)).toEqual({ episodesAired: 0, episodes: 0 })
+  })
+
+  it('without refreshDetails the read is cache-only', async () => {
+    store.set('shikimoriAnimeDetails', cached(5, 12, 7 * HOUR))
+    expect(await provider().getAiringInfo!(9)).toEqual({ episodesAired: 5, episodes: 12 })
   })
 })
 

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSettingsStore } from '../../stores/settings';
+import { AIRING_UNAVAILABLE_HINT, useTrackersStore } from '../../stores/trackers';
 import { useOfflineStore } from '../../stores/offline';
 import { usePrepareOfflineStore } from '../../stores/prepare-offline';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
@@ -43,6 +44,11 @@ const autoDlRunning = ref(false);
 const autoDlLastResult = ref<AutoDlTickResult | null>(null);
 
 let unsubAutoDlTickResult: Unsubscribe | null = null;
+
+// An account is connected, but none can be the `airing` source: MyAnimeList
+// only (#706). With no account the tab is as before.
+const trackersStore = useTrackersStore();
+const airingUnavailable = computed(() => trackersStore.anyAccount && !trackersStore.canAutoDl);
 
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles' },
@@ -312,10 +318,14 @@ watch(autoDownloadEnabled, (val) => {
         <SettingsSwitch v-model="autoDownloadEnabled" />
       </SettingsRow>
       <SettingsRow stack>
+        <p v-if="airingUnavailable" class="sr-desc" data-testid="auto-dl-airing-hint">
+          {{ AIRING_UNAVAILABLE_HINT }}
+        </p>
         <div class="auto-dl-status">
           <button
             class="btn btn-sm"
-            :disabled="autoDlRunning || !autoDownloadEnabled"
+            data-testid="auto-dl-run-now"
+            :disabled="autoDlRunning || !autoDownloadEnabled || airingUnavailable"
             @click="runAutoDlNow"
           >
             {{ autoDlRunning ? 'Running...' : 'Run now' }}

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ref, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
+import { useTrackersStore } from '../../../src/renderer/src/stores/trackers'
 import { useShikimori } from '../../../src/renderer/src/composables/use-shikimori'
 
 type Api = {
@@ -32,6 +33,9 @@ type Api = {
   onTrackerRatesRefreshed: (cb: (data: unknown) => void) => Unsubscribe
   onTrackerOfflineQueueChanged: (cb: (data: unknown) => void) => Unsubscribe
   onTrackerSyncStatus: (cb: (data: unknown) => void) => Unsubscribe
+  onTrackerAccountsChanged: (cb: (data: unknown) => void) => Unsubscribe
+  onTrackerDetailsUpdated: (cb: (data: unknown) => void) => Unsubscribe
+  trackerListAccounts: () => Promise<TrackerAccountsState>
 }
 
 function noopSub(): Unsubscribe {
@@ -50,7 +54,11 @@ const STORE_BROADCAST_STUBS: Partial<Api> = {
   onTrackerRateUpdated: noopSub,
   onTrackerRatesRefreshed: noopSub,
   onTrackerOfflineQueueChanged: noopSub,
-  onTrackerSyncStatus: noopSub
+  onTrackerSyncStatus: noopSub,
+  onTrackerAccountsChanged: noopSub,
+  onTrackerDetailsUpdated: noopSub,
+  // No account: every feature source resolves null, so no `tracker:get-details`.
+  trackerListAccounts: async () => ({ accounts: [], primary: null, mirror: {}, featureSources: {} })
 }
 
 function setApi(api: Partial<Api>): void {
@@ -79,7 +87,8 @@ function makeDeps(opts: { anime?: AnimeDetail | null } = {}) {
   setActivePinia(createPinia())
   return {
     anime: ref<AnimeDetail | null>(opts.anime ?? null),
-    shikimoriStore: useShikimoriStore()
+    shikimoriStore: useShikimoriStore(),
+    trackersStore: useTrackersStore()
   }
 }
 

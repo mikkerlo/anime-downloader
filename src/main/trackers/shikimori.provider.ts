@@ -10,7 +10,12 @@ import { buildRateCacheEntries, type CachedRateEntry } from '../lib/shikimori-ra
 import type { AnimeSearchResult } from '../smotret-api'
 import type { StorageService } from '../store/types'
 import { classifyShikimoriError } from './shikimori.errors'
-import { TRACKER_CAPABILITIES, type TrackerCapabilities, type TrackerEntry } from './types'
+import {
+  AIRING_FRESHNESS_MS,
+  TRACKER_CAPABILITIES,
+  type TrackerCapabilities,
+  type TrackerEntry
+} from './types'
 import type {
   ShikimoriSession,
   TrackerAuthFlow,
@@ -24,6 +29,11 @@ export interface ShikimoriProviderDeps {
   store: StorageService
   /** The smotret join for listed rows, as the rate refresh does it. */
   lookupByMalIds?: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
+  /**
+   * `refreshShikimoriDetailsForMalId`: what `getAiringInfo` calls for a missing
+   * or stale details entry. Without it the read is cache-only.
+   */
+  refreshDetails?: (malId: number) => Promise<shikimori.ShikiAnimeDetails | null>
 }
 
 export type ShikimoriProvider = TrackerSyncProvider<
@@ -106,9 +116,15 @@ export function isShikimoriSessionGone(err: unknown): boolean {
   return err instanceof shikimori.ShikiAuthError
 }
 
-const NO_CAPABILITIES = Object.fromEntries(
-  TRACKER_CAPABILITIES.map((c) => [c, false])
+// The members this adapter implements; the rest land with their slices.
+const SHIKIMORI_CAPABILITIES = Object.fromEntries(
+  TRACKER_CAPABILITIES.map((c) => [c, c === 'getAiringInfo'])
 ) as unknown as TrackerCapabilities
+
+interface DetailsCacheEntry {
+  details: shikimori.ShikiAnimeDetails
+  fetchedAt: number
+}
 
 /** `Date.parse` in ms, or null for a missing or unparseable timestamp. */
 export function parseUpdatedAt(value: string | null | undefined): number | null {
@@ -166,7 +182,7 @@ export function createShikimoriProvider(deps: ShikimoriProviderDeps): ShikimoriP
   const { store } = deps
   return {
     id: 'shikimori',
-    capabilities: NO_CAPABILITIES,
+    capabilities: SHIKIMORI_CAPABILITIES,
 
     // The drain's order: the user first, then the token, so `userId` is the
     // account the token was refreshed for.
@@ -220,6 +236,24 @@ export function createShikimoriProvider(deps: ShikimoriProviderDeps): ShikimoriP
               rewatches
             )
       return toEntry(ref.malId, rate)
+    },
+
+    // The auto-downloader's read before #706, moved here unchanged: the
+    // `shikimoriAnimeDetails` entry, refreshed inline when it is missing or
+    // older than 6 h; a failed refresh keeps the stale entry.
+    async getAiringInfo(malId) {
+      const cache = store.get('shikimoriAnimeDetails') as Record<string, DetailsCacheEntry>
+      let entry: DetailsCacheEntry | undefined = cache[String(malId)]
+      const age = entry ? Date.now() - entry.fetchedAt : Infinity
+      if (age > AIRING_FRESHNESS_MS && deps.refreshDetails) {
+        const fresh = await deps.refreshDetails(malId)
+        if (fresh) entry = { details: fresh, fetchedAt: Date.now() }
+      }
+      if (!entry) return null
+      return {
+        episodesAired: entry.details?.episodes_aired ?? 0,
+        episodes: entry.details?.episodes ?? 0
+      }
     }
   }
 }

@@ -71,7 +71,7 @@ export interface TrackerRatesResult<TRow> {
   waitingMalIds: number[]
 }
 
-export interface TrackerSyncServiceDeps {
+export interface TrackerSyncServiceDeps extends TrackerDetailsDeps {
   store: StorageService
   broadcast: (channel: string, ...args: unknown[]) => void
   syncStatusChannel: string
@@ -671,6 +671,28 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     return result
   }
 
+  const detailsCache = (): Record<string, TrackerDetailsCacheEntry> =>
+    (store.get(keys.animeDetails) as Record<string, TrackerDetailsCacheEntry> | undefined) ?? {}
+
+  function writeDetails(malId: number, details: TrackerDetails): void {
+    store.set(keys.animeDetails, {
+      ...detailsCache(),
+      [String(malId)]: { details, fetchedAt: Date.now() }
+    })
+    if (deps.detailsUpdatedChannel) {
+      broadcast(deps.detailsUpdatedChannel, {
+        trackerId,
+        malId,
+        details
+      } satisfies TrackerDetailsUpdatedEvent)
+    }
+  }
+
+  function requestDetails(malId: number): void {
+    if (deps.isOffline?.()) return
+    deps.prefetchDetails?.(malId)
+  }
+
   async function fetchEntry(malId: number): Promise<TrackerEntry<TRate> | null> {
     const session = await provider.auth()
     return provider.getEntry(session, { malId, remoteId: cachedRate(malId)?.remoteId ?? null })
@@ -701,12 +723,15 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     enqueue,
     broadcastQueueChanged,
     needsSetup: () => needsSetupFlag,
-    clearNeedsSetup
+    clearNeedsSetup,
+    cachedDetails: (malId) => detailsCache()[String(malId)]?.details ?? null,
+    writeDetails,
+    requestDetails
   }
 }
 
 /** The reads the `tracker:*` handlers (#694) make through an instance. */
-export interface TrackerSyncReads<TRate, TRow> {
+export interface TrackerSyncReads<TRate, TRow> extends TrackerDetailsCache {
   /** The codec's reads. */
   readonly rateCache: Pick<
     import('../../trackers/types').TrackerRateCacheCodec<unknown, TRow>,
@@ -723,4 +748,44 @@ export interface TrackerSyncReads<TRate, TRow> {
    * for Shikimori this is its rate funnels' `isQueueableRateError`.
    */
   isQueueableError(err: unknown): boolean
+}
+
+/** The details deps (#706), declared here so the deps above keep their lines. */
+export interface TrackerDetailsDeps {
+  /**
+   * `tracker:details-updated`: `writeDetails` broadcasts every write on it.
+   * AniList's and MyAnimeList's constructions pass it; Shikimori's doesn't,
+   * since its details stay on `shikimori:anime-details-updated`.
+   */
+  detailsUpdatedChannel?: string
+  /**
+   * Kicks this tracker's details prefetch for a `tracker:get-details` miss:
+   * AniList's batched list prefetch (#703), MyAnimeList's on-demand fetch
+   * (#702). Absent, a miss stays a miss.
+   */
+  prefetchDetails?: (malId: number) => void
+}
+
+/** One `animeDetails` cache entry (#706), keyed by MAL id. */
+export interface TrackerDetailsCacheEntry {
+  details: TrackerDetails
+  fetchedAt: number
+}
+
+/** An instance's details cache (#706): `tracker:get-details` and #702's / #703's writers. */
+export interface TrackerDetailsCache {
+  /**
+   * The `animeDetails` cache entry's details for `malId`, or null. Never the
+   * network. AniList and MyAnimeList only: Shikimori's cache holds its own
+   * `ShikiAnimeDetails` rows, which `shikimori:get-anime-details` reads.
+   */
+  cachedDetails(malId: number): TrackerDetails | null
+  /**
+   * A details-cache write: the `animeDetails` `store.set`, then the
+   * `detailsUpdatedChannel` broadcast `{ trackerId, malId, details }`. #702's
+   * and #703's details writers go through it.
+   */
+  writeDetails(malId: number, details: TrackerDetails): void
+  /** A details-cache miss: kicks `prefetchDetails`, except while offline. */
+  requestDetails(malId: number): void
 }

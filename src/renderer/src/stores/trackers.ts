@@ -6,11 +6,14 @@
 //   its user (credentials cleared), so it stays connected and aggregated.
 // - Reads overlay each tracker's cache with its last queued `after`, like
 //   main's `projectRate`, so a pending change shows before its queue drains.
+// - Feature sources resolve through `src/shared/trackers/feature-source.ts`,
+//   the resolver main uses too (#706).
 // - Subscriptions are eager and lifetime-scoped (Pinia singleton); the
 //   disposers are discarded.
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { resolveFeatureSource, type FeatureKey } from '@shared/trackers/feature-source'
 
 export type TrackerSyncSummaryState =
   | 'session-expired'
@@ -53,6 +56,10 @@ const EMPTY_SYNC_STATUS: TrackerSyncStatus = {
 }
 
 type PerTracker<T> = Partial<Record<TrackerId, T>>
+
+/** The Auto-download hint when an account is connected but nothing can be the `airing` source (#706). */
+export const AIRING_UNAVAILABLE_HINT =
+  'MyAnimeList has no airing data — connect AniList or Shikimori to auto-download'
 
 function sameValues(a: TrackerRateValues | undefined, b: TrackerRateValues | undefined): boolean {
   if (!a || !b) return a === b
@@ -97,8 +104,10 @@ export const useTrackersStore = defineStore('trackers', () => {
   const accounts = ref<TrackerAccount[]>([])
   const primary = ref<TrackerId | null>(null)
   const mirror = ref<TrackerAccountsState['mirror']>({})
-  // The stored overrides only; resolving them is #706's.
+  // The stored overrides only; `featureSource` resolves them.
   const featureSources = ref<TrackerAccountsState['featureSources']>({})
+  // `tracker:details-updated` entries per tracker, by MAL id (#706).
+  const detailsByTracker = ref<PerTracker<Record<number, TrackerDetails>>>({})
   const ratesByTracker = ref<PerTracker<TrackerRateEntry[]>>({})
   const queuedAfterByTracker = ref<PerTracker<Record<number, TrackerRateValues>>>({})
   const syncByTracker = ref<PerTracker<TrackerSyncStatus>>({})
@@ -118,6 +127,26 @@ export const useTrackersStore = defineStore('trackers', () => {
   // Credentials are present on any tracker: the tick's gate. Never merged with
   // `anyAccount`, which an expired session keeps true.
   const anyActiveSession = computed(() => accounts.value.some((a) => a.hasCredentials))
+
+  // ---- Feature sources (#706) -----------------------------------------------
+  // The shared resolver over this store's state, with the default matrix, so
+  // it answers what main's `storedFeatureSource` answers.
+  function featureSource(feature: FeatureKey): TrackerId | null {
+    return resolveFeatureSource(feature, {
+      connected: connected.value,
+      primary: primary.value,
+      overrides: featureSources.value
+    })
+  }
+
+  // The account half of the Auto-download gate: the `airing` source resolves,
+  // and it resolves only to a tracker with a user. The per-title half (a MAL
+  // id, a show not finished) stays in the view.
+  const canAutoDl = computed(() => featureSource('airing') !== null)
+
+  function detailsFor(id: TrackerId, malId: number): TrackerDetails | null {
+    return detailsByTracker.value[id]?.[malId] ?? null
+  }
 
   function overlaid(id: TrackerId, e: TrackerRateEntry): TrackerRateEntry {
     const queued = queuedAfterByTracker.value[id]?.[e.malId]
@@ -364,6 +393,13 @@ export const useTrackersStore = defineStore('trackers', () => {
     if (!isConnected(trackerId)) return
     applySyncStatus(trackerId, status)
   })
+  // Details aren't the account's, so they land whether or not it is connected.
+  void window.api.onTrackerDetailsUpdated(({ trackerId, malId, details }) => {
+    detailsByTracker.value = {
+      ...detailsByTracker.value,
+      [trackerId]: { ...detailsByTracker.value[trackerId], [malId]: details }
+    }
+  })
 
   // A broadcast that lands while the first read is pending is newer than it.
   let accountsSeq = 0
@@ -385,6 +421,7 @@ export const useTrackersStore = defineStore('trackers', () => {
     primary,
     mirror,
     featureSources,
+    detailsByTracker,
     ratesByTracker,
     queuedAfterByTracker,
     syncByTracker,
@@ -393,6 +430,9 @@ export const useTrackersStore = defineStore('trackers', () => {
     anyActiveSession,
     primaryRates,
     aggregateSyncState,
+    featureSource,
+    canAutoDl,
+    detailsFor,
     rateFor,
     rateStateFor,
     holdTitle,

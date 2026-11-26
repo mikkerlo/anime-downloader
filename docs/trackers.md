@@ -80,7 +80,9 @@ kind, episodes, episodesAired, status }, smotretAnime, native }`.
 ### The Shikimori adapter
 
 `src/main/trackers/shikimori.provider.ts` (`createShikimoriProvider({ store,
-lookupByMalIds? })`) wraps `src/main/shikimori.ts` and adds no behaviour. Every
+lookupByMalIds?, refreshDetails? })`) wraps `src/main/shikimori.ts` and adds no
+behaviour. Its one capability member, `getAiringInfo` (#706), is the
+auto-downloader's cache-first details read, moved here unchanged. Every
 member calls the same function with the same positional arguments as today's
 call sites, taken from the session it is given, through the module namespace
 (so a `vi.mock` of `src/main/shikimori` intercepts it). `auth()` reads
@@ -678,12 +680,100 @@ broadcast and no `offerReconcile`).
 capable tracker, or `null` to clear the override. Capable reads the tracker
 provider's `TrackerCapabilities`: `calendar` → `getCalendar`, `chronology` →
 `getRelated`, `forYou` → `getRecommendations`, `details` → `getDetails`,
-`airing` → `getAiringInfo`. Until #706 (T11a) or #701 (T5b) moves the check
-onto the static matrix in `src/shared/trackers/feature-source.ts`, no provider
-declares a capability yet, so every override is refused in a build today. It
-writes `trackerFeatureSource` and broadcasts; the stored value again is a
-no-op. An override naming a tracker that later disconnects is kept, and #706's
-resolver skips it, so a reconnect restores it. Resolution is #706's.
+`airing` → `getAiringInfo`. Since #706 the check reads the static matrix in
+`src/shared/trackers/feature-source.ts` (`isCapable`), the one the renderer's
+dropdowns read, not each provider's `TrackerCapabilities`. It writes
+`trackerFeatureSource` and broadcasts; the stored value again is a no-op. An
+override naming a tracker that later disconnects is kept, and the resolver
+skips it, so a reconnect restores it.
+
+### Feature sources
+
+#706 (T11a) resolves each feature's tracker. `src/shared/trackers/feature-source.ts`
+holds one pure resolver and one static capability matrix, shared by main and
+the renderer so the two can't disagree:
+
+- **`resolveFeatureSource(feature, { connected, primary, overrides, capabilities? })`**,
+  for a `FeatureKey` in `calendar | chronology | forYou | details | airing`
+  (the ambient `TrackerFeature`), picks the override if it is connected and
+  capable, else the primary if it is, else the first connected capable tracker
+  in `TRACKER_ORDER` (`shikimori`, `anilist`, `mal`), else null. `capabilities`
+  defaults to `CAPABILITY_MATRIX`; only `test/shared/feature-source.test.ts`
+  passes another.
+- **"Connected" means an account is present** (`<provider>User` set), never
+  "credentials are present", so an expired session keeps its source rather
+  than handing the feature to another tracker.
+- **`CAPABILITY_MATRIX`**, keyed by capability:
+
+  | Feature | Capability | Shikimori | AniList | MyAnimeList |
+  |---|---|---|---|---|
+  | `calendar` | `getCalendar` | ✅ | ✅ | ❌ |
+  | `chronology` | `getRelated` | ✅ | ✅ | ✅ |
+  | `forYou` | `getRecommendations` | ✅ | ✅ | ✅ |
+  | `details` | `getDetails` | ✅ | ✅ | ✅ |
+  | `airing` | `getAiringInfo` | ✅ | ✅ | ❌ |
+  | *(no feature key)* | `getFriends` | ✅ | ✅ | ❌ |
+
+  The `getFriends` row isn't a `FeatureKey`: the sidebar's Friends gate (T9)
+  and the friends fan-out (T12) read it, and the resolver never does. A
+  provider's `TrackerCapabilities` says which members it implements today; it
+  never claims one the matrix lacks (the matrix test checks every real
+  provider).
+- **Main** calls it through `src/main/trackers/feature-source.ts`:
+  `storedFeatureSource(store, feature)` reads `trackerFeatureSource`, the
+  primary as `resolvePrimary` answers it and each `<provider>User`. **The
+  renderer** calls it through `useTrackersStore().featureSource(feature)` over
+  the accounts state. Neither passes `capabilities`.
+- **With no tracker connected every feature is null.** A caller with an
+  account-less path (Shikimori's public franchise endpoint for chronology)
+  falls back to it, not to "hide the feature".
+
+**The `airing` source and auto-download.** The auto-downloader's one `airing`
+dep is `createAiringDep({ store, providers })`: `source()` (the resolved
+`airing` source at call time), `hasCredentials(id)` (`<provider>Credentials`
+stored; for Shikimori, the tick's gate before #706, unchanged) and
+`getAiringInfo(id, malId)`, that provider's member or null. The tick runs only
+while the resolved source has credentials, never "any tracker has": an active
+AniList session doesn't open it while an expired Shikimori is the source.
+MyAnimeList can't be the source, so a MyAnimeList-only user's tick returns at
+the gate with the same empty result as a signed-out one.
+
+**`getAiringInfo` is cache-first for every provider** (`AiringInfo`'s doc
+comment in `src/main/trackers/types.ts`, the contract #703 meets). It answers
+from the tracker's own cached data (its list cache, then its details cache)
+when that is no older than `AIRING_FRESHNESS_MS` (6 h), and makes a network
+call only when there is none that fresh. AniList answers an on-list title from
+`anilistUserRates`, with no request. It returns `{ episodesAired, episodes }`,
+`episodes` null meaning "no cap", or null when the tracker has no data for the
+title (the tick's `no-episodes-aired`). Shikimori's is the auto-downloader's
+read before #706, moved into the adapter: the `shikimoriAnimeDetails` entry,
+refreshed through `refreshDetails` (`refreshShikimoriDetailsForMalId`) when it
+is missing or older than 6 h.
+
+**The `'rates-refreshed'` trigger.** Shikimori keeps its call in
+`ipc/shikimori.ipc.ts` (`afterBackgroundRefresh`), so a Shikimori refresh
+ticks once. For AniList, `createTickIfAiringSource({ store, runTick })` returns
+`tickIfAiringSource(id)`, which runs one `'rates-refreshed'` tick only while
+`id` is the resolved `airing` source; #703's AniList construction passes it as
+its instance's `onRatesRefreshed` (T2a's hook). MyAnimeList's doesn't get it.
+
+**Details.** `tracker:get-details(malId, trackerId?)` reads AniList's or
+MyAnimeList's details cache (`anilistAnimeDetails`, `myanimelistAnimeDetails`:
+`{ [malId]: { details, fetchedAt } }`, `details` the ambient `TrackerDetails`)
+and never calls the network. `trackerId` defaults to the `details` source; for
+Shikimori it is null, since Shikimori's details stay on
+`shikimori:get-anime-details`. A miss kicks that instance's `prefetchDetails`
+(except offline), and the write arrives as `tracker:details-updated`. Both go
+through the generic sync service:
+
+- `writeDetails(malId, details)`: the `animeDetails` `store.set`, then a
+  `{ trackerId, malId, details }` broadcast on `detailsUpdatedChannel`, the
+  path #702's on-demand fetch and #703's batched prefetch write through;
+- `cachedDetails(malId)` and `requestDetails(malId)` behind the handler;
+- the deps `detailsUpdatedChannel` and `prefetchDetails`, which #702's and
+  #703's AniList and MyAnimeList constructions in `index.ts` pass. The
+  Shikimori construction doesn't get the channel, so its details are never
+  double-emitted.
 
 **`tracker:accounts-changed`** carries the same `TrackerAccountsState` as
 `tracker:list-accounts`, built by the same `accountsState()`, so a field added
@@ -732,6 +822,12 @@ events, so a double-emitted change is applied once.
   connected tracker for that title, refetched for every connected tracker on
   a rate update for it, a queue change that adds, changes or removes its
   entry, any `tracker:rates-refreshed`, and a primary change.
+- **Feature sources (#706).** `featureSource(feature)` is the shared resolver
+  over the store's `connected`, `primary` and `featureSources`. `canAutoDl`
+  is the account half of the detail page's Auto-download gate: the `airing`
+  source resolves (so that tracker has a user). `detailsFor(trackerId, malId)`
+  reads `detailsByTracker`, which the eager `tracker:details-updated`
+  subscriber upserts per tracker.
 
 **Emit order is a contract.** A drain broadcasts the cache update
 (`tracker:rate-updated`) before the queue change

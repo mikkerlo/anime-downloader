@@ -1,6 +1,6 @@
 // The `tracker:*` account, auth and logout channels (#695), the primary,
-// mirror and feature-source setters (#696), and the rate, sync-status and
-// queue channels (#694, epic #688). Each handler validates its
+// mirror and feature-source setters (#696), the rate, sync-status and
+// queue channels (#694, epic #688), and the details read (#706). Each handler validates its
 // arguments, calls the shared function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
@@ -12,9 +12,10 @@ import { CHANNELS } from '@shared/ipc/channels'
 import type { RateValues } from '../lib/shikimori-rate'
 import { STATUS_ORDER } from '../lib/shikimori-rate'
 import { isTrackerId } from '../services/trackers/rates'
-import { isTrackerFeature } from '../services/trackers/choices'
+import { isFeatureKey } from '@shared/trackers/feature-source'
 import type { ApplyOutcome } from '../services/trackers/fan-out'
 import { getClientConfig, setClientConfig } from '../trackers/client-config'
+import { storedFeatureSource } from '../trackers/feature-source'
 import { TRACKER_LABELS } from '../trackers/types'
 import type { AppDeps } from './index'
 
@@ -90,7 +91,7 @@ function logoutArg(value: unknown): TrackerLogoutOptions {
 }
 
 function featureArg(value: unknown): TrackerFeature {
-  if (!isTrackerFeature(value)) throw new Error(`Unknown feature: ${String(value)}`)
+  if (!isFeatureKey(value)) throw new Error(`Unknown feature: ${String(value)}`)
   return value
 }
 
@@ -255,6 +256,26 @@ export function register({
       }
       const outcome = await rates.markEpisodeWatched(id, epNum, rates.primary())
       return outcome ? writtenValues(outcome) : null
+    }
+  )
+
+  // A non-Shikimori tracker's cached details (#706): never the network. A miss
+  // kicks that tracker's prefetch, whose write arrives as
+  // `tracker:details-updated`. Shikimori's stay on `shikimori:get-anime-details`.
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_DETAILS,
+    (_event, malId: unknown, trackerId?: unknown): TrackerDetails | null => {
+      const mal = malIdArg(malId)
+      const id =
+        trackerId === undefined || trackerId === null
+          ? storedFeatureSource(store, 'details')
+          : trackerIdArg(trackerId)
+      if (id === null || id === 'shikimori') return null
+      const t = rates.instance(id)
+      if (!t) return null
+      const details = t.cachedDetails(mal)
+      if (!details) t.requestDetails(mal)
+      return details
     }
   )
 

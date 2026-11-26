@@ -9,7 +9,9 @@ import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
 import { usePlayerStore } from '../../stores/player';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { AIRING_UNAVAILABLE_HINT, useTrackersStore } from '../../stores/trackers';
 import { useDownloadsStore } from '../../stores/downloads';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 import { useAnimeDetailPrefs } from '../../composables/use-anime-detail-prefs';
 import { useChronology } from '../../composables/use-chronology';
 import { provide } from 'vue';
@@ -41,6 +43,7 @@ const props = defineProps<{
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const shikimoriStore = useShikimoriStore();
+const trackersStore = useTrackersStore();
 const downloadsStore = useDownloadsStore();
 // syncStatus + offlineQueueLength are consumed by ShikimoriPanel directly from
 // the store; the composable handles syncState/lastSyncError projections.
@@ -164,7 +167,7 @@ const {
   resetEpisodeOverrides
 } = episodeList;
 
-const shikimori = useShikimori({ anime, shikimoriStore });
+const shikimori = useShikimori({ anime, shikimoriStore, trackersStore });
 provide(ShikimoriKey, shikimori);
 const {
   shikiUser,
@@ -476,21 +479,37 @@ async function togglePriority(): Promise<void> {
   if (isPrioritized.value) isStarred.value = true;
 }
 
+// The tracker auto-download reads (#706): Shikimori for a Shikimori-only user.
+const airingSource = computed(() => trackersStore.featureSource('airing'));
+
+// From the `airing` source's details: Shikimori's for Shikimori (or no
+// source), that tracker's otherwise. An unknown status counts as not finished.
 const isShowFinished = computed<boolean>(() => {
-  const status = shikimori.shikiDetails.value?.status;
-  return status === 'released';
+  const source = airingSource.value;
+  if (source && source !== 'shikimori') {
+    return shikimori.trackerDetailsFor(source)?.status === 'released';
+  }
+  return shikimori.shikiDetails.value?.status === 'released';
 });
 
 const canAutoDl = computed<boolean>(() => {
   if (!anime.value?.myAnimeListId) return false;
-  if (!shikiUser.value) return false;
+  if (!trackersStore.canAutoDl) return false;
   if (isShowFinished.value) return false;
   return true;
 });
 
+// An account is connected, but none can be the `airing` source: MyAnimeList
+// only (#706). The button shows disabled with a hint, except on a finished show.
+const airingUnavailable = computed(() => trackersStore.anyAccount && !trackersStore.canAutoDl);
+const showAutoDlUnavailable = computed(
+  () => !!anime.value?.myAnimeListId && airingUnavailable.value && !isShowFinished.value
+);
+
 const autoDlTooltip = computed<string>(() => {
   if (!anime.value?.myAnimeListId) return 'Auto-download requires a Shikimori entry';
-  if (!shikiUser.value) return 'Connect to Shikimori to enable auto-download';
+  if (airingUnavailable.value) return AIRING_UNAVAILABLE_HINT;
+  if (!trackersStore.canAutoDl) return 'Connect to Shikimori to enable auto-download';
   if (isShowFinished.value) return 'Show is fully aired — no new episodes to auto-download';
   if (autoDlSubscription.value) {
     const next = autoDlSubscription.value.lastEnqueuedEpisodeInt + 1;
@@ -513,7 +532,8 @@ async function toggleAutoDl(): Promise<void> {
         : undefined
     );
     if (enable && !result) {
-      alert("Couldn't read this show's airing data from Shikimori. Please try again in a moment.");
+      const source = TRACKER_LABELS[airingSource.value ?? 'shikimori'];
+      alert(`Couldn't read this show's airing data from ${source}. Please try again in a moment.`);
       return;
     }
     autoDlSubscription.value = result;
@@ -584,19 +604,32 @@ async function onPosterError(): Promise<void> {
 }
 
 // The hero owns the synopsis + genres. Prefer the smotret-anime data and fall
-// back to the Shikimori details so titles without a smotret description/genres
+// back to the `details` source's details so titles without a smotret description/genres
 // still show them (the Shikimori panel no longer renders its own copy).
 const SYNOPSIS_CLAMP = 320;
 const synopsisExpanded = ref(false);
 
+// The `details` source (#706): today's Shikimori path for Shikimori (or no
+// source), that tracker's cached details otherwise.
+const detailsSource = computed(() => trackersStore.featureSource('details'));
+const sourceDetails = computed(() => shikimori.trackerDetailsFor(detailsSource.value));
+const usesShikimoriDetails = computed(
+  () => !detailsSource.value || detailsSource.value === 'shikimori'
+);
+
 const synopsisText = computed<string>(() => {
   const local = anime.value?.descriptions?.[0]?.value?.trim();
-  return local || shikimori.shikiDetailsDescription.value || '';
+  if (local) return local;
+  if (!usesShikimoriDetails.value) return sourceDetails.value?.description?.trim() || '';
+  return shikimori.shikiDetailsDescription.value || '';
 });
 
 const genreTags = computed<{ key: string; label: string }[]>(() => {
   const local = anime.value?.genres;
   if (local?.length) return local.map((g) => ({ key: `a${g.id}`, label: g.title }));
+  if (!usesShikimoriDetails.value) {
+    return (sourceDetails.value?.genres ?? []).map((g) => ({ key: `t${g}`, label: g }));
+  }
   const shiki = shikimori.shikiDetails.value?.genres;
   if (shiki?.length) return shiki.map((g) => ({ key: `s${g.id}`, label: g.russian || g.name }));
   return [];
@@ -738,7 +771,8 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
                 {{ isPrioritized ? 'Prioritized' : 'Prioritize' }}
               </button>
               <button
-                v-if="canAutoDl || autoDlSubscription"
+                v-if="canAutoDl || autoDlSubscription || showAutoDlUnavailable"
+                data-testid="detail-auto-dl"
                 class="btn"
                 :class="autoDlSubscription ? 'btn-primary' : 'btn-outline'"
                 :disabled="autoDlSaving || (!canAutoDl && !autoDlSubscription)"

@@ -94,6 +94,32 @@ export type TrackerCapability = (typeof TRACKER_CAPABILITIES)[number]
 /** Which capability members a provider implements. */
 export type TrackerCapabilities = Readonly<Record<TrackerCapability, boolean>>
 
+/** How old a tracker's cached data may be and still answer `getAiringInfo` (#706). */
+export const AIRING_FRESHNESS_MS = 6 * 60 * 60 * 1000
+
+/**
+ * A title's aired count and total, as the auto-download tick and
+ * `setSubscription` read it from the `airing` source (#706). `episodes` null
+ * means "no cap", as 0 does.
+ *
+ * `getAiringInfo` is cache-first for every provider. The tick checks every
+ * subscription every 15 min, so a provider that fetched on every call would
+ * spend one request per subscription per tick:
+ * - it answers from the tracker's own cached data (its list cache, then its
+ *   details cache) when that data is no older than `AIRING_FRESHNESS_MS`;
+ * - it makes a network call only when the title has no cached entry that
+ *   fresh, e.g. a subscription to a title that isn't on the user's list;
+ * - AniList (#703) answers an on-list title from `anilistUserRates`, whose list
+ *   read carries `nextAiringEpisode`, `episodes` and `status`, with no request.
+ *
+ * Null when the tracker has no data for the title (AniList: no mapping); the
+ * tick reports that as `no-episodes-aired`.
+ */
+export interface AiringInfo {
+  episodesAired: number
+  episodes: number | null
+}
+
 /**
  * One sign-in attempt's parameters (#695), held in memory by
  * `trackers/auth-session.ts` and never stored. `state` is what a loopback
@@ -186,19 +212,16 @@ export interface TrackerProvider<TSession, TNative, TRate = unknown> {
   getFriendsActivity?(session: TSession): Promise<unknown>
   getFriendsRates?(session: TSession, malId: number): Promise<unknown>
   // Public reads by id: no session (#702, #703, #706, #710 define them so).
-  getAiringInfo?(malId: number): Promise<unknown>
+  /** Cache-first: see `AiringInfo`. */
+  getAiringInfo?(malId: number): Promise<AiringInfo | null>
   getCalendar?(): Promise<unknown>
   getRelated?(ref: TrackerRef): Promise<unknown>
   getRecommendations?(seedMalIds: readonly number[]): Promise<unknown>
-  getDetails?(malId: number): Promise<unknown>
+  getDetails?(malId: number): Promise<TrackerDetails | null>
 }
 
 /** Each tracker's name in the sync service's strings (`Shikimori rate limit — will retry`). */
-export const TRACKER_LABELS: Readonly<Record<TrackerId, string>> = {
-  shikimori: 'Shikimori',
-  anilist: 'AniList',
-  mal: 'MyAnimeList'
-}
+export { TRACKER_LABELS } from '@shared/trackers/labels'
 
 /**
  * How a tracker's rate cache (its `userRates` key) is written (#691). Rows are

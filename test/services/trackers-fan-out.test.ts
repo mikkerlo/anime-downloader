@@ -976,6 +976,22 @@ describe('the Shikimori handlers own their reply shape (#692 review)', () => {
     expect(r.queueOf('shikimori')).toEqual([])
   })
 
+  it('an equal copy over a refreshed-over queued copy replies with the values, not the stale cached row', async () => {
+    const r = rig()
+    r.primary('anilist')
+    r.offline.shikimori = true
+    r.shikiCache([1, rv(5)])
+    const invoke = router(r)
+    await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 8, 'watching', 7, 0)
+    // A keepQueued: false refresh puts the server's 5 back; the copy stays queued.
+    r.shikiCache([1, rv(5)])
+
+    const reply = await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 8, 'watching', 7, 0)
+
+    expect(r.queueOf('shikimori')).toHaveLength(1)
+    expect(reply).toEqual(rate(8))
+  })
+
   it('mark-episode-watched on a non-primary Shikimori replies null', async () => {
     const r = rig()
     r.primary('anilist')

@@ -279,7 +279,9 @@ nothing differed). Each tracker's `result` is typed through `PrimaryResults`,
 and `setPrimaryWriter` takes a writer of that type. A caller that replies to a
 request builds the reply from the outcome. The Shikimori handlers reply with
 the primary's rate, the synthetic rate `queueRate` builds for a queued copy,
-and for an equal copy the cached rate (update-rate) or null (mark-watched).
+and for an equal copy the requested values under the cached rate id
+(update-rate; they match the projection, which a refresh can leave the cached
+row behind) or null (mark-watched).
 
 - **The primary** is the stored `trackerPrimary` if that tracker is connected,
   else the first connected tracker in `shikimori`, `anilist`, `mal` order, else

@@ -692,11 +692,9 @@ export function register({
         { kind: 'set', values },
         { target: 'shikimori', cause: 'user' }
       )
-      // An equal copy queued nothing: the cache already holds the values.
-      return shikimoriRateReply(
-        malId,
-        outcome,
-        () => cachedShikimoriRate(store, malId) ?? syntheticRate(malId, null, values)
+      // An equal copy queued nothing: `values` already match the projection.
+      return shikimoriRateReply(malId, outcome, () =>
+        syntheticRate(malId, cachedShikimoriRate(store, malId)?.id ?? null, values)
       )
     }
   )

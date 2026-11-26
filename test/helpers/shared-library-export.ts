@@ -72,7 +72,8 @@ export const PC_ACTOR: SharedLibraryActor = {
   installId: 'pc-export',
   appVersion: '5.0.26',
   shikimoriUserId: null,
-  claim: null
+  claim: null,
+  trackerAccounts: []
 }
 
 /** Deterministic, distinct bytes per episode, so byte-identity checks mean something. */
@@ -199,13 +200,15 @@ export async function seedLibrary(
   opts: {
     libraryId: string
     name: string
-    owner?: SharedLibraryOwner | null
+    // A v2 owner (#713) is written by a test actor holding that tracker account.
+    owner?: SharedLibraryOwner | SharedLibraryTrackerOwner | null
     items?: SharedLibraryItem[]
     titles?: SharedLibraryTitle[]
     actor?: SharedLibraryActor
   }
 ): Promise<void> {
   const owner = opts.owner ?? null
+  const v2 = owner !== null && 'provider' in owner ? owner : null
   await createLibrary(
     root,
     {
@@ -219,8 +222,9 @@ export async function seedLibrary(
     opts.actor ?? {
       installId: 'pc-other',
       appVersion: '5.0.25',
-      shikimoriUserId: owner?.shikimoriId ?? null,
-      claim: null
+      shikimoriUserId: owner !== null && 'shikimoriId' in owner ? owner.shikimoriId : null,
+      claim: null,
+      trackerAccounts: v2 ? [{ provider: v2.provider, userId: v2.userId }] : []
     }
   )
 }

@@ -385,7 +385,8 @@ export async function runGoldenSession(): Promise<GoldenCapture> {
         installId: store.ensureInstallId(),
         appVersion: APP_VERSION,
         shikimoriUserId: (store.get('shikimoriUser') as { id: number } | null)?.id ?? null,
-        claim: null
+        claim: null,
+        trackerAccounts: []
       }),
       broadcast: (job) => broadcast(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
       onLibraryWritten: (libraryId, libRoot) => attached.refresh(libraryId, libRoot),
@@ -603,7 +604,8 @@ export async function runGoldenSession(): Promise<GoldenCapture> {
         installId: 'golden-other-pc',
         appVersion: APP_VERSION,
         shikimoriUserId: USER_A.id,
-        claim: null
+        claim: null,
+        trackerAccounts: []
       },
       read.manifest.stateGeneration
     )

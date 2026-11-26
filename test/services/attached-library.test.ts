@@ -204,6 +204,105 @@ describe('identity matrix', () => {
   })
 })
 
+/** The fixture library as a layout v2 (#713) AniList-owned library, user id `'4242'`. */
+function v2Library(): string {
+  const root = copyFixtureLibrary()
+  const file = path.join(root, '.anime-dl', 'manifest.json')
+  const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const owner = { provider: 'anilist', userId: String(OWNER_ID), nickname: 'alice' }
+  fs.writeFileSync(file, JSON.stringify({ ...m, layoutVersion: 2, owner }, null, 2) + '\n')
+  return root
+}
+
+describe('a v2 library (#713): foreign to every PC on this version', () => {
+  const recordOf = (m: Made): AttachedLibraryRecord =>
+    m.store.get<Record<string, AttachedLibraryRecord>>('attachedLibraries')![FIXTURE_LIBRARY_ID]
+
+  it('an account-less PC is offered no claim: identity foreign, not choose, with the library to attach', async () => {
+    const m = make()
+    const [candidate] = await m.svc.discover(v2Library())
+    expect(candidate).toMatchObject({
+      libraryId: FIXTURE_LIBRARY_ID,
+      identity: 'foreign',
+      ownerNickname: 'alice',
+      mode: 'metadata'
+    })
+    expect(candidate.readOnly).toBeUndefined()
+    const res = await m.svc.attach(candidate.libraryId!, 'claim')
+    expect(res.ok).toBe(false)
+    expect(m.store.get('attachedLibraries')).toEqual({})
+  })
+
+  it('a Shikimori user whose id equals the v2 userId is foreign too', async () => {
+    const m = make({ shikimoriUser: OWNER })
+    const { candidate, res } = await attachAt(m, v2Library())
+    expect(candidate.identity).toBe('foreign')
+    expect(res.library.role).toBe('foreign')
+  })
+
+  it('attaching writes owner: null plus trackerOwner; a v1 record keeps exactly today’s keys', async () => {
+    const v2 = make()
+    const { res } = await attachAt(v2, v2Library(), 'videos')
+    expect(res.library).toMatchObject({ role: 'foreign', ownerNickname: 'alice' })
+    const rec = recordOf(v2)
+    expect(rec.owner).toBeNull()
+    expect(rec.trackerOwner).toEqual({
+      provider: 'anilist',
+      userId: String(OWNER_ID),
+      nickname: 'alice'
+    })
+    expect(rec.claim).toBeUndefined()
+    expect(v2.svc.list()[0].role).toBe('foreign')
+
+    const v1 = make({ shikimoriUser: OWNER })
+    await attachAt(v1, copyFixtureLibrary())
+    expect(Object.keys(recordOf(v1))).toEqual([
+      'root',
+      'name',
+      'mode',
+      'owner',
+      'access',
+      'lastSeenAt',
+      'lastSyncAt'
+    ])
+    const claimed = make()
+    await attachAt(claimed, copyFixtureLibrary(), 'claim')
+    expect(recordOf(claimed).claim).toEqual({ ownerId: OWNER_ID, at: 1_000 })
+    expect(recordOf(claimed)).not.toHaveProperty('trackerOwner')
+  })
+
+  it('the v2 record read by main’s (6.x) roleOf is videos: a downgrade can’t write it', async () => {
+    const m = make()
+    await attachAt(m, v2Library(), 'videos')
+    // `roleOf` as main has it before #713.
+    const v6RoleOf = (rec: AttachedLibraryRecord, userId: number | null): AttachedLibraryRole => {
+      if (rec.mode === 'videos' || !rec.owner) return 'videos'
+      if (userId !== null) return userId === rec.owner.shikimoriId ? 'owner' : 'foreign'
+      return rec.claim?.ownerId === rec.owner.shikimoriId ? 'claim' : 'videos'
+    }
+    expect(v6RoleOf(recordOf(m), null)).toBe('videos')
+    expect(v6RoleOf(recordOf(m), OWNER_ID)).toBe('videos')
+  })
+
+  it('opening, playing and a restart write no byte', async () => {
+    const root = v2Library()
+    const before = mtimeSnapshot(root)
+    const writes = fsWritesUnder(root)
+    const m = make({ shikimoriUser: OWNER })
+    await attachAt(m, root)
+    await m.svc.getTitle(FIXTURE_LIBRARY_ID, 101)
+    expect(await m.svc.resolveItem(101, '1', 9001)).not.toBeNull()
+    const again = make({
+      shikimoriUser: OWNER,
+      attachedLibraries: m.store.get('attachedLibraries')
+    })
+    await again.svc.init()
+    expect(again.svc.list()[0]).toMatchObject({ role: 'foreign', available: true })
+    expect(writes()).toEqual([])
+    expect(mtimeSnapshot(root)).toEqual(before)
+  })
+})
+
 describe('never written, for every classification', () => {
   const cases: [string, Record<string, unknown>, SharedLibraryAttachChoice | undefined][] = [
     ['owner', { shikimoriUser: OWNER }, undefined],
@@ -563,7 +662,8 @@ describe('refresh after a write (#616)', () => {
     installId: 'pc-export',
     appVersion: '5.0.29',
     shikimoriUserId: null,
-    claim: null
+    claim: null,
+    trackerAccounts: []
   }
   const MESHI = 'Dungeon Meshi/Dungeon Meshi - 01 [AniLibria].mkv'
 

@@ -673,7 +673,8 @@ export function buildWorld(spec: WorldSpec, routers: Iterable<Router> = []): Wor
           installId: 'pc-a',
           appVersion: '0.0.0',
           shikimoriUserId: null,
-          claim: null
+          claim: null,
+          trackerAccounts: []
         }),
         broadcast: () => {},
         candidates: async () => [],

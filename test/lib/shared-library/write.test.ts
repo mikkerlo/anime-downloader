@@ -4,7 +4,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CAPS } from '../../../src/main/lib/shared-library/format'
+import { CAPS, LAYOUT_MINORS } from '../../../src/main/lib/shared-library/format'
 import { discoverLibraries } from '../../../src/main/lib/shared-library/discover'
 import { readLibrary } from '../../../src/main/lib/shared-library/read'
 import {
@@ -18,10 +18,13 @@ import {
   NotOwnerError,
   StaleGenerationError,
   createLibrary,
+  layoutMinorFor,
   writeManifest,
   writeState
 } from '../../../src/main/lib/shared-library/write'
 import {
+  ANILIST_ACTOR,
+  ANILIST_OWNER,
   CLAIMANT,
   CrashError,
   LIB,
@@ -30,16 +33,22 @@ import {
   OWNER,
   OWNER_ID,
   STRANGER,
+  V2_USER_ID,
   cleanup,
   crashAt,
   exists,
   fixture,
+  fixtureV2,
+  fixtureV2Text,
   item,
   manifest,
+  manifestV2,
   readJson,
   snapshot,
   sparse,
   state,
+  tempRoot,
+  text,
   tinyItem,
   tree
 } from '../../helpers/shared-library'
@@ -443,7 +452,7 @@ describe('the first write into a With-metadata library', () => {
         torn: false
       })
       expect(r.manifest.stateGeneration).toBeNull()
-      expect(r.manifest.owner?.shikimoriId).toBe(OWNER_ID)
+      expect(r.manifest.owner).toMatchObject({ shikimoriId: OWNER_ID })
       await writeState(root, EMPTY_DOC, OWNER, null)
       expect((await ok(root)).stateInitialized).toBe(true)
     }
@@ -754,5 +763,223 @@ describe('orphan state files are replaced by the next writeState, never rotated 
       pair: { manifest: 'manifest.json', state: 'state.json' }
     })
     expect(exists(step4, 'state.prev.json')).toBe(false)
+  })
+})
+
+describe('layout v2 (#713)', () => {
+  const V2_INPUT: SharedLibraryManifestInput = {
+    libraryId: LIB,
+    name: 'Test library',
+    owner: ANILIST_OWNER,
+    mode: 'metadata',
+    titles: [{ animeId: 101, name: 'Frieren' }],
+    items: [item('1', 9001), item('2', 9002)] as SharedLibraryItem[],
+    naming: { rule: 'v1', renamed: [] }
+  }
+  // `state(1, 2)`'s doc as the AniList PC wrote it.
+  const V2_DOC: SharedSyncDoc = JSON.parse(
+    JSON.stringify(state(1, 2).doc).replaceAll('"pc-owner"', '"pc-anilist"')
+  )
+  /** The bytes with `lastWriter.at` set to the golden's: the writer stamps the clock. */
+  const atAsGolden = (root: string, file: string): string => {
+    const out = readJson(root, file)
+    if (out.lastWriter) out.lastWriter.at = 1761600000000
+    return text(out)
+  }
+  const MAL_ACTOR: SharedLibraryActor = {
+    ...ANILIST_ACTOR,
+    installId: 'pc-mal',
+    trackerAccounts: [{ provider: 'mal', userId: V2_USER_ID }]
+  }
+  /** A no-account PC holding a claim that names the v2 owner's user id. */
+  const V2_CLAIM: SharedLibraryActor = {
+    ...LOGGED_OUT,
+    claim: { libraryId: LIB, ownerId: Number(V2_USER_ID) },
+    trackerAccounts: []
+  }
+  /** A Shikimori user whose id equals the v2 `userId` numerically. */
+  const SHIKIMORI_5: SharedLibraryActor = {
+    ...OWNER,
+    shikimoriUserId: Number(V2_USER_ID),
+    trackerAccounts: []
+  }
+
+  it('round trip: createLibrary, writeState, writeManifest; each reads back v2, and the tree is the golden', async () => {
+    const root = tempRoot()
+    await createLibrary(root, V2_INPUT, ANILIST_ACTOR)
+    let r = await ok(root)
+    expect(r.manifest).toMatchObject({ layoutVersion: 2, layoutMinor: 0, stateGeneration: null })
+    await writeState(root, V2_DOC, ANILIST_ACTOR, null)
+    r = await ok(root)
+    expect(r.manifest).toMatchObject({ layoutVersion: 2, layoutMinor: 0 })
+    expect(r.state).toMatchObject({ stateVersion: 1, stateMinor: 0 })
+    await writeManifest(root, r.manifest, ANILIST_ACTOR, r.manifest.generation)
+    r = await ok(root)
+    expect(r.manifest).toMatchObject({ layoutVersion: 2, layoutMinor: 0, generation: 3 })
+    expect(JSON.parse(JSON.stringify(r.manifest.owner))).toEqual(ANILIST_OWNER)
+    for (const file of ['manifest.json', 'manifest.prev.json', 'state.json']) {
+      expect(atAsGolden(root, file), file).toBe(fixtureV2Text('golden-metadata', file))
+    }
+  })
+
+  it('an account-less claim, a Shikimori user with the same id, and the other provider are refused', async () => {
+    for (const actor of [V2_CLAIM, SHIKIMORI_5, MAL_ACTOR, LOGGED_OUT]) {
+      const root = fixtureV2('golden-metadata')
+      const m = (await ok(root)).manifest
+      await refuses(root, () => writeState(root, EMPTY_DOC, actor, 1), NotOwnerError)
+      await refuses(root, () => writeManifest(root, m, actor, 3), NotOwnerError)
+    }
+    await expect(
+      createLibrary(tempRoot(), V2_INPUT, { ...SHIKIMORI_5, trackerAccounts: [] })
+    ).rejects.toBeInstanceOf(NotOwnerError)
+  })
+
+  it('an identity change between two v2 owners (AniList 5 → MAL 5) needs a takeover', async () => {
+    const root = fixtureV2('golden-metadata')
+    const m = (await ok(root)).manifest
+    const mal = { provider: 'mal', userId: V2_USER_ID }
+    await refuses(
+      root,
+      () =>
+        writeManifest(
+          root,
+          { ...m, owner: mal },
+          {
+            ...ANILIST_ACTOR,
+            trackerAccounts: [...ANILIST_ACTOR.trackerAccounts, ...MAL_ACTOR.trackerAccounts]
+          },
+          3
+        ),
+      IdentityChangeError
+    )
+  })
+
+  describe('a v2 owner with provider: shikimori', () => {
+    const V2_SHIKIMORI = { provider: 'shikimori', userId: V2_USER_ID }
+    const HOLDER: SharedLibraryActor = {
+      ...ANILIST_ACTOR,
+      trackerAccounts: [{ provider: 'shikimori', userId: V2_USER_ID }]
+    }
+
+    it('is never created: createLibrary and a takeover to it throw InvalidLibraryDataError', async () => {
+      await expect(
+        createLibrary(tempRoot(), { ...V2_INPUT, owner: V2_SHIKIMORI }, HOLDER)
+      ).rejects.toBeInstanceOf(InvalidLibraryDataError)
+      const videos = fixture('golden-videos')
+      const v = (await ok(videos)).manifest
+      await refuses(
+        videos,
+        () =>
+          writeManifest(videos, { ...v, mode: 'metadata', owner: V2_SHIKIMORI }, HOLDER, 3, {
+            takeover: true
+          }),
+        InvalidLibraryDataError
+      )
+    })
+
+    it('a hand-written one is kept v2, owner bytes unchanged, by writeState and an owner-keeping writeManifest', async () => {
+      const owner = { ...V2_SHIKIMORI, nickname: 'sh', avatar: 'x' }
+      const root = tree({
+        'manifest.json': manifestV2(7, 4, { owner }),
+        'state.json': state(4, 7)
+      })
+      const ownerBytes = (): string => JSON.stringify(readJson(root, 'manifest.json').owner)
+      const before = ownerBytes()
+      await writeState(root, (await ok(root)).state!.doc, HOLDER, 4)
+      expect(readJson(root, 'manifest.json').layoutVersion).toBe(2)
+      expect(ownerBytes()).toBe(before)
+      const r = await ok(root)
+      await writeManifest(root, r.manifest, HOLDER, r.manifest.generation)
+      expect(readJson(root, 'manifest.json').layoutVersion).toBe(2)
+      expect(ownerBytes()).toBe(before)
+      // In this slice it is foreign like any v2 owner: the Shikimori user 5 can't write it.
+      await refuses(root, () => writeState(root, EMPTY_DOC, SHIKIMORI_5, 5), NotOwnerError)
+    })
+  })
+
+  describe('the takeover: the only write that changes major', () => {
+    it('an AniList takeover of a v1 Videos only library writes v2 at v2’s own minor', async () => {
+      const root = fixture('golden-videos')
+      const v = (await ok(root)).manifest
+      expect(v).toMatchObject({ layoutVersion: 1, layoutMinor: 1 })
+      await writeManifest(
+        root,
+        { ...v, mode: 'metadata', owner: ANILIST_OWNER },
+        ANILIST_ACTOR,
+        3,
+        {
+          takeover: true
+        }
+      )
+      const r = await ok(root)
+      expect(r.manifest).toMatchObject({
+        layoutVersion: 2,
+        layoutMinor: LAYOUT_MINORS[2],
+        mode: 'metadata',
+        stateGeneration: null
+      })
+    })
+
+    it('is refused when the chosen v1 file is at a newer v1 minor than this writer knows', async () => {
+      const root = tree({
+        'manifest.json': manifest(3, null, { mode: 'videos', layoutMinor: LAYOUT_MINORS[1] + 1 })
+      })
+      const v = (await ok(root)).manifest
+      await refuses(
+        root,
+        () =>
+          writeManifest(root, { ...v, mode: 'metadata', owner: ANILIST_OWNER }, ANILIST_ACTOR, 3, {
+            takeover: true
+          }),
+        LibraryReadOnlyError
+      )
+      // A Shikimori takeover keeps v1, so the newer minor is carried as before.
+      await writeManifest(
+        root,
+        { ...v, mode: 'metadata', owner: { shikimoriId: OWNER_ID, nickname: 'owner' } },
+        OWNER,
+        3,
+        { takeover: true }
+      )
+      expect(readJson(root, 'manifest.json')).toMatchObject({
+        layoutVersion: 1,
+        layoutMinor: LAYOUT_MINORS[1] + 1
+      })
+    })
+
+    it('a v2 takeover needs the actor to hold that account', async () => {
+      const root = fixture('golden-videos')
+      const v = (await ok(root)).manifest
+      await refuses(
+        root,
+        () =>
+          writeManifest(root, { ...v, mode: 'metadata', owner: ANILIST_OWNER }, MAL_ACTOR, 3, {
+            takeover: true
+          }),
+        IdentityChangeError
+      )
+      await refuses(
+        root,
+        () =>
+          writeManifest(root, { ...v, mode: 'metadata', owner: ANILIST_OWNER }, LOGGED_OUT, 3, {
+            takeover: true
+          }),
+        NotOwnerError
+      )
+    })
+  })
+
+  it.each([
+    [1, { layoutVersion: 1, layoutMinor: 0 }, 1],
+    [1, { layoutVersion: 1, layoutMinor: 3 }, 3],
+    [2, { layoutVersion: 2, layoutMinor: 0 }, 0],
+    [2, { layoutVersion: 2, layoutMinor: 4 }, 4],
+    // A v1 write never takes a v2 minor, and a v2 write never takes a v1 one.
+    [1, { layoutVersion: 2, layoutMinor: 4 }, LAYOUT_MINORS[1]],
+    [2, { layoutVersion: 1, layoutMinor: 3 }, LAYOUT_MINORS[2]],
+    [1, null, LAYOUT_MINORS[1]],
+    [2, null, LAYOUT_MINORS[2]]
+  ] as const)('layoutMinorFor(%i, %o) is %i', (major, chosen, want) => {
+    expect(layoutMinorFor(major, chosen)).toBe(want)
   })
 })

@@ -11,12 +11,15 @@ import {
   readState
 } from '../../../src/main/lib/shared-library/read'
 import {
+  ANILIST_OWNER,
   LIB,
   OTHER_LIB,
   cleanup,
   fixture,
+  fixtureV2,
   item,
   manifest,
+  manifestV2,
   sparse,
   state,
   text,
@@ -75,6 +78,58 @@ describe('golden files', () => {
   })
 })
 
+describe('layout v2 (#713)', () => {
+  it('the v7 writer’s v2 tree reads ok: major 2, minor 0, the owner intact, state at version 1', async () => {
+    const r = await ok(fixtureV2('golden-metadata'))
+    expect(r).toMatchObject({ mode: 'metadata', torn: false, stateInitialized: true })
+    expect(r.manifest.layoutVersion).toBe(2)
+    expect(r.manifest.layoutMinor).toBe(0)
+    expect(JSON.parse(JSON.stringify(r.manifest.owner))).toEqual(ANILIST_OWNER)
+    expect(r.state!.stateVersion).toBe(1)
+    expect(r.state!.doc.stateVersion).toBe(1)
+  })
+
+  it('a hand-made v2 manifest by the helper reads ok, its owner’s unknown fields in the bag', async () => {
+    const owner = { ...ANILIST_OWNER, avatar: 'https://example.invalid/a.png' }
+    const r = await ok(tree({ 'manifest.json': manifestV2(3, null, { owner }) }))
+    expect(r.manifest.owner).toMatchObject(ANILIST_OWNER)
+    expect(unknownFieldsOf(r.manifest.owner!)).toEqual({ avatar: owner.avatar })
+  })
+
+  it('a 6.x reader (readerMax 1) on the v7 tree: read-only (version), no manifest to list', async () => {
+    const root = fixtureV2('golden-metadata')
+    const r = (await readLibrary(root, { readerMax: 1 })) as ReadOnly
+    expect(r.status).toBe('read-only')
+    expect(r.reason).toBe('version')
+    expect(r.message).toMatch(/newer version/)
+    expect(r.manifest).toBeNull()
+    // manifest.prev.json is v2 too: there is nothing to fall back to.
+    fs.rmSync(path.join(root, '.anime-dl', 'manifest.json'))
+    expect(await readLibrary(root, { readerMax: 1 })).toMatchObject({
+      status: 'read-only',
+      reason: 'version',
+      manifest: null
+    })
+  })
+
+  it('a v3 manifest with a v2 owner is a newer major: read-only, no fallback to the v2 manifest.prev', async () => {
+    const r = await readOnly(fixtureV2('newer-major-v3-manifest'))
+    expect(r.reason).toBe('version')
+    expect(r.manifest).toBeNull()
+  })
+
+  it('a hand-made v2 Videos only manifest falls back to manifest.prev, as any malformed one', async () => {
+    const root = tree({
+      'manifest.json': manifest(3, null, { layoutVersion: 2, mode: 'videos', owner: null }),
+      'manifest.prev.json': manifest(2, null, { mode: 'videos' })
+    })
+    const r = await ok(root)
+    expect(r).toMatchObject({ torn: true, pair: { manifest: 'manifest.prev.json', state: null } })
+    expect(r.manifest.layoutVersion).toBe(1)
+    expect(r.manifest.generation).toBe(2)
+  })
+})
+
 describe('read-only decisions', () => {
   it('a newer minor opens read-write and keeps its unknown fields in the bag', async () => {
     const r = await ok(fixture('newer-minor-manifest'))
@@ -115,7 +170,7 @@ describe('read-only decisions', () => {
     it('a newer major in manifest.prev alone also opens read-only', async () => {
       const root = tree({
         'manifest.json': manifest(8, 4),
-        'manifest.prev.json': manifest(7, 4, { layoutVersion: 2 }),
+        'manifest.prev.json': manifest(7, 4, { layoutVersion: 3 }),
         'state.json': state(4, 7)
       })
       const r = await readOnly(root)
@@ -325,7 +380,34 @@ describe('whole-file invalid is the envelope only', () => {
     ['owner does not fit mode (metadata, no owner)', (m) => ({ ...m, owner: null })],
     ['owner does not fit mode (videos, an owner)', (m) => ({ ...m, mode: 'videos' })],
     ['items not an array', (m) => ({ ...m, items: {} })],
-    ['titles not an array', (m) => ({ ...m, titles: 'all' })]
+    ['titles not an array', (m) => ({ ...m, titles: 'all' })],
+    // Layout v2 (#713): the envelope requires With metadata and a v2 owner. A
+    // null owner is refused twice, by the envelope and by v2's non-nullable
+    // schema; a v2 owner on a Videos only library only by the envelope.
+    [
+      'v2 Videos only with no owner',
+      (m) => ({ ...m, layoutVersion: 2, mode: 'videos', owner: null })
+    ],
+    [
+      'v2 Videos only with a v2 owner',
+      (m) => ({
+        ...m,
+        layoutVersion: 2,
+        mode: 'videos',
+        owner: { provider: 'anilist', userId: '5' }
+      })
+    ],
+    ['v2 With metadata with no owner', (m) => ({ ...m, layoutVersion: 2, owner: null })],
+    ['v2 with a v1-shaped owner', (m) => ({ ...m, layoutVersion: 2 })],
+    [
+      'v2 with an empty provider',
+      (m) => ({ ...m, layoutVersion: 2, owner: { provider: '', userId: '5' } })
+    ],
+    [
+      'v2 with an integer userId',
+      (m) => ({ ...m, layoutVersion: 2, owner: { provider: 'anilist', userId: 5 } })
+    ],
+    ['v1 with a v2-shaped owner', (m) => ({ ...m, owner: { provider: 'anilist', userId: '5' } })]
   ]
   it.each(manifestRows)(
     'manifest envelope fails (%s): falls back to manifest.prev',

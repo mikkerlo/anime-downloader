@@ -14,11 +14,17 @@ export function buildActor(
   const rec = store.get<Record<string, AttachedLibraryRecord> | undefined>('attachedLibraries')?.[
     libraryId
   ]
-  const claim = userId === null && rec?.claim ? { libraryId, ownerId: rec.claim.ownerId } : null
+  // Only a v1 record's claim: a v2 library (`trackerOwner`) is never claimed (#713).
+  const claim =
+    userId === null && rec?.claim && rec.owner && !rec.trackerOwner
+      ? { libraryId, ownerId: rec.claim.ownerId }
+      : null
   return {
     installId: store.get<string | undefined>('installId') ?? '',
     appVersion,
     shikimoriUserId: userId,
-    claim
+    claim,
+    // No tracker account is presented yet: every v2 owner stays foreign (#715 lifts it).
+    trackerAccounts: []
   }
 }

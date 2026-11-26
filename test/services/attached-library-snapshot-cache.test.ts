@@ -11,8 +11,10 @@ import {
   createSnapshotCache,
   SNAPSHOT_POSTER_MAX_BYTES,
   SNAPSHOT_POSTERS_TOTAL_MAX_BYTES,
-  type SnapshotCache
+  type SnapshotCache,
+  type SnapshotInput
 } from '../../src/main/services/attached-library/snapshot-cache'
+import { readLibrary } from '../../src/main/lib/shared-library/read'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { cleanup, tempRoot } from '../helpers/shared-library'
 import { FIXTURE_LIBRARY_ID, copyFixtureLibrary } from '../helpers/attached-library'
@@ -463,5 +465,68 @@ describe('Forget', () => {
     expect(cache.posterFile('../x', 1)).toBeNull()
     expect(await cache.load('../x')).toBeNull()
     expect(fs.existsSync(path.dirname(dir) + '/escape')).toBe(false)
+  })
+})
+
+describe('a layout v2 manifest (#713)', () => {
+  /** The fixture library's manifest as the reader returns it, at `layoutVersion`. */
+  async function readAs(layoutVersion: 1 | 2): Promise<SharedLibraryManifest> {
+    const root = copyFixtureLibrary()
+    if (layoutVersion === 2) {
+      const file = path.join(root, '.anime-dl', 'manifest.json')
+      const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const owner = { provider: 'anilist', userId: '5', nickname: 'alice' }
+      fs.writeFileSync(file, JSON.stringify({ ...m, layoutVersion: 2, owner }, null, 2) + '\n')
+    }
+    const r = await readLibrary(root)
+    if (r.status !== 'ok') throw new Error(r.status)
+    return r.manifest
+  }
+  const input = (manifest: SharedLibraryManifest): SnapshotInput => ({
+    manifest,
+    metas: new Map(),
+    posters: [],
+    posterSource: async () => null
+  })
+  const snapshotText = (dir: string): string =>
+    fs.readFileSync(path.join(dir, FIXTURE_LIBRARY_ID, 'snapshot.json'), 'utf8')
+  /** `load` as main has it before #713: only `version: 1`. */
+  const v6Accepts = (text: string): boolean => JSON.parse(text)?.version === 1
+
+  it('saves under version 2, loads back, and a 6.x loader rejects it', async () => {
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    const m = await readAs(2)
+    await cache.save(FIXTURE_LIBRARY_ID, input(m), () => true)
+    const saved = snapshotText(dir)
+    expect(JSON.parse(saved).version).toBe(2)
+    expect(v6Accepts(saved)).toBe(false)
+    const loaded = await createSnapshotCache({ dir }).load(FIXTURE_LIBRARY_ID)
+    expect(loaded?.manifest).toMatchObject({ layoutVersion: 2, owner: { provider: 'anilist' } })
+  })
+
+  it('a v1 manifest stays version 1, byte for byte, and loads back', async () => {
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    const m = await readAs(1)
+    await cache.save(FIXTURE_LIBRARY_ID, input(m), () => true)
+    expect(snapshotText(dir)).toBe(JSON.stringify({ version: 1, manifest: m, metas: {} }))
+    expect(v6Accepts(snapshotText(dir))).toBe(true)
+    expect((await createSnapshotCache({ dir }).load(FIXTURE_LIBRARY_ID))?.manifest).toEqual(m)
+  })
+
+  it.each([
+    ['a v2 manifest under version 1', 1, 2],
+    ['a v1 manifest under version 2', 2, 1]
+  ] as const)('%s is not loaded', async (_l, version, layoutVersion) => {
+    const dir = path.join(tempRoot(), 'cache')
+    const cache = createSnapshotCache({ dir })
+    const m = await readAs(layoutVersion)
+    await cache.save(FIXTURE_LIBRARY_ID, input(m), () => true)
+    fs.writeFileSync(
+      path.join(dir, FIXTURE_LIBRARY_ID, 'snapshot.json'),
+      JSON.stringify({ version, manifest: m, metas: {} })
+    )
+    expect(await createSnapshotCache({ dir }).load(FIXTURE_LIBRARY_ID)).toBeNull()
   })
 })

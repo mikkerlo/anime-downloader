@@ -1060,6 +1060,44 @@ describe('never written', () => {
   })
 })
 
+describe('a layout v2 library (#713): foreign, never written', () => {
+  // The v2 `userId` equals OWNER's Shikimori id numerically: still foreign.
+  const ANILIST = { provider: 'anilist', userId: String(OWNER.id) }
+
+  it.each([
+    ['logged in as the numerically equal Shikimori user', OWNER],
+    ['with no account', null]
+  ] as const)('%s: runAll skips it as foreign', async (_l, user) => {
+    const { fsWritesUnder } = await import('../helpers/attached-library')
+    const v2 = await makeLibrary({ libraryId: LIBS[0], tracker: ANILIST })
+    const pc = makePc({ user, store: { watchProgress: localRows([1, 2], T0) } })
+    pc.offline.value = true
+    await pc.attach(v2.root)
+    expect(pc.attached.get(v2.libraryId)?.role).toBe('foreign')
+    const seen = fsWritesUnder(v2.root)
+    const r = await pc.runner.runAll('manual')
+    expect(r.libraries.find((l) => l.libraryId === v2.libraryId)).toMatchObject({
+      drive: 'skipped',
+      driveReason: 'foreign'
+    })
+    expect(seen()).toEqual([])
+  })
+
+  it.each([
+    ['logged in as the numerically equal Shikimori user', OWNER],
+    ['with no account', null]
+  ] as const)('%s: runExport on a v2 root is skipped as foreign', async (_l, user) => {
+    const { fsWritesUnder } = await import('../helpers/attached-library')
+    const v2 = await makeLibrary({ libraryId: LIBS[0], tracker: ANILIST })
+    const pc = makePc({ user, store: { watchProgress: localRows([1, 2], T0) } })
+    pc.offline.value = true
+    const seen = fsWritesUnder(v2.root)
+    const r = await pc.runner.runExport({ libraryId: v2.libraryId, root: v2.root, name: 'Drive' })
+    expect(r).toMatchObject({ drive: 'skipped', driveReason: 'foreign' })
+    expect(seen()).toEqual([])
+  })
+})
+
 // --- Forget (owner decision 8) -----------------------------------------------------------------
 
 describe('Forget, through the S7c hook', () => {

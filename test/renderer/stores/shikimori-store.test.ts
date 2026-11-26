@@ -1,14 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { watch } from 'vue'
 
 type Listener<T> = (data: T) => void
 
+// The facade takes rates, the queue length and the sync status from the
+// `tracker:*` twins (#697). `rateUpdated` and its three siblings send the
+// legacy payload the way main's bridge does, as the twin with
+// `trackerId: 'shikimori'` and `raw`, so the cases below read as before.
 type Captured = {
   rateUpdated: Listener<ShikiAnimeRateEntry>[]
   ratesRefreshed: Listener<ShikiAnimeRateEntry[]>[]
   detailsUpdated: Listener<{ malId: number; details: ShikiAnimeDetails }>[]
   offlineQueue: Listener<{ length: number }>[]
   syncStatus: Listener<unknown>[]
+  trackerRateUpdated: Listener<TrackerRateUpdatedEvent>[]
+  trackerRatesRefreshed: Listener<TrackerRatesRefreshedEvent>[]
+  trackerOfflineQueue: Listener<TrackerOfflineQueueChangedEvent>[]
+  trackerSyncStatus: Listener<TrackerSyncStatusEvent>[]
+  legacyRateUpdated: Listener<ShikiAnimeRateEntry>[]
+  legacyRatesRefreshed: Listener<ShikiAnimeRateEntry[]>[]
+  legacyOfflineQueue: Listener<{ length: number }>[]
+  legacySyncStatus: Listener<unknown>[]
   profileRefreshed: Listener<ShikimoriProfile>[]
   friendsRefreshed: Listener<ShikiFriendCard[]>[]
   recommendationsRefreshed: Listener<RecommendationEntry[]>[]
@@ -24,6 +37,35 @@ type Captured = {
 
 let captured: Captured
 
+function entryOf(raw: ShikiAnimeRateEntry): TrackerRateEntry {
+  const malId = (raw.rate.target_id ?? raw.shikiAnime?.id) as number
+  return {
+    trackerId: 'shikimori',
+    malId,
+    remoteId: raw.rate.id,
+    values: {
+      episodes: raw.rate.episodes,
+      status: raw.rate.status,
+      score: raw.rate.score,
+      rewatches: 0
+    },
+    updatedAt: null,
+    anime: {
+      title: '',
+      poster: null,
+      kind: null,
+      episodes: null,
+      episodesAired: null,
+      status: null
+    },
+    smotretAnime: null
+  }
+}
+
+function asTrackerStatus(status: unknown): TrackerSyncStatus {
+  return { ...(status as TrackerSyncStatus), needsSetup: false }
+}
+
 function installApi(): void {
   captured = {
     rateUpdated: [],
@@ -31,6 +73,14 @@ function installApi(): void {
     detailsUpdated: [],
     offlineQueue: [],
     syncStatus: [],
+    trackerRateUpdated: [],
+    trackerRatesRefreshed: [],
+    trackerOfflineQueue: [],
+    trackerSyncStatus: [],
+    legacyRateUpdated: [],
+    legacyRatesRefreshed: [],
+    legacyOfflineQueue: [],
+    legacySyncStatus: [],
     profileRefreshed: [],
     friendsRefreshed: [],
     recommendationsRefreshed: [],
@@ -52,11 +102,37 @@ function installApi(): void {
   ;(globalThis as { window?: { api: unknown } }).window = {
     api: {
       onShikimoriRateUpdated: (cb: Listener<ShikiAnimeRateEntry>) => {
-        captured.rateUpdated.push(cb)
+        captured.legacyRateUpdated.push(cb)
         return () => {}
       },
       onShikimoriRatesRefreshed: (cb: Listener<ShikiAnimeRateEntry[]>) => {
-        captured.ratesRefreshed.push(cb)
+        captured.legacyRatesRefreshed.push(cb)
+        return () => {}
+      },
+      onTrackerRateUpdated: (cb: Listener<TrackerRateUpdatedEvent>) => {
+        captured.trackerRateUpdated.push(cb)
+        captured.rateUpdated.push((raw) => cb({ trackerId: 'shikimori', entry: entryOf(raw), raw }))
+        return () => {}
+      },
+      onTrackerRatesRefreshed: (cb: Listener<TrackerRatesRefreshedEvent>) => {
+        captured.trackerRatesRefreshed.push(cb)
+        captured.ratesRefreshed.push((raw) =>
+          cb({ trackerId: 'shikimori', entries: raw.map(entryOf), raw })
+        )
+        return () => {}
+      },
+      onTrackerOfflineQueueChanged: (cb: Listener<TrackerOfflineQueueChangedEvent>) => {
+        captured.trackerOfflineQueue.push(cb)
+        captured.offlineQueue.push(({ length }) =>
+          cb({ trackerId: 'shikimori', length, queuedAfter: {} })
+        )
+        return () => {}
+      },
+      onTrackerSyncStatus: (cb: Listener<TrackerSyncStatusEvent>) => {
+        captured.trackerSyncStatus.push(cb)
+        captured.syncStatus.push((status) =>
+          cb({ trackerId: 'shikimori', status: asTrackerStatus(status) })
+        )
         return () => {}
       },
       onShikimoriAnimeDetailsUpdated: (
@@ -66,11 +142,11 @@ function installApi(): void {
         return () => {}
       },
       onShikimoriOfflineQueueChanged: (cb: Listener<{ length: number }>) => {
-        captured.offlineQueue.push(cb)
+        captured.legacyOfflineQueue.push(cb)
         return () => {}
       },
       onShikimoriSyncStatus: (cb: Listener<unknown>) => {
-        captured.syncStatus.push(cb)
+        captured.legacySyncStatus.push(cb)
         return () => {}
       },
       onShikimoriProfileRefreshed: (cb: Listener<ShikimoriProfile>) => {
@@ -112,14 +188,99 @@ beforeEach(() => {
 })
 
 describe('useShikimoriStore', () => {
-  it('subscribes to all five broadcasts at construction', async () => {
+  it('subscribes once to each tracker twin it uses and not to the legacy four', async () => {
     const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
     useShikimoriStore()
-    expect(captured.rateUpdated.length).toBe(1)
-    expect(captured.ratesRefreshed.length).toBe(1)
+    expect(captured.trackerRateUpdated.length).toBe(1)
+    expect(captured.trackerRatesRefreshed.length).toBe(1)
+    expect(captured.trackerOfflineQueue.length).toBe(1)
+    expect(captured.trackerSyncStatus.length).toBe(1)
     expect(captured.detailsUpdated.length).toBe(1)
-    expect(captured.offlineQueue.length).toBe(1)
-    expect(captured.syncStatus.length).toBe(1)
+    expect(captured.legacyRateUpdated.length).toBe(0)
+    expect(captured.legacyRatesRefreshed.length).toBe(0)
+    expect(captured.legacyOfflineQueue.length).toBe(0)
+    expect(captured.legacySyncStatus.length).toBe(0)
+  })
+
+  it('an anilist event leaves the facade untouched', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    await vi.waitFor(() => expect(store.offlineQueueLength).toBe(4))
+    captured.rateUpdated[0](mkRate(100, 3))
+    const rates = store.rates
+    const syncStatus = store.syncStatus
+
+    const anilistEntry = { ...entryOf(mkRate(200, 1)), trackerId: 'anilist' as const }
+    captured.trackerRateUpdated[0]({ trackerId: 'anilist', entry: anilistEntry })
+    captured.trackerRatesRefreshed[0]({ trackerId: 'anilist', entries: [anilistEntry] })
+    captured.trackerOfflineQueue[0]({ trackerId: 'anilist', length: 9, queuedAfter: {} })
+    captured.trackerSyncStatus[0]({
+      trackerId: 'anilist',
+      status: asTrackerStatus({
+        state: 'syncing',
+        queueLength: 9,
+        lastSyncAt: 5,
+        lastSyncError: 'x',
+        sessionExpired: true
+      })
+    })
+
+    expect(store.rates).toBe(rates)
+    expect(store.syncStatus).toBe(syncStatus)
+    expect(store.offlineQueueLength).toBe(4)
+    expect(store.sessionExpired).toBe(false)
+  })
+
+  it('a double-emitted pair (legacy then tracker twin, as main sends it) updates rates once', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    let replacements = 0
+    watch(
+      () => store.rates,
+      () => replacements++,
+      { flush: 'sync' }
+    )
+    const emitPair = (raw: ShikiAnimeRateEntry): void => {
+      captured.legacyRateUpdated.forEach((l) => l(raw))
+      captured.trackerRateUpdated.forEach((l) =>
+        l({ trackerId: 'shikimori', entry: entryOf(raw), raw })
+      )
+    }
+    emitPair(mkRate(100, 3))
+    expect(replacements).toBe(1)
+    expect(store.rates.length).toBe(1)
+
+    const refreshed = [mkRate(50, 5)]
+    captured.legacyRatesRefreshed.forEach((l) => l(refreshed))
+    captured.trackerRatesRefreshed.forEach((l) =>
+      l({ trackerId: 'shikimori', entries: refreshed.map(entryOf), raw: refreshed })
+    )
+    expect(replacements).toBe(2)
+    expect(store.rateByMalId(50)?.rate.episodes).toBe(5)
+  })
+
+  it('takes the sync status without needsSetup', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    captured.trackerSyncStatus[0]({
+      trackerId: 'shikimori',
+      status: {
+        state: 'idle',
+        queueLength: 2,
+        lastSyncAt: 3,
+        lastSyncError: null,
+        sessionExpired: false,
+        needsSetup: true
+      }
+    })
+    expect(store.syncStatus).toEqual({
+      state: 'idle',
+      queueLength: 2,
+      lastSyncAt: 3,
+      lastSyncError: null,
+      sessionExpired: false
+    })
+    expect(store.offlineQueueLength).toBe(2)
   })
 
   it('loggedIn is false until refreshUser populates user', async () => {

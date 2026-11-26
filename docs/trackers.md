@@ -705,6 +705,47 @@ Shikimori's classifier never returns `config`, so its "Needs setup" never
 changes. #702 (T6) and #703 (T7) pass `notifyAccountsChanged()` as their
 instances' `onNeedsSetupChanged` and call it from their expiry handling.
 
+## The renderer store
+
+#697 (T4a) adds `useTrackersStore` (`src/renderer/src/stores/trackers.ts`),
+the one place in the renderer that reads the `tracker:*` surface. No component
+subscribes to a `tracker:*` broadcast; [Renderer](./renderer.md) lists the
+store's state. `useShikimoriStore` stays as a facade for the views not moved
+yet: it takes rates, the queue length and the sync status from the `tracker:*`
+twins filtered to `trackerId: 'shikimori'`, never also from the `shikimori:*`
+events, so a double-emitted change is applied once.
+
+- **Connected** means the account's `user` is set. An expired session keeps
+  its user, so it stays connected and in `aggregateSyncState`. A changed
+  `user.id` on a tracker that stays connected (an account switch) is a drop
+  followed by a reload.
+- **The queued overlay.** `rateFor(id, malId)` and `primaryRates` read the
+  tracker's cache with its last queued `after` laid over it, as `projectRate`
+  does in main. A title only in the queue reaches `rateFor` but isn't a row of
+  `primaryRates`, since it has no `anime` block.
+- **Loads.** `refreshRates(trackerId)` asks for the whole list (no `status`),
+  applies the snapshot itself (a cold cache answers without broadcasting) and
+  reuses a pending load. A drop moves the tracker's epoch, so a reply sent
+  before it changes nothing; a queue event during the load keeps its
+  `queuedAfter` over the snapshot's.
+- **Held titles.** `holdTitle(malId)` keeps a `tracker:get-rate` result per
+  connected tracker for that title, refetched for every connected tracker on
+  a rate update for it, a queue change that adds, changes or removes its
+  entry, any `tracker:rates-refreshed`, and a primary change.
+
+**Emit order is a contract.** A drain broadcasts the cache update
+(`tracker:rate-updated`) before the queue change
+(`tracker:offline-queue-changed`). The two are separate IPC messages, and the
+overlay goes when the queue change lands, so the opposite order would let Vue
+render the stale cache value in between. Shikimori's drain follows it; T6/T7's
+drains (#702, #703) must too.
+
+**A queue-only title reads `null` after its create settles.** The create
+branch of a drain has no cache row to reconcile, so it emits no
+`tracker:rate-updated`, only the queue change. `rateFor` goes from the queued
+values to `null` and stays there until the next `tracker:rates-refreshed`
+carries the row. Nothing in the drain triggers one; this is accepted for now.
+
 ## Boot, the online edge and Prepare
 
 `src/main/services/trackers/edges.ts` (#693, T2c) decides which trackers take

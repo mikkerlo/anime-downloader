@@ -5,11 +5,17 @@
 // per-anime details cache, sync-state, and offline-queue length.
 //
 // Five broadcasts move from ad-hoc per-component subscriptions to the store:
-//   onShikimoriRateUpdated         — upserts an entry into `rates`
-//   onShikimoriRatesRefreshed      — replaces `rates` wholesale
+//   onTrackerRateUpdated           — upserts an entry into `rates`
+//   onTrackerRatesRefreshed        — replaces `rates` wholesale
 //   onShikimoriAnimeDetailsUpdated — upserts into `animeDetails`
-//   onShikimoriOfflineQueueChanged — updates `offlineQueueLength`
-//   onShikimoriSyncStatus          — replaces `syncStatus`
+//   onTrackerOfflineQueueChanged   — updates `offlineQueueLength`
+//   onTrackerSyncStatus            — replaces `syncStatus`
+//
+// Since #697 it is a facade beside `useTrackersStore`: rates, the queue length
+// and the sync status come from the `tracker:*` twins filtered to
+// `trackerId: 'shikimori'` (rates from their `raw` rows), never also from the
+// `shikimori:*` events main double-emits, so nothing is applied twice. The
+// requests stay on the `shikimori:*` aliases until #717.
 //
 // Subscriptions are eager, lifetime-scoped (Pinia singleton). Disposers are
 // intentionally discarded — the listeners die with the renderer process.
@@ -99,7 +105,8 @@ export const useShikimoriStore = defineStore('shikimori', () => {
   }
 
   // Eager subscriptions; live for the renderer's lifetime. See module header.
-  void window.api.onShikimoriRateUpdated((entry) => {
+  void window.api.onTrackerRateUpdated(({ trackerId, raw: entry }) => {
+    if (trackerId !== 'shikimori' || !entry) return
     const idx = rates.value.findIndex((r) => r.rate.target_id === entry.rate.target_id)
     if (idx >= 0) {
       const next = rates.value.slice()
@@ -109,7 +116,8 @@ export const useShikimoriStore = defineStore('shikimori', () => {
       rates.value = [...rates.value, entry]
     }
   })
-  void window.api.onShikimoriRatesRefreshed((entries) => {
+  void window.api.onTrackerRatesRefreshed(({ trackerId, raw: entries }) => {
+    if (trackerId !== 'shikimori' || !entries) return
     rates.value = entries
   })
   void window.api.onShikimoriProfileRefreshed((next) => {
@@ -124,12 +132,15 @@ export const useShikimoriStore = defineStore('shikimori', () => {
   void window.api.onShikimoriAnimeDetailsUpdated(({ malId, details }) => {
     animeDetails.value = { ...animeDetails.value, [malId]: details }
   })
-  void window.api.onShikimoriOfflineQueueChanged((data) => {
-    offlineQueueLength.value = data.length
+  void window.api.onTrackerOfflineQueueChanged(({ trackerId, length }) => {
+    if (trackerId !== 'shikimori') return
+    offlineQueueLength.value = length
   })
-  void window.api.onShikimoriSyncStatus((data) => {
-    syncStatus.value = data
-    offlineQueueLength.value = data.queueLength
+  void window.api.onTrackerSyncStatus(({ trackerId, status }) => {
+    if (trackerId !== 'shikimori') return
+    const { state, queueLength, lastSyncAt, lastSyncError, sessionExpired } = status
+    syncStatus.value = { state, queueLength, lastSyncAt, lastSyncError, sessionExpired }
+    offlineQueueLength.value = queueLength
   })
 
   // Pull once on init. `sessionExpired` is persisted state, and a freshly

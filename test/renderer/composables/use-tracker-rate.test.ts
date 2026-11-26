@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ref, nextTick } from 'vue'
+import { effectScope, ref, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
 import { useTrackersStore } from '../../../src/renderer/src/stores/trackers'
@@ -360,6 +360,32 @@ describe('useTrackerRate — loadTrackerData', () => {
     expect(s.loading.value).toBe(false)
   })
 
+  // PR #728 review: the wait for `accountsLoaded` dies with the page.
+  it('an unmount before the accounts load leaves no later rate load', async () => {
+    const first = deferred<TrackerAccountsState>()
+    installApi({ accounts: first.promise })
+    setActivePinia(createPinia())
+    const trackers = useTrackersStore()
+    const scope = effectScope()
+    const s = scope.run(() =>
+      useTrackerRate({
+        anime: ref<AnimeDetail | null>(mkAnime({ malId: 99 })),
+        shikimoriStore: useShikimoriStore(),
+        trackersStore: trackers
+      })
+    )!
+    void s.loadTrackerData(loadRelated())
+    await flush()
+    expect(s.shikiUserChecked.value).toBe(true)
+    expect(api.trackerGetRate).not.toHaveBeenCalled()
+
+    scope.stop()
+    first.resolve(accountsState(['shikimori']))
+    await flush()
+    expect(trackers.accountsLoaded).toBe(true)
+    expect(api.trackerGetRate).not.toHaveBeenCalled()
+  })
+
   it('values: null leaves the form empty, logs nothing, and still takes stale from the result', async () => {
     installApi({
       overrides: { trackerGetRate: vi.fn(async () => ({ values: null, stale: true })) }
@@ -430,6 +456,78 @@ describe('useTrackerRate — primary switch (#704 §9)', () => {
     expect(s.rateEpisodes.value).toBe(6)
     expect(s.rateScore.value).toBe(4)
     expect(s.resumeProgress.value.episodes).toBe(6)
+  })
+
+  // PR #728 review: `tracker:get-rate` answers the remote or cached row with no
+  // queued `after` on top. Switching to a primary whose queue already holds a
+  // change, its reply must not overwrite the projection, or a Save would write
+  // the remote value back over the user's own queued change.
+  it('a switch to a primary with a queued after keeps the queued values once its get-rate reply lands', async () => {
+    const anilist = deferred<TrackerRateResult>()
+    installApi({
+      accounts: accountsState(['shikimori', 'anilist'], 'shikimori'),
+      overrides: {
+        trackerGetRate: vi.fn((id: TrackerId) =>
+          id === 'shikimori'
+            ? Promise.resolve({ values: values(3), stale: false })
+            : anilist.promise
+        )
+      }
+    })
+    const { s, trackers } = await makeRate({ anime: mkAnime({ malId: 99 }) })
+    await s.loadTrackerData(loadRelated())
+    expect(s.rateEpisodes.value).toBe(3)
+
+    emit.queueChanged({
+      trackerId: 'anilist',
+      length: 1,
+      queuedAfter: { 99: values(6, 'on_hold', 4) }
+    })
+    await flush()
+    emit.accountsChanged(accountsState(['shikimori', 'anilist'], 'anilist'))
+    await flush()
+    expect(s.rateEpisodes.value).toBe(6)
+
+    anilist.resolve({ values: values(5, 'watching', 7), stale: true, mediaId: 21 })
+    await flush()
+    expect(trackers.rateFor('anilist', 99)?.episodes).toBe(6)
+    expect(s.rateEpisodes.value).toBe(6)
+    expect(s.rateStatus.value).toBe('on_hold')
+    expect(s.rateScore.value).toBe(4)
+    expect(s.resumeProgress.value.status).toBe('on_hold')
+    expect(s.resumeProgress.value.episodes).toBe(6)
+    expect(s.resumeProgress.value.loading).toBe(false)
+    // The reply's own fields still apply.
+    expect(s.rateStale.value).toBe(true)
+    expect(s.mediaId.value).toBe(21)
+  })
+
+  // The same projection on mount: a title whose change is still queued opens
+  // with the queued values, not the remote ones a live read returns.
+  it('a mount with a queued after for the title shows the queued values, not the remote reply', async () => {
+    installApi({
+      accounts: accountsState(['shikimori']),
+      overrides: {
+        trackerGetRate: vi.fn(async () => ({ values: values(5, 'watching', 7), stale: false }))
+      }
+    })
+    setActivePinia(createPinia())
+    const trackers = useTrackersStore()
+    await flush()
+    emit.queueChanged({
+      trackerId: 'shikimori',
+      length: 1,
+      queuedAfter: { 99: values(6, 'on_hold', 4) }
+    })
+    const s = useTrackerRate({
+      anime: ref<AnimeDetail | null>(mkAnime({ malId: 99 })),
+      shikimoriStore: useShikimoriStore(),
+      trackersStore: trackers
+    })
+    await s.loadTrackerData(loadRelated())
+    expect(s.rateEpisodes.value).toBe(6)
+    expect(s.rateStatus.value).toBe('on_hold')
+    expect(s.resumeProgress.value.status).toBe('on_hold')
   })
 
   it('a late response from the old primary never overwrites the new primary form', async () => {

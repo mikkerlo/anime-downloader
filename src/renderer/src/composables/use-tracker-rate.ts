@@ -157,18 +157,23 @@ export function useTrackerRate(deps: {
     rateRewatches.value = 0
   }
 
+  // Resolved by a watcher registered here, in the caller's effect scope: the
+  // load awaits the Shikimori user read first, so a watch created then would
+  // outlive an unmount and still load a rate for a closed page.
+  let accountsWaiters: (() => void)[] = []
+  watch(
+    () => trackers.accountsLoaded,
+    (loaded) => {
+      if (!loaded) return
+      const waiters = accountsWaiters
+      accountsWaiters = []
+      waiters.forEach((resolve) => resolve())
+    }
+  )
+
   function whenAccountsLoaded(): Promise<void> {
     if (trackers.accountsLoaded) return Promise.resolve()
-    return new Promise((resolve) => {
-      const stop = watch(
-        () => trackers.accountsLoaded,
-        (loaded) => {
-          if (!loaded) return
-          stop()
-          resolve()
-        }
-      )
-    })
+    return new Promise((resolve) => accountsWaiters.push(resolve))
   }
 
   // Set once a load has read `primary`: from then on a primary switch reloads.
@@ -190,9 +195,12 @@ export function useTrackerRate(deps: {
       .trackerGetRate(id, malId)
       .then((result) => {
         if (!current()) return
-        rate.value = result
+        // `tracker:get-rate` answers the remote or cached row; the form shows
+        // the projection, so a queued `after` wins (#704 §2).
+        const queued = trackers.queuedAfterByTracker[id]?.[malId]
+        rate.value = queued && result ? { ...result, values: { ...queued } } : result
         mediaId.value = result?.mediaId
-        if (result?.values) fillForm(result.values)
+        if (rate.value?.values) fillForm(rate.value.values)
       })
       .catch((err) => console.error(`Failed to load the ${id} rate:`, err))
       .finally(() => {

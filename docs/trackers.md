@@ -746,8 +746,11 @@ queue length, `sessionExpired` and sync state from the primary's entry. Its
 `loading` is per mount, so from the second detail page on Continue still waits
 for the primary's rate. A response is applied, and clears `loading`, only while
 its tracker and MAL id are still current, so a late reply from the old primary
-after a switch is dropped. The AniList "Open ↗" link needs the result's
-`mediaId` and is hidden without it.
+after a switch is dropped. `tracker:get-rate` answers the remote or cached row
+without the queue on top, so the panel lays the primary's queued `after` over
+the reply, as `projectRate` does: a switch or a mount with a change still queued
+shows that change, and a Save can't write the remote value back over it. The
+AniList "Open ↗" link needs the result's `mediaId` and is hidden without it.
 
 **Emit order is a contract.** A drain broadcasts the cache update
 (`tracker:rate-updated`) before the queue change

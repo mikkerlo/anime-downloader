@@ -12,6 +12,7 @@ vi.mock('../../src/main/shikimori', async (orig) => ({
 }))
 
 import { runGoldenSession, STEP_TIMES, type GoldenCapture } from '../helpers/golden-session'
+import { GOLDEN_NEW_KEYS } from '../helpers/golden-allow-list'
 import {
   DRIVE_MASKS,
   JSON_MASKS,
@@ -53,9 +54,14 @@ describe('a Shikimori-only session reproduces the 6.0.21 goldens', () => {
     expect(configProblems(actual.config, golden.config)).toEqual({
       extra: [],
       missing: [],
-      offDefault: []
+      offDefault: [],
+      notNew: []
     })
     expect(comparableConfig(actual.config)).toEqual(comparableConfig(golden.config))
+  })
+
+  it('the allow-list holds only keys the 6.0.21 golden does not have', () => {
+    expect(Object.keys(GOLDEN_NEW_KEYS).filter((k) => k in golden.config)).toEqual([])
   })
 
   it('the userData files: the same files, and the same values', () => {
@@ -152,14 +158,21 @@ describe('the comparison helpers', () => {
     expect(configProblems({ a: 1, b: 2 }, g, {})).toEqual({
       extra: ['b'],
       missing: [],
-      offDefault: []
+      offDefault: [],
+      notNew: []
     })
     expect(configProblems({ a: 1, b: 2 }, g, { b: 2 })).toEqual({
       extra: [],
       missing: [],
-      offDefault: []
+      offDefault: [],
+      notNew: []
     })
     expect(configProblems({ a: 1, b: 3 }, g, { b: 2 }).offDefault).toEqual(['b'])
     expect(configProblems({}, g, {}).missing).toEqual(['a'])
+  })
+
+  it('refuses an allow-listed key the golden already has', () => {
+    // Allow-listing an existing key would drop it from both sides of the comparison.
+    expect(configProblems({ a: 5 }, { a: 1 }, { a: 5 }).notNew).toEqual(['a'])
   })
 })

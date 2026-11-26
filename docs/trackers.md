@@ -196,7 +196,8 @@ The drain's drift ranking, `STATUS_ORDER`, lives beside `RateValues` in
 `POINT_10_DECIMAL`, `POINT_10`, `POINT_5`, `POINT_3`):
 
 - the app writes `scoreRaw` as `appScore * 10`, and reads a raw score as the
-  nearest app score;
+  nearest app score, except that a positive raw never reads as 0 ("no score"):
+  a `POINT_100` 1–4 reads as 1, and clearing it writes 0;
 - **rounding is never a change**: `anilistScoreUnchanged(appScore, storedRaw,
   format)` is true when the stored raw still reads as that app score (a
   `POINT_100` 85 read as 9 and left at 9), or when writing the app score would

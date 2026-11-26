@@ -1122,7 +1122,9 @@ later slice keeps green.
   needs v1 byte identity). A self-check fails on a mask that masks nothing in
   the golden. A new top-level `config.json` key passes only when it is listed in
   `GOLDEN_NEW_KEYS` (`test/helpers/golden-allow-list.ts`) and holds the default
-  listed there; #689 lists none, and T1 adds its tracker keys.
+  listed there; #689 lists none, and T1 adds its tracker keys. The list may
+  hold only keys the golden lacks: an existing key on it would drop out of the
+  comparison on both sides, so the golden test fails on one.
 - **Sensitivity**, each proved red at #689: an extra field on the queue entry
   `queueRate` builds (`ipc/shikimori.ipc.ts:624`), a renamed `shikimori-rates`
   step id or label, one changed byte in the manifest the v1 writer emits, and a

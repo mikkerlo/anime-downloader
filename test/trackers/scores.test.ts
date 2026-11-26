@@ -41,6 +41,18 @@ describe('AniList scores', () => {
     expect(appScoreFromAnilistRaw(100)).toBe(10)
   })
 
+  it('a low raw score (POINT_100 1–4, POINT_10_DECIMAL 0.1–0.4) reads as 1, never as "no score"', () => {
+    for (const raw of [1, 3, 4]) expect(appScoreFromAnilistRaw(raw), `raw ${raw}`).toBe(1)
+    expect(appScoreFromAnilistRaw(5)).toBe(1)
+    expect(appScoreFromAnilistRaw(0)).toBe(0)
+  })
+
+  it('clearing a raw 3 writes 0', () => {
+    expect(anilistScoreUnchanged(0, 3, 'POINT_100')).toBe(false)
+    expect(anilistRawToStore(0, 3, 'POINT_100')).toBe(0)
+    expect(anilistRawToStore(0, 3, 'POINT_10_DECIMAL')).toBe(0)
+  })
+
   describe.each(ANILIST_SCORE_FORMATS)('%s', (format) => {
     it.each(APP_STATUSES)(
       'the round trip is the identity under the unchanged predicate (%s)',

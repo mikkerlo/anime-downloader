@@ -101,20 +101,24 @@ export function maskDrive(name: string, text: string): { masked: string; hits: n
 
 /**
  * `config.json` against the golden: every golden key with its value, masked;
- * any extra top-level key only from `allowList`, at its listed default.
+ * any extra top-level key only from `allowList`, at its listed default. The
+ * allow-list may only hold genuinely new keys (`notNew` lists any the golden
+ * already has): `comparableConfig` drops allow-listed keys from both sides, so
+ * an existing key on it would stop being compared at all.
  */
 export function configProblems(
   actual: Record<string, unknown>,
   golden: Record<string, unknown>,
   allowList: Readonly<Record<string, unknown>> = GOLDEN_NEW_KEYS
-): { extra: string[]; missing: string[]; offDefault: string[] } {
+): { extra: string[]; missing: string[]; offDefault: string[]; notNew: string[] } {
   const extra = Object.keys(actual).filter((k) => !(k in golden) && !(k in allowList))
   const missing = Object.keys(golden).filter((k) => !(k in actual))
   const offDefault = Object.keys(actual).filter(
     (k) =>
       !(k in golden) && k in allowList && JSON.stringify(actual[k]) !== JSON.stringify(allowList[k])
   )
-  return { extra, missing, offDefault }
+  const notNew = Object.keys(allowList).filter((k) => k in golden)
+  return { extra, missing, offDefault, notNew }
 }
 
 /** `config.json` minus the allow-listed keys, masked: what must equal the golden's. */

@@ -42,9 +42,12 @@ export function anilistRawFromAppScore(appScore: number): number {
   return clampApp(appScore) * 10
 }
 
-/** The app score (0–10) a stored `scoreRaw` reads as. */
+/**
+ * The app score (0–10) a stored `scoreRaw` reads as. A positive raw never
+ * reads as 0, which means "no score": a `POINT_100` 1–4 reads as 1.
+ */
 export function appScoreFromAnilistRaw(raw: number): number {
-  return clampApp(raw / 10)
+  return raw > 0 ? Math.max(1, clampApp(raw / 10)) : 0
 }
 
 /**

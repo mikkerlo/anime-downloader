@@ -79,9 +79,8 @@ import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createTrackerFanOut } from './services/trackers/fan-out'
-import { createTrackerRates, queuedAfterOf } from './services/trackers/rates'
+import { createTrackerRates } from './services/trackers/rates'
 import { createShikimoriEventBridge } from './trackers/events'
-import type { QueuedShikimoriUpdate } from './lib/shikimori-queue'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
@@ -365,8 +364,9 @@ const shikimoriBroadcast = createShikimoriEventBridge({
     offlineQueueChanged: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
   },
   needsSetup: () => shikimoriSyncService.tracker.needsSetup(),
-  queuedAfter: () =>
-    queuedAfterOf(store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[] | undefined)
+  // `trackerRates` is declared below; the getter runs at emit time, and nothing
+  // emits while this module is being set up.
+  queuedAfter: () => trackerRates.queuedAfter('shikimori')
 })
 const shikimoriSyncService = createShikimoriSyncService({
   store,

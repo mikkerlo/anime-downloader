@@ -26,7 +26,8 @@ import { TRACKER_LABELS, type TrackerEntry } from '../../trackers/types'
 import type { ApplyOutcome, PrimaryResults, TrackerFanOut } from './fan-out'
 import type { TrackerDrainStatus, TrackerSyncService } from './sync'
 
-export const TRACKER_IDS: readonly TrackerId[] = ['shikimori', 'anilist', 'mal']
+// From `TRACKER_KEYS`, a `Record<TrackerId, …>`: an id missing there fails typecheck.
+export const TRACKER_IDS = Object.keys(TRACKER_KEYS) as readonly TrackerId[]
 
 export function isTrackerId(value: unknown): value is TrackerId {
   return typeof value === 'string' && (TRACKER_IDS as readonly string[]).includes(value)

@@ -10,11 +10,14 @@ import { createListenerSet } from '../../lib/listener-set'
 import {
   consolidateQueue,
   dropFromParked,
+  intendedFields,
+  isConsumedEntry,
   recordServerError,
   recordServerErrorInParked,
   type ConsolidatedWorkItem,
   type ParkedQueues,
-  type QueuedTrackerUpdate
+  type QueuedTrackerUpdate,
+  type QueueVia
 } from '../../lib/shikimori-queue'
 import { keepQueuedRows } from '../../lib/shikimori-rate-cache'
 import { STATUS_ORDER, type RateValues } from '../../lib/shikimori-rate'
@@ -57,6 +60,8 @@ export interface TrackerItemSettled<TRate> {
   fieldsKeptByServer: SyncRateField[]
   after: QueuedTrackerUpdate['after']
   provenance?: Partial<Record<SyncRateField, SyncProvenance>>
+  /** The item's `via` (#692), when its entries carry one. */
+  via?: QueueVia
   error?: string
 }
 
@@ -92,6 +97,8 @@ export interface TrackerSyncServiceDeps {
 
 export interface TrackerSyncService<TRate, TRow> {
   readonly trackerId: TrackerId
+  /** This tracker's store keys: #692's fan-out reads its user, queue and parked queues. */
+  readonly keys: TrackerStoreKeys
   getQueueLength(): number
   getSyncStatus(): TrackerDrainStatus
   broadcastSyncStatus(): void
@@ -138,6 +145,19 @@ export interface TrackerSyncService<TRate, TRow> {
     values: RateValues,
     remoteId?: number
   ): TRow | null
+  /** The cached row for `malId` as the codec reads it, or null. */
+  cachedRate(malId: number): { remoteId: number | null; values: RateValues } | null
+  /** False when the provider says the title isn't on this tracker (#692). */
+  hasTitle(malId: number): boolean
+  /**
+   * #692's enqueue: appends `entry` to the live queue, then patches the
+   * signed-in user's cached row with `entry.after` (`patchCachedRate`: the
+   * cache `store.set`, `onRateUpdated`, `rateUpdatedChannel`), then broadcasts
+   * `offlineQueueChangedChannel`, all in one synchronous step. No row, no patch.
+   */
+  enqueue(entry: QueuedTrackerUpdate): void
+  /** `offlineQueueChangedChannel` with the live queue's length. */
+  broadcastQueueChanged(): void
   /** The tracker's "Needs setup": a `config`-class error was seen; no drain runs while set. */
   needsSetup(): boolean
   /** Clears "Needs setup" (a client-config change, a successful Test) and kicks one drain. */
@@ -151,12 +171,6 @@ type RateFieldValues = QueuedTrackerUpdate['after']
 // An entry queued before `rewatches` was recorded has none: it means 0.
 function beforeOf(item: Pick<ConsolidatedWorkItem, 'before'>, f: SyncRateField): number | string {
   return f === 'rewatches' ? (item.before.rewatches ?? 0) : item.before[f]
-}
-
-/** The fields an item means to change: a scoped entry's own, otherwise every rate field. */
-function intendedFields(item: ConsolidatedWorkItem): SyncRateField[] {
-  if (!item.fields) return [...RATE_FIELDS]
-  return RATE_FIELDS.filter((f) => item.fields!.includes(f) || item.resolvedFields?.includes(f))
 }
 
 /**
@@ -278,16 +292,22 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
 
   // The drain's owner may have logged out or been switched away mid-item: its
   // entries are then parked, or gone after Discard, and never in the live queue
-  // (#588). A missing bucket stays missing.
-  function dropConsumedEntries(ownerId: number, malId: number, consumedQueuedAts: number[]): void {
+  // (#588). A missing bucket stays missing. Entries match on `(malId,
+  // queuedAt, via)` (#692 § 4): items of two `via` values can share a `queuedAt`.
+  function dropConsumedEntries(
+    ownerId: number,
+    malId: number,
+    consumedQueuedAts: number[],
+    via: QueueVia | undefined
+  ): void {
     let queue = store.get(keys.updateQueue) as QueuedTrackerUpdate[]
     if (currentUserId() === ownerId) {
       const consumed = new Set(consumedQueuedAts)
-      queue = queue.filter((q) => !(q.malId === malId && consumed.has(q.queuedAt)))
+      queue = queue.filter((q) => !isConsumedEntry(q, malId, consumed, via))
       store.set(keys.updateQueue, queue)
     } else {
       const parked = (store.get(keys.parkedQueues) as ParkedQueues | undefined) ?? {}
-      const next = dropFromParked(parked, String(ownerId), malId, consumedQueuedAts)
+      const next = dropFromParked(parked, String(ownerId), malId, consumedQueuedAts, via)
       if (next !== parked) store.set(keys.parkedQueues, next)
     }
     broadcast(deps.offlineQueueChangedChannel, { length: queue.length })
@@ -298,17 +318,25 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
   function recordConsumedServerError(
     ownerId: number,
     malId: number,
-    consumedQueuedAts: number[]
+    consumedQueuedAts: number[],
+    via: QueueVia | undefined
   ): boolean {
     const now = Date.now()
     if (currentUserId() === ownerId) {
       const queue = store.get(keys.updateQueue) as QueuedTrackerUpdate[]
-      const result = recordServerError(queue, malId, consumedQueuedAts, now)
+      const result = recordServerError(queue, malId, consumedQueuedAts, now, via)
       if (result.entries !== queue) store.set(keys.updateQueue, result.entries)
       return result.expired
     }
     const parked = (store.get(keys.parkedQueues) as ParkedQueues | undefined) ?? {}
-    const result = recordServerErrorInParked(parked, String(ownerId), malId, consumedQueuedAts, now)
+    const result = recordServerErrorInParked(
+      parked,
+      String(ownerId),
+      malId,
+      consumedQueuedAts,
+      now,
+      via
+    )
     if (result.parked !== parked) store.set(keys.parkedQueues, result.parked)
     return result.expired
   }
@@ -334,6 +362,25 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
 
   function reconcileCacheFromRate(ownerId: number, malId: number, rate: TrackerEntry<TRate>): void {
     patchCachedRate(ownerId, malId, rate.values, rate.remoteId ?? undefined)
+  }
+
+  function cachedRate(malId: number): { remoteId: number | null; values: RateValues } | null {
+    const cached = (store.get(keys.userRates) as TRow[] | undefined) ?? []
+    const idx = codec.indexOf(cached, malId)
+    return idx === -1 ? null : codec.read(cached[idx])
+  }
+
+  function broadcastQueueChanged(): void {
+    broadcast(deps.offlineQueueChangedChannel, { length: getQueueLength() })
+  }
+
+  function enqueue(entry: QueuedTrackerUpdate): void {
+    const queue = store.get(keys.updateQueue) as QueuedTrackerUpdate[]
+    queue.push(entry)
+    store.set(keys.updateQueue, queue)
+    const ownerId = currentUserId()
+    if (ownerId !== undefined) patchCachedRate(ownerId, entry.malId, entry.after)
+    broadcast(deps.offlineQueueChangedChannel, { length: queue.length })
   }
 
   const settled = createListenerSet<[TrackerItemSettled<TRate>]>(`${trackerId}-item-settled`)
@@ -471,6 +518,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
           fieldsKeptByServer: sent ? intended.filter((f) => !applied.includes(f)) : [],
           after: { ...item.after },
           ...(item.origin ? { provenance: { ...item.origin.provenance } } : {}),
+          ...(item.via ? { via: item.via } : {}),
           ...(error !== undefined ? { error } : {})
         })
       }
@@ -488,7 +536,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
             intended
           )
           reconcileCacheFromRate(ownerId, item.malId, created)
-          dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts)
+          dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts, item.via)
           settle('created', created.native, item.after)
         } else {
           const now = current.values
@@ -497,7 +545,9 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
           const sent = driftMatches ? item.after : driftPayload(item, now)
           const changedFields = RATE_FIELDS.filter((f) => sent[f] !== now[f])
           let rate = current
-          if (changedFields.length > 0 || driftMatches) {
+          // A `via` item (#692) with nothing to change makes no call; every
+          // other item keeps 6.x's PATCH on a drift match.
+          if (changedFields.length > 0 || (driftMatches && !item.via)) {
             rate = await provider.upsertEntry(
               session,
               { malId: item.malId, remoteId: current.remoteId },
@@ -506,7 +556,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
             )
           }
           reconcileCacheFromRate(ownerId, item.malId, rate)
-          dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts)
+          dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts, item.via)
           const applied = intended.filter((f) => sent[f] === item.after[f])
           settle(
             applied.length === intended.length
@@ -543,14 +593,14 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
         }
         // Often specific to one item, so the drain moves on instead of stopping.
         if (policy.entry === 'drop-after-24h') {
-          if (recordConsumedServerError(ownerId, item.malId, item.consumedQueuedAts)) {
+          if (recordConsumedServerError(ownerId, item.malId, item.consumedQueuedAts, item.via)) {
             console.warn(
               `${log} dropping item`,
               item.malId,
               'after 24 h of server errors:',
               messageOf(err)
             )
-            dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts)
+            dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts, item.via)
             settle('dropped', null, null, messageOf(err))
           } else {
             hadServerError = true
@@ -563,7 +613,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
           }
         } else if (policy.entry === 'drop') {
           console.warn(`${log} dropping item`, item.malId, err)
-          dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts)
+          dropConsumedEntries(ownerId, item.malId, item.consumedQueuedAts, item.via)
           settle('dropped', null, null, messageOf(err))
         }
       }
@@ -623,6 +673,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
 
   return {
     trackerId,
+    keys,
     getQueueLength,
     getSyncStatus,
     broadcastSyncStatus,
@@ -636,6 +687,10 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     fetchAndCacheRates,
     refreshRates,
     patchCachedRate,
+    cachedRate,
+    hasTitle: (malId) => provider.hasTitle?.(malId) ?? true,
+    enqueue,
+    broadcastQueueChanged,
     needsSetup: () => needsSetupFlag,
     clearNeedsSetup
   }

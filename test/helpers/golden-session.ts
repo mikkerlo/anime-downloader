@@ -44,6 +44,7 @@ import { createCacheScope } from '../../src/main/services/anime-cache/scope'
 import { createAttachedLibraryService } from '../../src/main/services/attached-library'
 import { createOfflineService } from '../../src/main/services/offline'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
+import { shikimoriOnlyFanOut } from './tracker-fan-out'
 import { createSyncRunner } from '../../src/main/services/sync-runner'
 import { createSharedLibraryExportService } from '../../src/main/services/shared-library-export'
 import { createPrepareOfflineService } from '../../src/main/services/prepare-offline'
@@ -416,6 +417,7 @@ export async function runGoldenSession(): Promise<GoldenCapture> {
     registerShikimori({
       store,
       shikimoriSyncService: sync,
+      trackers: shikimoriOnlyFanOut(store as never, sync),
       lookupByMalIds,
       maybeBroadcastCleanupPrompt: async () => {},
       // The router's `rates-refreshed` tick is left out: the session runs its one tick by hand.

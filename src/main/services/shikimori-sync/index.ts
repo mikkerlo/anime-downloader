@@ -11,7 +11,8 @@ import {
   createTrackerSyncService,
   type TrackerDrainStatus,
   type TrackerItemSettled,
-  type TrackerRatesResult
+  type TrackerRatesResult,
+  type TrackerSyncService
 } from '../trackers/sync'
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
 
@@ -147,6 +148,8 @@ export interface ShikimoriSyncService {
   refreshRates(opts: { keepQueued: boolean }): Promise<RefreshRatesResult | null>
   /** Clears the cached recommendations feed; it rebuilds on the next open. */
   invalidateRecommendations(): void
+  /** The generic instance underneath (#691), for #692's fan-out writer. */
+  readonly tracker: TrackerSyncService<shikimori.ShikiUserRate, CachedRateEntry>
 }
 
 /** One consumed drain item (#584): the generic service's, with Shikimori's rate. */
@@ -507,6 +510,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     onItemSettled: sync.onItemSettled,
     fetchAndCacheRates: sync.fetchAndCacheRates,
     refreshRates: sync.refreshRates,
-    invalidateRecommendations
+    invalidateRecommendations,
+    tracker: sync
   }
 }

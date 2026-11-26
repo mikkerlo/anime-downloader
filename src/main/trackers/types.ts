@@ -123,6 +123,11 @@ export interface TrackerProvider<TSession, TNative, TRate = unknown> {
   ): Promise<TrackerEntry<TRate>>
   /** Only reconcile's "remove" (T10) deletes; nothing in the app does today. */
   deleteEntry?(session: TSession, ref: TrackerRef): Promise<void>
+  /**
+   * False when the title isn't on this tracker, so #692's fan-out queues
+   * nothing for it there (T7: "not on AniList"). Absent means every title is.
+   */
+  hasTitle?(malId: number): boolean
 
   // Capabilities. Session-first: they read the user's auth or list.
   getFriends?(session: TSession): Promise<unknown>
@@ -155,6 +160,8 @@ export interface TrackerRateCacheCodec<TNative, TRow> {
   malIdOf(row: TRow): number | undefined
   /** The index of the row a patch for `malId` writes, or -1. */
   indexOf(rows: readonly TRow[], malId: number): number
+  /** A row's id and values, as #692's projection and the queue's `rateId` read them. */
+  read(row: TRow): { remoteId: number | null; values: RateValues }
   /**
    * `row` with `values` laid over it and its local update time moved to now.
    * `remoteId`, when given, becomes the row's id; otherwise the id is left alone.

@@ -74,6 +74,8 @@ import { createAnimeCacheService } from './services/anime-cache'
 import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
+import { createTrackerFanOut } from './services/trackers/fan-out'
+import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
@@ -360,6 +362,12 @@ const shikimoriSyncService = createShikimoriSyncService({
 // banner appears wherever expiry is discovered — including the fire-and-forget
 // background refreshes that would otherwise swallow it (#244).
 shikimori.setOnSessionExpired(() => shikimoriSyncService.broadcastSyncStatus())
+// The fan-out writer (#692): one entry per tracker whose sync service has
+// landed, Shikimori only for now. The Shikimori router sets its primary branch.
+const trackerFanOut = createTrackerFanOut({
+  store,
+  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }]
+})
 let downloadManager: DownloadManager
 
 // First refreshed by the background ffmpeg-ensure task in `bootstrap()`. The
@@ -381,6 +389,7 @@ syncRunner = createSyncRunner({
   userDataDir: app.getPath('userData'),
   attached: attachedLibraryService,
   sync: shikimoriSyncService,
+  trackers: trackerFanOut.syncServices(),
   isOffline,
   onOnline: (listener) => {
     let wasOffline = offlineService.isOffline()
@@ -772,6 +781,7 @@ function registerIpcHandlers(): void {
     checkFfmpeg,
     getDisplayName,
     shikimoriSyncService,
+    trackers: trackerFanOut,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

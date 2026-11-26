@@ -252,6 +252,100 @@ describe('(must 2) a fresh before is never consolidated behind a stale one', () 
   })
 })
 
+describe('the Shikimori merge pin (#692 § 5)', () => {
+  it('a leg entry is exactly its seven keys: no clock, no prompt, and the cache untouched by the queue write', async () => {
+    const { pc, libraryId } = await ownerSetup({
+      base: { score: 6 },
+      drive: { score: 8 },
+      server: { score: 6 },
+      shikiBase: { score: 6 }
+    })
+    // The library leg first, offline: the pending 8 and its display patch.
+    pc.offline.value = true
+    await pc.runner.runAll('manual')
+    const row = structuredClone(
+      (pc.store.get('shikimoriUserRates') as any[]).find((e) => e.rate.target_id === MAL)
+    )
+    expect(row.rate.score).toBe(8)
+    const meta = structuredClone(pc.store.get('syncMeta'))
+    pc.broadcast.mockClear()
+    pc.offline.value = false
+    const kicked = vi.spyOn(pc.sync, 'syncShikimoriQueue').mockResolvedValue(undefined)
+
+    await pc.runner.runAll('manual')
+
+    expect(queue(pc)).toHaveLength(1)
+    const entry = queue(pc)[0]
+    expect(Object.keys(entry)).toEqual([
+      'malId',
+      'rateId',
+      'before',
+      'after',
+      'queuedAt',
+      'fields',
+      'origin'
+    ])
+    expect(entry).toEqual({
+      malId: MAL,
+      rateId: MAL * 10,
+      before: vals({ score: 6 }),
+      after: vals({ score: 8 }),
+      queuedAt: pc.clock.t,
+      fields: ['score'],
+      origin: { kind: 'sync-merge', provenance: { score: { libraryId } } }
+    })
+    expect(pc.store.get('syncMeta')).toEqual(meta)
+    expect(pc.broadcast.mock.calls.map(([c]) => c)).not.toContain('cleanup:prompt')
+    expect(
+      (pc.store.get('shikimoriUserRates') as any[]).find((e) => e.rate.target_id === MAL)
+    ).toEqual(row)
+    kicked.mockRestore()
+  })
+})
+
+describe('a user edit over a merge field clears its provenance (#692 § 4)', () => {
+  it("the dropped pair doesn't count toward L's episodes drops", async () => {
+    const { ShikiApiError } = await import('../../src/main/shikimori')
+    const { pc, libraryId } = await ownerSetup({
+      base: { episodes: 3 },
+      drive: { episodes: 3 },
+      server: { episodes: 3 },
+      shikiBase: { episodes: 3 }
+    })
+    seedPending(pc, { [MAL]: { episodes: pend(6, T0 + 10, libraryId, [3, T0]) } })
+    pc.store.set('shikimoriUpdateQueue', [
+      {
+        malId: MAL,
+        rateId: MAL * 10,
+        before: vals({ episodes: 3 }),
+        after: vals({ episodes: 6 }),
+        queuedAt: 10,
+        fields: ['episodes'],
+        origin: { kind: 'sync-merge', provenance: { episodes: { libraryId } } }
+      },
+      {
+        malId: MAL,
+        rateId: MAL * 10,
+        before: vals({ episodes: 6 }),
+        after: vals({ episodes: 8 }),
+        queuedAt: 11
+      }
+    ])
+    server.writeError = new ShikiApiError('rejected', 422)
+    const settled: any[] = []
+    pc.sync.onItemSettled((e) => settled.push(e))
+
+    await pc.sync.syncShikimoriQueue()
+    await pc.runner.quiesce()
+
+    expect((await pending(pc))[MAL].episodes.drops).toBeUndefined()
+    expect(settled).toHaveLength(1)
+    expect(settled[0]).toMatchObject({ outcome: 'dropped', consumedQueuedAts: [10, 11] })
+    expect(settled[0].provenance).toBeUndefined()
+    expect(queue(pc)).toEqual([])
+  })
+})
+
 describe('a Shikimori-side score conflict', () => {
   it('library 8 (pending) against shikimori.one 9 over base 7: one held conflict, nothing pushed, base and pending kept; the next run updates the same record', async () => {
     const { pc } = await ownerSetup({

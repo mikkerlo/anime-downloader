@@ -1,6 +1,6 @@
 // Shikimori's error classifier (#689). It mirrors the 6.x drain's branches in
 // their order, which the generic drain now applies through the class
-// (`services/trackers/sync.ts:521-569`); the first matching row wins. It never
+// (`services/trackers/sync.ts:571-619`); the first matching row wins. It never
 // returns `config`.
 
 import * as shikimori from '../shikimori'

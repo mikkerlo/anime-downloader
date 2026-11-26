@@ -31,8 +31,8 @@ unknown>`. `TSession` is the provider's session, `TNative` its list row, and
   never re-reads its credentials or its user inside a data member. That is what
   keeps an in-flight item on the old account after an account switch (#588): if
   a member re-read the store, a switch mid-drain would send A's item with B's
-  token. The drain reads the owner once (`services/trackers/sync.ts:400`) and
-  takes its session once (`services/trackers/sync.ts:411`), and keeps both for
+  token. The drain reads the owner once (`services/trackers/sync.ts:447`) and
+  takes its session once (`services/trackers/sync.ts:458`), and keeps both for
   the run.
 - **Capabilities** are optional members, and `TrackerCapabilities` says which a
   provider has: `getAiringInfo`, `getCalendar`, `getRelated`,
@@ -104,23 +104,23 @@ an API error as a network error.
 ### What each class implies
 
 The drain ([the sync service](#the-sync-service), #691) implements this table,
-reading `TRACKER_ERROR_POLICY` (`services/trackers/sync.ts:523-524`):
+reading `TRACKER_ERROR_POLICY` (`services/trackers/sync.ts:573-574`):
 
 | Class | The drain | The queue entry | Also |
 |---|---|---|---|
 | `network` | aborts | kept | |
-| `auth` | aborts | kept | on an `auth()` failure: stop the timer when the session is gone (Shikimori: `instanceof ShikiAuthError`, `services/trackers/sync.ts:432`); after an account switch, the failure belongs to the previous account and is ignored, and the drain re-kicks (`services/trackers/sync.ts:416-419`) |
+| `auth` | aborts | kept | on an `auth()` failure: stop the timer when the session is gone (Shikimori: `instanceof ShikiAuthError`, `services/trackers/sync.ts:479`); after an account switch, the failure belongs to the previous account and is ignored, and the drain re-kicks (`services/trackers/sync.ts:463-466`) |
 | `rate-limit` | aborts | kept | |
 | `server` | continues with the next item | kept; dropped once that item has seen 24 h of server errors | |
 | `item` | continues with the next item | dropped immediately | |
 | `config` | aborts | kept | sets the tracker's "Needs setup" state |
 
 - For Shikimori this is the 6.x drain, decision for decision. `network`, `auth`
-  (401/403) and `rate-limit` (429) abort (`services/trackers/sync.ts:528-543`).
+  (401/403) and `rate-limit` (429) abort (`services/trackers/sync.ts:578-593`).
   A 5xx keeps the item and moves on until `recordConsumedServerError`
-  (`services/trackers/sync.ts:298-314`) reports that item's 24 h window has
-  expired, and then drops it (`services/trackers/sync.ts:545-563`). Anything
-  else drops (`services/trackers/sync.ts:565-567`). Shikimori never produces
+  (`services/trackers/sync.ts:318-342`) reports that item's 24 h window has
+  expired, and then drops it (`services/trackers/sync.ts:595-613`). Anything
+  else drops (`services/trackers/sync.ts:615-617`). Shikimori never produces
   `config`.
 - `item` is the only class that drops on the first error; `server` drops only
   after the 24 h window.
@@ -129,19 +129,19 @@ reading `TRACKER_ERROR_POLICY` (`services/trackers/sync.ts:523-524`):
   `<Tracker> rate limit — will retry`, a kept `server` item writes `<Tracker>
   server error — will retry`, and `network` writes nothing.
 - **The `auth()` failure path** (the token step,
-  `services/trackers/sync.ts:412-434`). A failure there has no item, so whatever
+  `services/trackers/sync.ts:459-481`). A failure there has no item, so whatever
   its class it aborts the run and leaves the queue untouched. In order:
   1. The account-switch check runs first, for every class: if the owner changed
      since the drain started, the error is dropped silently, with no
      `lastSyncError` and no timer change, and the drain re-kicks
-     (`services/trackers/sync.ts:416-419`).
+     (`services/trackers/sync.ts:463-466`).
   2. Otherwise `lastSyncError` is set only for a failure that is not
-     `network`-class (`services/trackers/sync.ts:422-425`).
-  3. A `config`-class failure sets "Needs setup" (`services/trackers/sync.ts:427`),
+     `network`-class (`services/trackers/sync.ts:469-472`).
+  3. A `config`-class failure sets "Needs setup" (`services/trackers/sync.ts:474`),
      so MyAnimeList's `invalid_client` on refresh parks the queue instead of
      refreshing again on every tick.
   4. The timer stops only when the session is gone (the provider's
-     `isSessionGone`, `services/trackers/sync.ts:432`). For Shikimori that is
+     `isSessionGone`, `services/trackers/sync.ts:479`). For Shikimori that is
      `instanceof ShikiAuthError`, which is narrower than the `auth` class: a
      plain `ShikiApiError(403)` from the refresh endpoint classifies as `auth`
      but leaves the timer running, as in 6.x.
@@ -154,7 +154,7 @@ Each classifier lives beside its adapter, not in `errors.ts`: it needs
 
 - **Shikimori** (`src/main/trackers/shikimori.errors.ts`) mirrors the 6.x
   drain's branches in their order, which the generic drain now applies through
-  the class (`services/trackers/sync.ts:521-569`); the first matching row wins,
+  the class (`services/trackers/sync.ts:571-619`); the first matching row wins,
   and it never returns `config`:
   1. `network`: `isNetworkError`, which is false for any `ShikiApiError`, even
      one whose `cause` carries a network code.
@@ -260,6 +260,121 @@ one tracker: `createTrackerSyncService(provider, keys, deps)`.
 - **A refresh reads the user before the token refresh**, because it goes
   through `auth()`. A switch that lands during the refresh now returns null at
   the owner guard, where 6.x fetched the new account's list with the old token.
+
+## The fan-out writer
+
+`src/main/services/trackers/fan-out.ts` (#692, T2b) is the one writer of list
+changes. Its factory is `createTrackerFanOut({ store, trackers })`, and every
+change goes through `applyChange(malId, change, { target, cause })`, where the
+change is a `{ kind: 'set', values, fields?, origin? }` or a mark-watched
+`{ kind: 'mark-watched', episode }`. `cause` is `'user' | 'merge' | 'mirror' |
+'reconcile'`, named so it can't be read as a queue entry's persisted `origin`.
+`index.ts` builds it with one entry per tracker sync instance (Shikimori alone
+today) and passes it to the routers as `AppDeps.trackers`.
+
+- **The primary** is the stored `trackerPrimary` if that tracker is connected,
+  else the first connected tracker in `shikimori`, `anilist`, `mal` order, else
+  null. Connected means `<provider>User` is set.
+- **A user change to the primary** runs that tracker's own primary branch,
+  unchanged. Shikimori's is `services/trackers/shikimori-primary.ts`: 6.x's
+  `sendRate` / `queueRate` and the two handler bodies, moved verbatim, with the
+  router's refresh and recommendations invalidation injected
+  (`setPrimaryWriter`). It throws or returns null on a refusal, exactly as
+  before; otherwise it returns its result, the rate the change was made against
+  (the live rate when sent, the cached entry when queued) and the rate it wrote.
+- **Mirrors fan out only after the primary wrote**, live or queued (parked
+  included). On a throw or a null no mirror gets an entry and no mirror clock
+  is stamped. The fan-out then reads each other connected tracker's mirror
+  toggle (`trackerMirror[id]`, missing means on) in the same synchronous step
+  as its append, after every await, and skips a title the provider's optional
+  `hasTitle(malId)` says isn't there.
+- **A mirror entry is built from the mirror's own projection**: its cached row
+  with each live queued entry for the title laid over it in queue order, each
+  entry's `intendedFields` only (a title that is only queued starts from the
+  first entry's `before`). For a `set`, `fields` are the fields the user changed
+  (where the post-change values differ from the primary's basis) that also
+  differ from the projection, and `after` is the projection with those applied.
+  A mirror with no row, cached or queued, takes the create rule: `before` is
+  `NO_RATE_BEFORE` and `after` / `fields` are all four post-change values. A
+  mark-watched runs `nextWatchedRate` on the mirror's projection; null sends
+  nothing. Empty `fields` queue nothing. Every mirror entry carries
+  `via: 'mirror'` and is queued, never sent live.
+- **A user change to a non-primary tracker** (T8b's "Copy from primary") is
+  diffed against that tracker's projection, queued only with `via: 'copy'`,
+  never fans out, never prompts, and is skipped when nothing differs. A
+  non-primary mark-watched has no caller and returns null.
+- **`'mirror'` and `'reconcile'` changes** use the same builder with
+  `via: 'mirror'` / `via: 'reconcile'`, restricted to `fields` when given; a
+  `'mirror'` change keeps a carried `origin` (#716) and never writes
+  `resolvedFields`. Neither fans out again, and the drain's settle never calls
+  `applyChange`. A `'merge'` change is refused: the merge leg and the conflict
+  resolution keep writing through `mergeQueues`, with no cache patch.
+- **Clocks and the prompt.** A user change stamps each target tracker's clock
+  (`rateClockKey`): the primary through its own branch, each mirror and copy
+  with its entry's `before` / `after`. `maybeBroadcastCleanupPrompt` stays in
+  the primary branch.
+- **The enqueue cache patch.** Every entry `applyChange` queues goes through
+  the instance's `enqueue(entry)`: the append, then `patchCachedRate` over the
+  signed-in user's existing row (the cache `store.set`, `onRateUpdated`, the
+  `rateUpdatedChannel` broadcast), then `offlineQueueChangedChannel`, in one
+  synchronous step, with no recommendations invalidation and no prompt. No row,
+  no patch. A drift-declined item self-corrects on settle through its
+  `reconcileCacheFromRate`. The entry's `queuedAt` is the larger of now and
+  every `queuedAt` in that queue plus one; the tracker's timer starts and its
+  drain is kicked.
+
+| `cause` | Written to | Clock | Prompt | Fans out |
+|---|---|---|---|---|
+| `'user'`, primary | the primary's own path, then each enabled mirror (`via: 'mirror'`) | each target's | primary only | after the primary wrote |
+| `'user'`, not primary | that tracker's queue, `via: 'copy'` | that tracker's | never | never |
+| `'mirror'` | that tracker's queue, `via: 'mirror'` | none | never | never |
+| `'reconcile'` | that tracker's queue, `via: 'reconcile'` | none (T10's) | never | never |
+| `'merge'` | refused: `mergeQueues`, as today | none | never | never |
+
+### Consolidation and the drop match
+
+- `consolidateQueue` builds one item per MAL id **and `via` value**, placed at
+  its first entry: a `via` entry never consolidates with a non-`via` one, and
+  `'mirror'`, `'reconcile'` and `'copy'` stay apart. Entries with the same `via`
+  consolidate as before.
+- On a via-free item, a later entry that changes a field's value without
+  provenance for it clears that field's provenance (and `origin` once none is
+  left). A user edit that writes the merge's own value keeps it.
+- The settled event carries the item's `via`. The drain drops and stamps 5xx
+  clocks on `(malId, queuedAt, via)` (`dropFromParked`, `recordServerError`,
+  `recordServerErrorInParked` take the `via`), so two items that share a
+  `queuedAt` across `via` values never consume each other's entries.
+- A `via` item with nothing to change makes no `upsertEntry` call; every other
+  item keeps the PATCH on a drift match.
+
+### `discardQueue(trackerId)`
+
+Called by T3c / T5b after the user confirms switching a mirror off. Under that
+tracker's `withQueueLock`, in one synchronous step, it removes every live
+`via: 'mirror'` entry (owner-leg entries, copies, reconcile winners and parked
+buckets stay), rebases the later `via` survivors, reverts the dropped fields in
+the cache locally (no refresh), broadcasts the queue and returns the count.
+`mirrorQueueCount(trackerId)` counts those entries for T3c's warning.
+
+The revert and the rebase are one pure helper, `revertAndRebase(slots, opts)`
+in `lib/shikimori-queue.ts`, shared with Forget (#716 § 5 adds its cache step).
+A slot is one queue entry through a strip: as queued, what is left of it, and
+the fields taken. Per title with a cached row, for each stripped field `f`,
+with `L` the last stripped entry that has `f`:
+
+1. a survivor queued after `L` that has `f` leaves the field alone;
+2. so does a cache that no longer shows `L.after[f]` (a refresh, a settle or a
+   later write rewrote it);
+3. otherwise the target is the `after[f]` of the last survivor queued before
+   `L` that has `f`, else the earliest stripped entry's `before[f]`.
+
+A survivor's fields are its `intendedFields`, so an unscoped survivor counts as
+all four. Only fields that differ are written, with one codec patch per row
+carrying the current row with only those fields replaced. The rebase sets, for
+each stripped `f`, every surviving `via` entry queued after the earliest
+stripped entry for `f` to `before[f]` = the `after[f]` of the nearest survivor
+before it that has `f` (else that earliest stripped `before[f]`), and also
+`after[f]` when it doesn't carry `f`. Non-`via` survivors are never rebased.
 
 ## Statuses and scores
 

@@ -1,36 +1,49 @@
 <script setup lang="ts">
-import { inject } from 'vue';
+// The primary tracker's rate editor (#704), renamed from ShikimoriPanel.vue.
+// With a Shikimori primary its header, link and banner copy are Shikimori's.
+import { computed, inject } from 'vue';
 import { storeToRefs } from 'pinia';
-import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
-import { useShikimoriStore } from '../../stores/shikimori';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
+import { TRACKER_BADGES, trackerTitleUrl } from '@shared/trackers/title-links';
+import { useTrackersStore } from '../../stores/trackers';
 import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
-import { ShikimoriKey } from './keys';
+import { TrackerKey } from './keys';
 
 const props = defineProps<{
   anime: AnimeDetail;
 }>();
 
-const shikimori = inject(ShikimoriKey);
-if (!shikimori) throw new Error('ShikimoriPanel: missing ShikimoriKey injection');
+const trackerRate = inject(TrackerKey);
+if (!trackerRate) throw new Error('TrackerPanel: missing TrackerKey injection');
 
 const {
-  shikiUser,
-  shikiRateStale,
-  shikiStatus,
-  shikiEpisodes,
-  shikiScore,
-  shikiRewatches,
-  shikiLoading,
-  shikiSaving,
-  shikiError,
+  rateStale,
+  mediaId,
+  rateStatus,
+  rateEpisodes,
+  rateScore,
+  rateRewatches,
+  loading,
+  saving,
+  saveError,
   syncState,
   lastSyncError,
-  shikiSave,
+  save,
   triggerSyncNow
-} = shikimori;
+} = trackerRate;
 
-const { offlineQueueLength, sessionExpired } = storeToRefs(useShikimoriStore());
+const trackersStore = useTrackersStore();
+const { primary } = storeToRefs(trackersStore);
+const label = computed(() => (primary.value ? TRACKER_LABELS[primary.value] : ''));
+const badge = computed(() => (primary.value ? TRACKER_BADGES[primary.value] : ''));
+const titleUrl = computed(() =>
+  primary.value && props.anime.myAnimeListId
+    ? trackerTitleUrl(primary.value, props.anime.myAnimeListId, mediaId.value)
+    : null
+);
+const offlineQueueLength = computed(() => trackersStore.queueLengthFor(primary.value));
+const sessionExpired = computed(() => trackersStore.syncStatusFor(primary.value).sessionExpired);
 // A cached rate (#570) carries the detail page's stamp, without a date: the
 // list has no fetch time per title.
 const { isOffline: appOffline } = storeToRefs(useOfflineStore());
@@ -48,25 +61,24 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
 
 <template>
   <div class="side-panel">
-    <template v-if="shikiUser">
+    <template v-if="primary">
       <h4>
-        <span class="sk-logo">Sh</span>Shikimori
-        <span
-          v-if="!shikiLoading && shikiRateStale"
-          class="sk-saved"
-          data-testid="shiki-saved-badge"
-          >{{ appOffline ? 'Saved, offline' : 'Saved' }}</span
-        >
+        <span class="sk-logo">{{ badge }}</span
+        >{{ label }}
+        <span v-if="!loading && rateStale" class="sk-saved" data-testid="shiki-saved-badge">{{
+          appOffline ? 'Saved, offline' : 'Saved'
+        }}</span>
         <a
-          :href="`${SHIKIMORI_ORIGIN}/animes/${props.anime.myAnimeListId}`"
+          v-if="titleUrl"
+          :href="titleUrl"
           target="_blank"
           class="sk-open"
-          title="Open on Shikimori"
+          :title="`Open on ${label}`"
         >
           Open ↗
         </a>
       </h4>
-      <div v-if="shikiLoading" class="shiki-loading">Loading…</div>
+      <div v-if="loading" class="shiki-loading">Loading…</div>
       <template v-else>
         <div class="sk-field">
           <span class="select-label">Status</span>
@@ -74,8 +86,8 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
             <button
               v-for="s in SHIKI_STATUSES"
               :key="s.value"
-              :class="{ on: shikiStatus === s.value }"
-              @click="shikiStatus = s.value"
+              :class="{ on: rateStatus === s.value }"
+              @click="rateStatus = s.value"
             >
               {{ s.label }}
             </button>
@@ -84,7 +96,7 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
         <div class="sk-field">
           <span class="select-label">
             Your score
-            <button v-if="shikiScore > 0" type="button" class="sk-clear" @click="shikiScore = 0">
+            <button v-if="rateScore > 0" type="button" class="sk-clear" @click="rateScore = 0">
               Clear
             </button>
           </span>
@@ -92,8 +104,8 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
             <button
               v-for="n in 10"
               :key="n"
-              :class="{ on: shikiScore === n }"
-              @click="shikiScore = n"
+              :class="{ on: rateScore === n }"
+              @click="rateScore = n"
             >
               {{ n }}
             </button>
@@ -104,7 +116,7 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
           <div class="sk-inline-control">
             <input
               id="shiki-ep"
-              v-model.number="shikiEpisodes"
+              v-model.number="rateEpisodes"
               type="number"
               min="0"
               :max="props.anime.numberOfEpisodes || undefined"
@@ -119,7 +131,7 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
           <label class="select-label" for="shiki-rw">Rewatches</label>
           <input
             id="shiki-rw"
-            v-model.number="shikiRewatches"
+            v-model.number="rateRewatches"
             type="number"
             min="0"
             class="sk-num-input"
@@ -134,26 +146,26 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
                   width:
                     Math.min(
                       100,
-                      Math.round(((shikiEpisodes || 0) / props.anime.numberOfEpisodes) * 100)
+                      Math.round(((rateEpisodes || 0) / props.anime.numberOfEpisodes) * 100)
                     ) + '%'
                 }"
               ></span>
             </div>
-            <span class="ptext">{{ shikiEpisodes || 0 }} / {{ props.anime.numberOfEpisodes }}</span>
+            <span class="ptext">{{ rateEpisodes || 0 }} / {{ props.anime.numberOfEpisodes }}</span>
           </div>
         </div>
-        <button class="sk-save-btn" :disabled="shikiSaving" @click="shikiSave">
-          {{ shikiSaving ? 'Saving…' : 'Save' }}
+        <button class="sk-save-btn" :disabled="saving" @click="save">
+          {{ saving ? 'Saving…' : 'Save' }}
         </button>
       </template>
       <!-- Expiry replaces both the raw error string and the "working offline"
            chip: the edit is queued either way, but only one of them is
            actionable and only one is true (#244). -->
       <div v-if="sessionExpired" class="shiki-expired">
-        <div class="shiki-expired-title">Shikimori session expired</div>
+        <div class="shiki-expired-title">{{ label }} session expired</div>
         <p class="shiki-expired-body">
-          Shikimori rejected the saved sign-in. Your changes are kept and will sync once you sign in
-          again.
+          {{ label }} rejected the saved sign-in. Your changes are kept and will sync once you sign
+          in again.
           <template v-if="offlineQueueLength > 0">
             {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }} pending.
           </template>
@@ -166,7 +178,7 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
           Sign in again
         </button>
       </div>
-      <div v-else-if="shikiError" class="shiki-error">{{ shikiError }}</div>
+      <div v-else-if="saveError" class="shiki-error">{{ saveError }}</div>
       <div
         v-if="offlineQueueLength > 0 && !sessionExpired"
         class="shiki-offline"
@@ -240,7 +252,10 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
 }
 
 .side-panel h4 .sk-logo {
-  width: 18px;
+  /* Grows only for a three-letter badge ("MAL"). */
+  min-width: 18px;
+  padding: 0 3px;
+  box-sizing: border-box;
   height: 18px;
   border-radius: 5px;
   background: var(--st-blue);

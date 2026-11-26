@@ -6,8 +6,9 @@
  * The PC is the real `createStorageService` over `STORE_DEFAULTS` in a temp
  * `cwd` (so `config.json` is the real file), the real Shikimori sync service,
  * IPC router, Shared Library export, attached-library service, merge runner,
- * Prepare for offline (all six production steps) and auto-downloader, wired as
- * `src/main/index.ts` wires them. The network is `golden-shikimori.ts` and a
+ * Prepare for offline (all six production steps, plus #693's per-tracker
+ * rates registration over a disconnected AniList and MyAnimeList) and
+ * auto-downloader, wired as `src/main/index.ts` wires them. The network is `golden-shikimori.ts` and a
  * stub smotret; the test file installs the Shikimori mock and blocks `fetch`.
  *
  * The script: sign in as A, mark an episode watched online, subscribe to
@@ -57,7 +58,13 @@ import {
   createLibrarySyncStep,
   needReviewFrom
 } from '../../src/main/services/prepare-offline/steps/library-sync'
-import { localIntegrityDeps, metadataDeps } from '../../src/main/services/prepare-offline/wiring'
+import {
+  localIntegrityDeps,
+  metadataDeps,
+  registerTrackerRatesSteps
+} from '../../src/main/services/prepare-offline/wiring'
+import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
+import { createGenericTracker } from './generic-tracker'
 import * as autoDownloader from '../../src/main/auto-downloader'
 import { register as registerShikimori } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc'
@@ -524,6 +531,14 @@ export async function runGoldenSession(): Promise<GoldenCapture> {
         abortPrefetch: () => sync.abortPrefetch()
       })
     )
+    // #693: `index.ts`'s registration, with an AniList and a MyAnimeList
+    // instance as T6/T7 add them, both disconnected: neither run gains a row.
+    const anilist = createGenericTracker('anilist', store as never)
+    const mal = createGenericTracker('mal', store as never)
+    registerTrackerRatesSteps(prepare, {
+      store,
+      trackers: () => [sync.tracker as TrackerSyncService<unknown, unknown>, anilist.sync, mal.sync]
+    })
     prepare.registerStep(
       createMetadataStep({
         ...metadataDeps({

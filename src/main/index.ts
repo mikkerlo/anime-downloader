@@ -60,7 +60,11 @@ import { createBinariesStep } from './services/prepare-offline/steps/binaries'
 import { createShikimoriRatesStep } from './services/prepare-offline/steps/shikimori-rates'
 import { createMetadataStep } from './services/prepare-offline/steps/metadata'
 import { createLocalIntegrityStep } from './services/prepare-offline/steps/local-integrity'
-import { localIntegrityDeps, metadataDeps } from './services/prepare-offline/wiring'
+import {
+  localIntegrityDeps,
+  metadataDeps,
+  registerTrackerRatesSteps
+} from './services/prepare-offline/wiring'
 import { createAttachedIntegrityStep } from './services/prepare-offline/steps/attached-integrity'
 import {
   needReviewFrom,
@@ -78,6 +82,7 @@ import { createTrackerFanOut } from './services/trackers/fan-out'
 import { createTrackerRates, queuedAfterOf } from './services/trackers/rates'
 import { createShikimoriEventBridge } from './trackers/events'
 import type { QueuedShikimoriUpdate } from './lib/shikimori-queue'
+import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
@@ -564,7 +569,8 @@ const streamingService = createStreamingService({
   }
 })
 
-// Prepare for offline (#592): six steps, run in this order. Every dependency
+// Prepare for offline (#592): six steps, run in this order, plus a rates step
+// per connected tracker but Shikimori after Shikimori's (#693). Every dependency
 // is read when a run reaches it, so the download manager built in
 // `bootstrap()` is in place by then.
 const prepareOffline = createPrepareOfflineService({
@@ -597,6 +603,9 @@ prepareOffline.registerStep(
     abortPrefetch: () => shikimoriSyncService.abortPrefetch()
   })
 )
+// #693: one rates step per known tracker but Shikimori, connected or not; each
+// joins a run only while its tracker is connected. None until T6/T7 land.
+registerTrackerRatesSteps(prepareOffline, { store, trackers: () => trackerFanOut.syncServices() })
 prepareOffline.registerStep(
   createMetadataStep(
     metadataDeps({ store, isCachable: isCachableAnime, smotretApi, animeCacheService })
@@ -1036,14 +1045,17 @@ async function bootstrap(): Promise<void> {
     isOffline
   })
   offlineKickoff = createOfflineKickoff({
-    syncShikimoriQueue: () => shikimoriSyncService.syncShikimoriQueue(),
+    // Read at each online edge (#693): Shikimori, then every connected tracker.
+    trackers: () =>
+      kickoffTrackers(store, trackerFanOut.syncServices(), () =>
+        shikimoriSyncService.prefetchShikimoriDetails()
+      ),
     suspendDownloads: () => downloadManager.suspendForOffline(),
     resumeDownloads: () => downloadManager.resumeAfterOffline(),
     suspendSyncplay: () => syncplay.suspendForOffline(),
     resumeSyncplay: () => syncplay.resumeAfterOffline(),
     retryBinaries: () => binaryInstalls.retry(),
-    runAutoDownloadTick: () => runAutoDownloadTick('timer'),
-    prefetchShikimoriDetails: () => shikimoriSyncService.prefetchShikimoriDetails()
+    runAutoDownloadTick: () => runAutoDownloadTick('timer')
   })
   startAutoDownloaderTimer()
   setTimeout(() => {
@@ -1107,10 +1119,8 @@ async function bootstrap(): Promise<void> {
 
   registerSyncplayBroadcasts(syncplay, broadcastToAll)
 
-  if (shikimoriSyncService.getQueueLength() > 0) {
-    shikimoriSyncService.startSyncTimer()
-    void shikimoriSyncService.syncShikimoriQueue()
-  }
+  // Shikimori signed in or not, as in 6.0.21; every other tracker when connected (#693).
+  bootDrain(edgeTrackers(store, trackerFanOut.syncServices()))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -15,6 +15,8 @@ type PrepareOfflineStatus = 'ok' | 'warning' | 'failed' | 'skipped'
 type PrepareOfflineStepId =
   | 'binaries'
   | 'shikimori-rates'
+  | 'anilist-rates'
+  | 'mal-rates'
   | 'metadata'
   | 'local-integrity'
   | 'attached-integrity'

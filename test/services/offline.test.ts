@@ -11,8 +11,10 @@ import {
   AUTO_DOWNLOAD_STAGGER_MS,
   PREFETCH_STAGGER_MS,
   createOfflineKickoff,
+  type KickoffTracker,
   type OfflineKickoffDeps
 } from '../../src/main/services/offline/kickoff'
+import { kickoffEntry } from '../../src/main/services/trackers/edges'
 import { OfflineError, TimeoutError } from '../../src/main/lib/net'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
@@ -253,17 +255,18 @@ describe('OfflineService — manual mode', () => {
 })
 
 describe('OfflineService — the online transition runs the kick-off once', () => {
-  it('calls the injected syncShikimoriQueue exactly once per online edge', async () => {
+  it('calls the Shikimori entry’s drain exactly once per online edge', async () => {
     const syncShikimoriQueue = vi.fn(async () => undefined)
     const kickoff = createOfflineKickoff({
-      syncShikimoriQueue,
+      trackers: () => [
+        { drainLabel: 'Shikimori queue drain', drain: syncShikimoriQueue, prefetchLabel: 'p' }
+      ],
       suspendDownloads: vi.fn(),
       resumeDownloads: vi.fn(),
       suspendSyncplay: vi.fn(),
       resumeSyncplay: vi.fn(),
       retryBinaries: vi.fn(),
-      runAutoDownloadTick: vi.fn(),
-      prefetchShikimoriDetails: vi.fn()
+      runAutoDownloadTick: vi.fn()
     })
     const service = createOfflineService({
       store: new InMemoryStorage({ workOffline: true }),
@@ -318,63 +321,161 @@ describe('probeHost', () => {
 })
 
 describe('createOfflineKickoff', () => {
-  function deps(): { [K in keyof OfflineKickoffDeps]: Mock } {
-    return {
-      syncShikimoriQueue: vi.fn(async () => undefined),
+  type Entry = KickoffTracker & { drain: Mock; prefetch?: Mock }
+  const shikiSync = (syncQueue: Mock) => ({ trackerId: 'shikimori' as const, syncQueue })
+  const anilistSync = (syncQueue: Mock) => ({ trackerId: 'anilist' as const, syncQueue })
+
+  /** Shikimori's entry (with its prefetch) and AniList's, as `index.ts` builds them. */
+  function deps(opts: { anilistPrefetch?: boolean } = {}) {
+    const shikiDrain = vi.fn(async () => undefined)
+    const shikiPrefetch = vi.fn(async () => undefined)
+    const anilistDrain = vi.fn(async () => undefined)
+    const anilistPrefetch = vi.fn(async () => undefined)
+    const entries: Entry[] = [
+      kickoffEntry(shikiSync(shikiDrain), shikiPrefetch) as Entry,
+      kickoffEntry(
+        anilistSync(anilistDrain),
+        opts.anilistPrefetch ? anilistPrefetch : undefined
+      ) as Entry
+    ]
+    const d: { [K in keyof OfflineKickoffDeps]: Mock } = {
+      trackers: vi.fn(() => entries),
       suspendDownloads: vi.fn(),
       resumeDownloads: vi.fn(),
       suspendSyncplay: vi.fn(),
       resumeSyncplay: vi.fn(),
       retryBinaries: vi.fn(async () => undefined),
-      runAutoDownloadTick: vi.fn(async () => undefined),
-      prefetchShikimoriDetails: vi.fn(async () => undefined)
+      runAutoDownloadTick: vi.fn(async () => undefined)
     }
+    return { d, entries, shikiDrain, shikiPrefetch, anilistDrain, anilistPrefetch }
   }
 
-  it('online: drain, downloads, Syncplay and binaries at once; auto-download and prefetch staggered', async () => {
-    const d = deps()
+  it('online: every drain, downloads, Syncplay and binaries at once; auto-download and prefetch staggered', async () => {
+    const { d, shikiDrain, anilistDrain, shikiPrefetch } = deps()
     createOfflineKickoff(d).onOnline()
-    for (const k of [
-      'syncShikimoriQueue',
-      'resumeDownloads',
-      'resumeSyncplay',
-      'retryBinaries'
-    ] as const) {
+    expect(d.trackers).toHaveBeenCalledTimes(1)
+    expect(shikiDrain).toHaveBeenCalledTimes(1)
+    expect(anilistDrain).toHaveBeenCalledTimes(1)
+    for (const k of ['resumeDownloads', 'resumeSyncplay', 'retryBinaries'] as const) {
       expect(d[k]).toHaveBeenCalledTimes(1)
     }
     expect(d.runAutoDownloadTick).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(AUTO_DOWNLOAD_STAGGER_MS)
     expect(d.runAutoDownloadTick).toHaveBeenCalledTimes(1)
-    expect(d.prefetchShikimoriDetails).not.toHaveBeenCalled()
+    expect(shikiPrefetch).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(PREFETCH_STAGGER_MS - AUTO_DOWNLOAD_STAGGER_MS)
-    expect(d.prefetchShikimoriDetails).toHaveBeenCalledTimes(1)
+    expect(shikiPrefetch).toHaveBeenCalledTimes(1)
     expect(d.suspendDownloads).not.toHaveBeenCalled()
   })
 
-  it('offline: suspends downloads and Syncplay, and cancels the staggered jobs', async () => {
-    const d = deps()
+  it('reads the tracker list at each edge, not at creation', () => {
+    const { d, entries, anilistDrain } = deps()
+    const k = createOfflineKickoff(d)
+    const late = vi.fn(async () => undefined)
+    entries.push(kickoffEntry({ trackerId: 'mal', syncQueue: late }) as Entry)
+    k.onOnline()
+    expect(anilistDrain).toHaveBeenCalledTimes(1)
+    expect(late).toHaveBeenCalledTimes(1)
+  })
+
+  it('two entries each get their own prefetch timer, and both fire at the PREFETCH_STAGGER_MS mark', async () => {
+    const { d, shikiPrefetch, anilistPrefetch } = deps({ anilistPrefetch: true })
+    createOfflineKickoff(d).onOnline()
+    // The auto-download tick, plus one per prefetch.
+    expect(vi.getTimerCount()).toBe(3)
+    await vi.advanceTimersByTimeAsync(PREFETCH_STAGGER_MS - 1)
+    expect(shikiPrefetch).not.toHaveBeenCalled()
+    expect(anilistPrefetch).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(shikiPrefetch).toHaveBeenCalledTimes(1)
+    expect(anilistPrefetch).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('an entry with no prefetch schedules no timer', () => {
+    const { d, entries } = deps()
+    entries.splice(0, 1)
+    createOfflineKickoff(d).onOnline()
+    // The auto-download tick only.
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('offline: suspends downloads and Syncplay, and clears every staggered timer', async () => {
+    const { d, shikiPrefetch, anilistPrefetch } = deps({ anilistPrefetch: true })
     const k = createOfflineKickoff(d)
     k.onOnline()
     k.onOffline()
+    expect(vi.getTimerCount()).toBe(0)
     expect(d.suspendDownloads).toHaveBeenCalledTimes(1)
     expect(d.suspendSyncplay).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(PREFETCH_STAGGER_MS)
     expect(d.runAutoDownloadTick).not.toHaveBeenCalled()
-    expect(d.prefetchShikimoriDetails).not.toHaveBeenCalled()
+    expect(shikiPrefetch).not.toHaveBeenCalled()
+    expect(anilistPrefetch).not.toHaveBeenCalled()
   })
 
   it('one failing job does not stop the others', async () => {
-    const d = deps()
-    d.syncShikimoriQueue.mockRejectedValue(new Error('boom'))
+    const { d, shikiDrain, anilistDrain } = deps()
+    shikiDrain.mockRejectedValue(new Error('boom'))
     d.resumeDownloads.mockImplementation(() => {
       throw new Error('sync boom')
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     createOfflineKickoff(d).onOnline()
     await vi.advanceTimersByTimeAsync(0)
+    expect(anilistDrain).toHaveBeenCalledTimes(1)
     expect(d.resumeSyncplay).toHaveBeenCalledTimes(1)
     expect(d.retryBinaries).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledTimes(2)
     warn.mockRestore()
+  })
+
+  it('a tracker list that throws skips the drains only; downloads, Syncplay and binaries still go', () => {
+    const { d } = deps()
+    d.trackers.mockImplementation(() => {
+      throw new Error('list boom')
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    createOfflineKickoff(d).onOnline()
+    for (const k of ['resumeDownloads', 'resumeSyncplay', 'retryBinaries'] as const) {
+      expect(d[k]).toHaveBeenCalledTimes(1)
+    }
+    expect(warn.mock.calls.map((c) => c[0])).toEqual(['[offline] tracker list failed:'])
+    warn.mockRestore()
+  })
+
+  it('a synchronous throw from Shikimori’s drain does not skip AniList’s', () => {
+    const { d, shikiDrain, anilistDrain } = deps()
+    shikiDrain.mockImplementation(() => {
+      throw new Error('sync boom')
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    createOfflineKickoff(d).onOnline()
+    expect(anilistDrain).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls.map((c) => c[0])).toEqual(['[offline] Shikimori queue drain failed:'])
+    warn.mockRestore()
+  })
+
+  it('labels: AniList’s failures log as "AniList …", and Shikimori’s labels are unchanged', async () => {
+    const { d, shikiDrain, shikiPrefetch, anilistDrain, anilistPrefetch } = deps({
+      anilistPrefetch: true
+    })
+    for (const m of [shikiDrain, shikiPrefetch, anilistDrain, anilistPrefetch]) {
+      m.mockRejectedValue(new Error('boom'))
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    createOfflineKickoff(d).onOnline()
+    await vi.advanceTimersByTimeAsync(PREFETCH_STAGGER_MS)
+    expect(warn.mock.calls.map((c) => c[0])).toEqual([
+      '[offline] Shikimori queue drain failed:',
+      '[offline] AniList queue drain failed:',
+      '[offline] details prefetch failed:',
+      '[offline] AniList details prefetch failed:'
+    ])
+    warn.mockRestore()
+    expect(kickoffEntry({ trackerId: 'mal', syncQueue: vi.fn() })).toMatchObject({
+      drainLabel: 'MyAnimeList queue drain',
+      prefetchLabel: 'MyAnimeList details prefetch'
+    })
   })
 })

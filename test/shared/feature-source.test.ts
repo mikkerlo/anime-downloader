@@ -16,6 +16,7 @@ import {
 import { createShikimoriProvider } from '../../src/main/trackers/shikimori.provider'
 import { TRACKER_CAPABILITIES, type TrackerProvider } from '../../src/main/trackers/types'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
+import { createTestAniList } from '../helpers/anilist-server'
 
 const IDS: TrackerId[] = ['shikimori', 'anilist', 'mal']
 
@@ -81,11 +82,13 @@ describe('the capability matrix', () => {
     void (() => resolveFeatureSource('friends', state))
   })
 
-  it('agrees with every real provider: no declared capability the matrix lacks, and each declared one implemented', () => {
-    // Shikimori is the only provider on main; #702 and #703 add theirs here.
-    // Equality waits for T11b-d, T6 and T7, which add the remaining members.
+  it('agrees with every real provider: no declared capability the matrix lacks, and each declared one implemented', async () => {
+    // Shikimori and AniList (#703) are on main; #702 adds MyAnimeList here.
+    // Shikimori's equality waits for T11b-d, which move its remaining members.
+    const anilist = (await createTestAniList()).provider
     const providers: TrackerProvider<unknown, unknown>[] = [
-      createShikimoriProvider({ store: new InMemoryStorage() as never }) as never
+      createShikimoriProvider({ store: new InMemoryStorage() as never }) as never,
+      anilist as never
     ]
     for (const p of providers) {
       for (const cap of TRACKER_CAPABILITIES) {
@@ -98,6 +101,12 @@ describe('the capability matrix', () => {
           )
         }
       }
+    }
+    // AniList implements every feature capability it has: its feature rows
+    // equal what it declares, both ways.
+    for (const feature of FEATURE_KEYS) {
+      const cap = FEATURE_CAPABILITY[feature]
+      expect(CAPABILITY_MATRIX[cap].anilist, `anilist.${cap}`).toBe(anilist.capabilities[cap])
     }
   })
 

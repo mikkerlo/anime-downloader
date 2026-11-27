@@ -232,8 +232,8 @@ export function createShikimoriPrimary(deps: ShikimoriPrimaryDeps): ShikimoriPri
         'shikimoriParkedQueues',
         parkEntries(getParkedQueues(), ownerKey(owner), [entry], Date.now())
       )
-      // The live length is unchanged; the broadcast tells Connectors to reload
-      // its kept-changes rows.
+      // The live length is unchanged; the broadcast's `tracker:*` twin tells
+      // the Trackers card to reload its kept-changes rows.
       broadcast(deps.offlineQueueChangedChannel, {
         length: (store.get('shikimoriUpdateQueue') as unknown[]).length
       })

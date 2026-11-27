@@ -493,6 +493,93 @@ describe('useTrackersStore — accounts lifecycle', () => {
   })
 })
 
+// The detail panel's `!accountsLoaded` gate half (#704): the flag, `accounts`
+// and `primary` must settle in one step, or the panel pops in late.
+describe('useTrackersStore — accountsLoaded', () => {
+  it('is false until the first list read resolves, then true in the same step that fills accounts and primary', async () => {
+    const first = deferred<TrackerAccountsState>()
+    installApi({ accounts: first.promise })
+    setActivePinia(createPinia())
+    const store = useTrackersStore()
+    const seen: { primary: TrackerId | null; anyAccount: boolean }[] = []
+    watch(
+      () => store.accountsLoaded,
+      (loaded) => {
+        if (loaded) seen.push({ primary: store.primary, anyAccount: store.anyAccount })
+      },
+      { flush: 'sync' }
+    )
+    await flush()
+    expect(store.accountsLoaded).toBe(false)
+    expect(store.primary).toBeNull()
+
+    first.resolve(accountsState([account('anilist', 2)]))
+    await flush()
+    expect(store.accountsLoaded).toBe(true)
+    expect(seen).toEqual([{ primary: 'anilist', anyAccount: true }])
+  })
+
+  it('flips on an ACCOUNTS_CHANGED that lands before the first read, and stays true when the accounts empty', async () => {
+    const first = deferred<TrackerAccountsState>()
+    installApi({ accounts: first.promise })
+    const store = await makeStore()
+    expect(store.accountsLoaded).toBe(false)
+    emit.accountsChanged(accountsState([account('shikimori', 1)]))
+    expect(store.accountsLoaded).toBe(true)
+    expect(store.primary).toBe('shikimori')
+
+    emit.accountsChanged(accountsState([]))
+    expect(store.accountsLoaded).toBe(true)
+    expect(store.anyAccount).toBe(false)
+  })
+
+  it('flips with no accounts when the first read fails', async () => {
+    installApi({})
+    api.trackerListAccounts.mockRejectedValue(new Error('not ready'))
+    const store = await makeStore()
+    expect(store.accountsLoaded).toBe(true)
+    expect(store.anyAccount).toBe(false)
+    expect(store.primary).toBeNull()
+  })
+})
+
+describe('useTrackersStore — per-tracker sync accessors', () => {
+  it('syncStatusFor / queueLengthFor read one tracker, and the refreshes and triggerSync name it', async () => {
+    installApi({
+      accounts: accountsState([account('shikimori', 1), account('anilist', 2)], 'anilist'),
+      statuses: { anilist: status({ queueLength: 3, sessionExpired: true }) }
+    })
+    const queueLength = vi.fn(async (id: TrackerId) => (id === 'anilist' ? 5 : 0))
+    const triggerSync = vi.fn(async () => {})
+    Object.assign((window as unknown as { api: object }).api, {
+      trackerGetOfflineQueueLength: queueLength,
+      trackerTriggerSync: triggerSync
+    })
+    const store = await makeStore()
+    expect(store.syncStatusFor('anilist').sessionExpired).toBe(true)
+    expect(store.queueLengthFor('anilist')).toBe(3)
+    expect(store.syncStatusFor('shikimori').sessionExpired).toBe(false)
+    expect(store.syncStatusFor(null).state).toBe('idle')
+    expect(store.queueLengthFor(null)).toBe(0)
+
+    await store.refreshOfflineQueueLength('anilist')
+    expect(queueLength).toHaveBeenCalledWith('anilist')
+    expect(store.queueLengthFor('anilist')).toBe(5)
+
+    // A tracker that isn't connected keeps nothing.
+    await store.refreshOfflineQueueLength('mal')
+    expect(store.queueLengthFor('mal')).toBe(0)
+
+    api.trackerGetSyncStatus.mockResolvedValueOnce(status({ queueLength: 1 }))
+    await store.refreshSyncStatus('anilist')
+    expect(store.syncStatusFor('anilist').sessionExpired).toBe(false)
+    expect(store.queueLengthFor('anilist')).toBe(1)
+
+    await store.triggerSync('anilist')
+    expect(triggerSync).toHaveBeenCalledWith('anilist')
+  })
+})
+
 describe('useTrackersStore — refreshRates(trackerId)', () => {
   it('applies the reply itself (cold cache, no broadcast) and reuses an in-flight load', async () => {
     installApi({ accounts: accountsState([account('anilist', 2)]) })

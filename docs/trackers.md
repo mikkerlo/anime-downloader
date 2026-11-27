@@ -76,6 +76,30 @@ kind, episodes, episodesAired, status }, smotretAnime, native }`.
   refresh does it today; null for a title the catalog doesn't have.
 - **Shikimori's `anime.title` is `russian || name`**, the app's display rule;
   `name` stays available as `native.anime.name`.
+- **`anime.poster` is an absolute URL, or null.** Shikimori's is the Home
+  rail's pick (#698): `preview`, then `x96`, then `original`, with a relative
+  path prefixed with `SHIKIMORI_ORIGIN`. AniList's and MAL's are absolute
+  already, so continue-watching uses the poster as it is.
+
+### The primary's entries: `primaryEntries()`
+
+`trackerRates.primaryEntries()` (#698, `services/trackers/rates.ts`, passed to
+the routers as `AppDeps.primaryEntries`) is what the Home rail
+(`home:get-continue-watching`) and local search (`search:local`) read: the
+primary's rate cache, each row through its codec's `entryOf`, with the cached
+row itself as `native`. It writes nothing, and it is `[]` with no primary or
+for a primary whose instance hasn't landed. For a Shikimori primary it reads
+`shikimoriUserRates`, and both replies stay byte-identical to 6.x's, legacy
+rows included (`test/ipc/t4b-golden.test.ts`).
+
+- **Continue-watching keeps Shikimori's own `malId` pick.** For a
+  `trackerId: 'shikimori'` entry its two `malIdMap` joins, the name lookup and
+  the emitted `malId` read `native.rate.target_id`, which a row cached by an
+  older version can lack. Every other tracker uses the entry's `malId`.
+- **Local search uses the entry's `malId`**, which for Shikimori is
+  `target_id ?? shikiAnime.id`, the fallback it applied itself before.
+- **Missing clocks.** Continue-watching treats a `null` or `0` `updatedAt` as
+  missing, as 6.x's truthiness checks did.
 
 ### The Shikimori adapter
 
@@ -169,13 +193,23 @@ Each classifier lives beside its adapter, not in `errors.ts`: it needs
   5. `server`: 5xx.
   6. `item`: everything else.
 - **AniList** (`src/main/trackers/anilist/classify.ts`; #703, T7, extends it
-  against captured fixtures). A 200 can still carry `errors`, so the body is
-  always checked and `errors[0].status` decides when it is there.
-  - `auth`: HTTP 401, or `errors[0].status` 401.
+  against the fixtures under `test/fixtures/anilist/`). A 200 can still carry
+  `errors`, so the body is always checked and `errors[0].status` decides when
+  it is there.
+  - `network`: the fetch threw, timed out, or `OfflineError`.
+  - `auth`: HTTP 401, any `errors[].status` 401, or an `Invalid token` message
+    **whatever its status** (the revoked-token and truncated-paste shapes are
+    unverified; a status-only read of a 400 would drop every queued entry one at
+    a time). Also `auth()`'s session-gone error and the limiter's dead-token
+    rejection.
   - `rate-limit`: 403 (AniList answers 403 when the API is down, so every
     request fails; under `server` the drain would keep sending and drop the
-    whole queue after 24 h) and 429.
-  - `server`: 5xx. `item`: any other 4xx.
+    whole queue after 24 h) and a 429 after the limiter's retries.
+  - `server`: 5xx. `item`: any other 4xx, a 404 on a write, and a successful
+    id-map lookup that omitted the title. Two 404s aren't errors: `MediaList`'s
+    (`getEntry` → null) and `DeleteMediaListEntry`'s (already gone).
+  - AniList never produces `config`: the client ID is embedded, and the
+    implicit grant has no client check at use time.
 - **MyAnimeList** (`src/main/trackers/mal/classify.ts`; #702, T6, extends it):
   - `config`: 400 "Invalid client id", and `invalid_client` on refresh.
   - 403: a body containing "DoS detected" (Akamai throttling) is transient,
@@ -298,6 +332,9 @@ row behind) or null (mark-watched).
   (`setPrimaryWriter`). It throws or returns null on a refusal, exactly as
   before; otherwise it returns its result, the rate the change was made against
   (the live rate when sent, the cached entry when queued) and the rate it wrote.
+  AniList's is `services/trackers/anilist-primary.ts` (#703), queue-first
+  ([below](#the-primary-branch)). A primary with no writer throws `<Tracker>
+  has no primary write path`.
 - **Mirrors fan out only after the primary wrote**, live or queued (parked
   included). On a throw or a null no mirror gets an entry and no mirror clock
   is stamped. The fan-out then reads each other connected tracker's mirror
@@ -410,7 +447,7 @@ is a shared function in `src/main/services/trackers/rates.ts`
   checks: an expired session still queues `update-rate` and
   `mark-episode-watched`, serves `get-rate` from the cache and reports
   `sessionExpired: true`. "No instance" means only a provider that hasn't
-  landed (AniList and MAL before T6/T7).
+  landed (MAL before T6).
 - **With no instance**, `get-rate` answers `null`, `get-rates` an empty
   snapshot, `trigger-sync` does nothing, and `update-rate` throws
   `Not logged in to <Tracker>`. `get-sync-status` returns a default idle status
@@ -462,8 +499,11 @@ view still on `shikimori:*` sees 6.x's sequence. A twin's payload:
 
 The `tracker:*` event channels are config on the bridge in `index.ts`, and
 `trackers.ipc.ts` names none of them, so the emitter scan in
-`test/ipc-channels.test.ts` finds them only there. AniList and MAL instances
-(T6/T7) emit `tracker:*` only.
+`test/ipc-channels.test.ts` finds them only there. The AniList instance (#703)
+emits `tracker:*` only, through its own bridge (`createAniListEventBridge`,
+`trackers/anilist/events.ts`), which shapes the generic service's raw
+payloads into the same four `tracker:*` payloads, with no `raw`; the MAL
+instance (T6) does too.
 
 ## Accounts and sign-in
 
@@ -556,9 +596,13 @@ pending-verifier key exists.
   switch or a restore, then the timer, a drain and the status broadcast.
   Shikimori's router sets its own steps (`setSteps('shikimori', …)`: 6.x's
   `sync.*` calls, the prefetch abort and snapshots in the reset, and the Shared
-  Library login run, which stays on the Shikimori login only). Any other
-  tracker uses its sync instance, looked up through `services/trackers` at
-  call time; with no instance every step is skipped, never thrown.
+  Library login run). Any other tracker uses its sync instance, looked up
+  through `services/trackers` at call time; with no instance every step is
+  skipped, never thrown. Steps that set no `afterLogin`, registered or not,
+  get the lifecycle's `afterLogin` dep, which `index.ts` sets to the same
+  Shared Library login run (#714), so an AniList or MAL login drops a claim
+  and merges that account's libraries too, also once their routers register
+  steps; a registered `afterLogin` (Shikimori's) wins.
 - **Logout** cancels any attempt held for the tracker, parks the live queue
   under the user (`pending: 'keep'`, the default) or drops it (`'discard'`),
   clears the credentials (`vault.commit(key, null)` for AniList and MAL: no
@@ -754,26 +798,35 @@ is missing or older than 6 h.
 `ipc/shikimori.ipc.ts` (`afterBackgroundRefresh`), so a Shikimori refresh
 ticks once. For AniList, `createTickIfAiringSource({ store, runTick })` returns
 `tickIfAiringSource(id)`, which runs one `'rates-refreshed'` tick only while
-`id` is the resolved `airing` source; #703's AniList construction passes it as
-its instance's `onRatesRefreshed` (T2a's hook). MyAnimeList's doesn't get it.
+`id` is the resolved `airing` source; the AniList construction in `index.ts`
+passes it as its instance's `onRatesRefreshed` (T2a's hook), which
+`createAniListSyncService` chains after stamping `ratesFetchedAt`. MyAnimeList's
+doesn't get it.
 
 **Details.** `tracker:get-details(malId, trackerId?)` reads AniList's or
-MyAnimeList's details cache (`anilistAnimeDetails`, `myanimelistAnimeDetails`:
-`{ [malId]: { details, fetchedAt } }`, `details` the ambient `TrackerDetails`)
-and never calls the network. `trackerId` defaults to the `details` source; for
-Shikimori it is null, since Shikimori's details stay on
+MyAnimeList's details cache (`anilistAnimeDetails`, `myanimelistAnimeDetails`)
+and never calls the network. Each provider keeps that cache in its own shape
+and normalizes an entry to the ambient `TrackerDetails` in its
+`cachedDetails(malId)` member: plain-text `description`, `genres`, `status` in
+Shikimori's words (`anons` / `ongoing` / `released`, null when unknown),
+`episodes`, `episodesAired` and `kind`. `trackerId` defaults to the `details`
+source; for Shikimori it is null, since Shikimori's details stay on
 `shikimori:get-anime-details`. A miss kicks that instance's `prefetchDetails`
-(except offline), and the write arrives as `tracker:details-updated`. Both go
-through the generic sync service:
+(except offline), and the write arrives as `tracker:details-updated`. The
+generic sync service carries both halves:
 
-- `writeDetails(malId, details)`: the `animeDetails` `store.set`, then a
-  `{ trackerId, malId, details }` broadcast on `detailsUpdatedChannel`, the
-  path #702's on-demand fetch and #703's batched prefetch write through;
-- `cachedDetails(malId)` and `requestDetails(malId)` behind the handler;
-- the deps `detailsUpdatedChannel` and `prefetchDetails`, which #702's and
-  #703's AniList and MyAnimeList constructions in `index.ts` pass. The
-  Shikimori construction doesn't get the channel, so its details are never
-  double-emitted.
+- `cachedDetails(malId)` (the provider's member) and `requestDetails(malId)`
+  behind the handler;
+- `broadcastDetails(malId, details)`: the `{ trackerId, malId, details }`
+  broadcast on `detailsUpdatedChannel`, which a provider's details writer
+  calls after its `store.set`. AniList's provider takes it as
+  `onDetailsWritten`, called for each entry the prefetch or an on-list
+  `getDetails` writes;
+- the deps `detailsUpdatedChannel` and `prefetchDetails`, which the AniList
+  construction in `index.ts` passes (the batched list prefetch). MyAnimeList's
+  construction passes them when #702 wires its provider, and its `getDetails`
+  write calls `broadcastDetails`. The Shikimori construction doesn't get the
+  channel, so its details are never double-emitted.
 
 **`tracker:accounts-changed`** carries the same `TrackerAccountsState` as
 `tracker:list-accounts`, built by the same `accountsState()`, so a field added
@@ -787,23 +840,30 @@ to the builder (#701's `secondTrackerEnabled`, #702 and #703's
 - each applied setter;
 - a Shikimori session expiry (credentials cleared, user kept), from the
   `setOnSessionExpired` hook beside `broadcastSyncStatus`;
+- an AniList session expiry (a 401 cleared the token, user kept), from the
+  provider's `onSessionExpired` (#703), and each AniList "Needs setup"
+  transition, from its instance's `onNeedsSetupChanged`;
 - a vault read that finds a blob it can't decrypt (`credentialState:
   'locked'`), from the vault's `onLocked`;
 - a `tracker:set-client-config` that changes MAL's "Needs setup".
 
 Shikimori's classifier never returns `config`, so its "Needs setup" never
-changes. #702 (T6) and #703 (T7) pass `notifyAccountsChanged()` as their
-instances' `onNeedsSetupChanged` and call it from their expiry handling.
+changes. #703 (T7) passes `notifyAccountsChanged()` as AniList's instance's
+`onNeedsSetupChanged` (AniList never produces `config` either, so it stays
+quiet) and calls it from its expiry handling; #702 (T6) does the same for MAL.
 
 ## The renderer store
 
 #697 (T4a) adds `useTrackersStore` (`src/renderer/src/stores/trackers.ts`),
-the one place in the renderer that reads the `tracker:*` surface. No component
-subscribes to a `tracker:*` broadcast; [Renderer](./renderer.md) lists the
-store's state. `useShikimoriStore` stays as a facade for the views not moved
-yet: it takes rates, the queue length and the sync status from the `tracker:*`
-twins filtered to `trackerId: 'shikimori'`, never also from the `shikimori:*`
-events, so a double-emitted change is applied once.
+the one place in the renderer that holds the `tracker:*` state. The one
+component that calls the surface itself is the Settings → Trackers card
+(below); [Renderer](./renderer.md) lists the store's state.
+`useShikimoriStore` stays as a facade for the views not moved yet: it takes
+rates, the queue length and the sync status from the `tracker:*` twins
+filtered to `trackerId: 'shikimori'`, never also from the `shikimori:*`
+events, so a double-emitted change is applied once. Home and Library read
+`primaryRates` and load through `refreshRates(primary)` (#698; [Renderer](./renderer.md)
+has the details).
 
 - **Connected** means the account's `user` is set. An expired session keeps
   its user, so it stays connected and in `aggregateSyncState`. A changed
@@ -828,6 +888,37 @@ events, so a double-emitted change is applied once.
   source resolves (so that tracker has a user). `detailsFor(trackerId, malId)`
   reads `detailsByTracker`, which the eager `tracker:details-updated`
   subscriber upserts per tracker.
+- **`accountsLoaded`** (#704) goes true in the same step that applies the
+  first accounts payload (the init read, or a broadcast that beat it), or when
+  that read fails, and never goes back. The detail page gates its rate panel
+  on `anyAccount || !accountsLoaded`, so the flag, `accounts` and `primary`
+  settle together and the panel never pops in late.
+
+**The detail page's rate panel** (#704, `TrackerPanel.vue` with
+`useTrackerRate`) edits the primary: it loads through `tracker:get-rate` once
+`accountsLoaded` is true, saves through `tracker:update-rate` (the primary,
+then the mirrors), follows `rateFor(primary, malId)`, and takes its offline
+queue length, `sessionExpired` and sync state from the primary's entry. Its
+`loading` is per mount, so from the second detail page on Continue still waits
+for the primary's rate. A response is applied, and clears `loading`, only while
+its tracker and MAL id are still current, so a late reply from the old primary
+after a switch is dropped. `tracker:get-rate` answers the remote or cached row
+without the queue on top, so the panel lays the primary's queued `after` over
+the reply, as `projectRate` does: a switch or a mount with a change still queued
+shows that change, and a Save can't write the remote value back over it. The
+AniList "Open ↗" link needs the result's `mediaId` and is hidden without it.
+
+**The sidebar, the player and Watch Together** (#699). The sidebar's footer
+chip shows when `anyAccount`, with the primary account's nickname and avatar,
+and reads `aggregateSyncState`. With one tracker it is the chip it always was;
+with two or more it opens a per-tracker popover (`TRACKER_LABELS` names). The
+player calls `tracker:mark-episode-watched` and reads no tracker state: main
+decides who to mark, and with nothing connected the call resolves `null`. The
+Watch Together nickname is the primary's, seeded only into an empty username:
+the Settings tab reads the store, while the view and `useSyncplayClient` read
+`tracker:list-accounts` once at connect. The cleanup prompt stays in each
+tracker's primary branch, so its smotret title is the primary's own cache row
+(Shikimori's today; AniList's and MAL's primary branches must pass theirs).
 
 **Emit order is a contract.** A drain broadcasts the cache update
 (`tracker:rate-updated`) before the queue change
@@ -841,6 +932,42 @@ branch of a drain has no cache row to reconcile, so it emits no
 `tracker:rate-updated`, only the queue change. `rateFor` goes from the queued
 values to `null` and stays there until the next `tracker:rates-refreshed`
 carries the row. Nothing in the drain triggers one; this is accepted for now.
+
+## Settings → Trackers
+
+#700 (T5a) moves the Shikimori account out of Settings → Connectors (which
+keeps the Anime 365 token) into a Trackers tab right after it
+(`TrackersTab.vue`), as a generic `TrackerAccountCard` keyed by `trackerId`.
+T6 adds the MyAnimeList card and T5b the multi-account controls. #703 (T7)
+adds the AniList card (`AniListConnectForm.vue`), shown only while the
+accounts state's `newTrackerCardsEnabled` is true, so a Shikimori-only user of
+a packaged build sees the one card.
+
+- **States** come from `useTrackersStore` for the card's tracker: the
+  account's `user` (Connected, or not connected), and from its
+  `aggregateSyncState` row or the account, Session expired and Needs setup.
+  The expired card's pending count is the row's `queueLength`.
+- **Channels.** Logout (`{ pending }`) and the kept-changes rows use
+  `tracker:logout`, `tracker:get-parked-queues` and
+  `tracker:discard-parked-queue` with the card's `trackerId`; a bucket's
+  `ownerId` is a string, so the card compares `String(user.id)`. The rows
+  reload on `tracker:offline-queue-changed` for that tracker, the card's one
+  subscription (Shikimori's legacy twin is never also subscribed).
+- **The connect body** is the tracker's own component, passed to the card
+  (`tracker-connect-form.ts`: the card's `complete(signIn)` reads the previous
+  account before the sign-in, for the switch prompt). Shikimori's,
+  `ShikimoriConnectForm.vue`, stays on `shikimori:get-auth-url` /
+  `shikimori:exchange-code` for good: `tracker:begin-auth` refuses while
+  offline, and the code paste must behave as in 6.x.
+- **The facade's `user`.** Nothing derives `useShikimoriStore().user` from the
+  accounts broadcast, so the Shikimori card calls `refreshUser()` after a
+  connect, after every logout and on mount when it is unset.
+- **Copy.** `TRACKER_LABELS` (`src/shared/trackers/labels.ts`) names a
+  tracker in UI copy: the card and `TrackerPendingDialog` take the card's
+  tracker, and the Work offline note and the cleanup prompt take the primary
+  (`usePrimaryTrackerLabel`, Shikimori's while there is none). Main's
+  `SESSION_EXPIRED_MESSAGE` and `NOT_CONNECTED_MESSAGE` point at
+  Settings → Trackers.
 
 ## Boot, the online edge and Prepare
 
@@ -868,9 +995,11 @@ means the tracker's `<provider>User` key is set (`isTrackerConnected`).
   edge, not one after another; an entry without one schedules no timer, and
   `onOffline` clears every pending one. Shikimori keeps its labels
   (`'Shikimori queue drain'`, `'details prefetch'`); every other tracker is
-  `'<Name> queue drain'` / `'<Name> details prefetch'`. Only Shikimori's entry
-  has a prefetch: the generic instance has none, and T7 passes AniList's (list
-  titles only, per the AniList terms of use).
+  `'<Name> queue drain'` / `'<Name> details prefetch'`. Shikimori's and
+  AniList's entries have a prefetch: `kickoffTrackers` takes AniList's as
+  `{ anilist: () => anilistProvider.prefetchDetails() }` (#703; list titles
+  only, per the AniList terms of use). The generic instance has none, so MAL's
+  entry has none.
 - **Prepare for offline** is the exception to "read at the edge": steps are
   registered once at module load and `registerStep` rejects a duplicate id.
   So `registerTrackerRatesSteps` (`prepare-offline/wiring.ts`) registers one
@@ -879,12 +1008,250 @@ means the tracker's `<provider>User` key is set (`isTrackerConnected`).
   `joinsRun()` (its tracker is connected when the run starts) is the only gate.
   The ids are `anilist-rates` / `mal-rates`, the labels `AniList rates` /
   `MyAnimeList rates`; `prefetch` and `abortPrefetch` are optional deps, and
-  without them the step runs two phases (`total: 2`). A tracker that
-  disconnects mid-run has already joined, and its step reports "Not logged
-  in". `shikimori-rates` is unchanged and always joins.
+  without them the step runs two phases (`total: 2`). AniList's step gets
+  both from the wiring's `prefetch` map (#703), so it runs three phases;
+  aborting the run aborts the prefetch, and its queued `prefetch`-class
+  requests leave the limiter. A tracker that disconnects mid-run has already
+  joined, and its step reports "Not logged in". `shikimori-rates` is unchanged
+  and always joins.
 
-Until T6/T7 add the AniList and MAL instances, the fan-out's `syncServices()`
-holds Shikimori's alone, so nothing new registers or drains in production.
+The fan-out's `syncServices()` holds Shikimori's and AniList's instances
+(#703); MAL's joins with T6. AniList's takes part only while connected.
+
+## AniList
+
+#703 (T7) adds AniList as a `TrackerProvider`, with its own sync instance and
+queue, one host-wide rate limiter, the MAL → AniList id map, the capabilities
+later slices consume, and a Settings card. The code is in
+`src/main/trackers/anilist/`: `client.ts` (the GraphQL transport), `limiter.ts`
+(the host limiter), `id-map.ts`, `provider.ts`, `queries.ts`, `classify.ts`,
+`errors.ts`, `sync.ts` (the instance) and `events.ts` (its broadcast bridge).
+The primary branch is `services/trackers/anilist-primary.ts`.
+
+### Sign-in and the session
+
+- **The implicit grant.** The client ID `57991` ("anime-dl") is a constant in
+  `client.ts`; there is no secret. `tracker:begin-auth('anilist')` opens
+  `https://anilist.co/api/v2/oauth/authorize?client_id=57991&response_type=token`,
+  and AniList's pin page shows the token to copy. `tracker:complete-auth`
+  takes the pasted token, trimmed, and checks it with `Viewer` before anything
+  is stored.
+- **What is stored.** `anilistCredentials` (vault) is `{ accessToken,
+  expiresAt }`, with `expiresAt` the JWT's `exp` in ms, decoded from the
+  payload segment and not verified (the token only ever goes back to AniList).
+  A token whose payload doesn't decode is still accepted, with `expiresAt:
+  null` and no expiry warning. `anilistUser` is the `TrackerUser` plus the
+  `Viewer`'s `scoreFormat` and `displayAdultContent`, and `tokenExpiresAt`, the
+  same `exp` in plain text: the accounts state reports it as the account's
+  `sessionExpiresAt` without decrypting the vault.
+- **A rejected token.** Any `Viewer` failure but `network`, `server` and
+  `rate-limit` (a 403 while the API is down included) is "That token wasn't
+  accepted", class `auth`; a transient failure keeps its class, so the user
+  retries rather than re-pasting. Nothing is stored either way, and a rejected
+  paste never reaches the session-expiry path.
+- **The 1-year token** has no refresh and no scopes, so it is full account
+  access. The card warns from `expiresAt − 14 days`: an amber "Expires ‹date›"
+  chip, "Your AniList sign-in expires on ‹date›. Sign in again to keep
+  syncing.", and Sign in again, which runs the same flow.
+- **401 → Session expired, the token cleared.** A request whose token AniList
+  refuses (HTTP 401, any `errors[].status` 401, or an `Invalid token` message)
+  sets `anilistSessionExpired`, clears `anilistCredentials`, keeps
+  `anilistUser` and the queue, and calls the provider's `onSessionExpired`
+  (`index.ts`: the sync status, then `notifyAccountsChanged()`). The limiter
+  rejects every queued request carrying that token unsent. The clear runs only
+  when the refused token is still the stored one (a vault read and a blob
+  compare), so a 401 for an account switched away from, or a refused paste,
+  clears nothing.
+- **The session** is `AniListSession = { token, userId }`. `auth()` reads
+  `anilistUser` before its first `await` (the vault read), so `userId` is the
+  owner the drain read at its presence check; a null user throws `Not logged
+  in to AniList`, and an empty or locked credential throws the session-gone
+  error (`isSessionGone`, class `auth`). Every data member takes the session
+  first and never re-reads the credential or the user.
+- **The card flag.** `newTrackerCardsEnabled(isPackaged)`
+  (`src/main/trackers/flags.ts`) is true unpackaged and false packaged until
+  #698 (T4b), #699 (T4c) and #704 (T8a) have landed. `index.ts` computes it
+  once and passes it through `AppDeps` and the lifecycle; the accounts state
+  carries it, the renderer shows the AniList card only while it is true, and
+  `tracker:begin-auth` / `tracker:complete-auth` refuse AniList and MAL while
+  it is false.
+
+### The GraphQL client and the host limiter
+
+- **Every request** is a POST of `{ query, variables }` to `anilistOrigin()`
+  (`https://graphql.anilist.co`, or `ANIME_DL_ANILIST_ORIGIN` unpackaged)
+  through `fetchWithTimeout`, so the offline refusal, the timeouts and the
+  network observer apply. A user call carries `Authorization: Bearer`; the id
+  map, airing, details, calendar, relations and recommendations reads send no
+  token. Any `errors[]` entry fails the call, a 200 included, with an
+  `AniListApiError` (a `TrackerApiError`, so `isNetworkError` excludes it)
+  carrying the HTTP status, `errors[0].status` and the scrubbed, truncated body.
+- **One limiter for the host** (`anilistLimiter` in `client.ts`): every call
+  goes through it, whichever instance, capability or prefetch makes it. One
+  request is in flight at a time, spaced at least `60 s / limit` apart, with
+  the limit seeded at 30 a minute and re-seeded from `X-RateLimit-Limit`.
+- **Priority classes**: `interactive` (user reads and writes, the drain,
+  `Viewer`, the list refresh) > `reconcile` (T10's paging) > `prefetch`
+  (details, id-map warmup). A lower-class request never runs while a higher
+  one waits; within a class, FIFO. An id-map lookup takes its caller's class.
+- **The window.** `X-RateLimit-Remaining: 0` holds the whole queue until
+  `X-RateLimit-Reset`. A 429 is host-wide too: every class waits for
+  `Retry-After`, else until `X-RateLimit-Reset`, else a 10 s backoff, and the
+  rate-limited request goes back to the front of its class. After 3 retries
+  the 429 is the answer (`rate-limit`). Every wait is clamped to 60 s, so a
+  skewed clock can't park the queue for hours.
+- **A 403 is not a 429**: it carries no rate-limit headers, so it is answered
+  at once, with no retry and no pause, and classifies as `rate-limit`; the
+  drain aborts and the next tick tries again.
+- **Abortable.** A queued request whose signal aborts leaves the queue, so
+  Prepare's Cancel and an abort of the details prefetch leave no work behind.
+
+### The id map
+
+- **MAL → AniList** through `Media.idMal`: `Page(page: 1, perPage: 50) {
+  media(idMal_in: $ids, type: ANIME) { id idMal } }`, chunked by 50 (`perPage`
+  is capped there), matched on `idMal` because results come out of order and
+  unknown ids are omitted.
+- **Duplicate `idMal`.** Nothing makes `idMal` unique. Of two media for one MAL
+  id the map keeps the one on the user's list, otherwise the lowest `id`; the
+  list read applies the same rule to two entries with different `mediaId`s.
+- **`anilistIdMap`** is `{ [malId]: { anilistId, at } }`. Only a successful
+  lookup that omits an id records a negative entry (`anilistId: null`), which
+  expires after 7 days; a lookup that fails records nothing, and the drain
+  applies that failure's class. Every list read seeds it, and it survives a
+  logout.
+- **Never filtered by `isAdult`**: no document carries it, so adult titles on a
+  Shikimori list map. `displayAdultContent` applies only to For You, Calendar
+  and activity, client-side.
+- **"Not on AniList"**: `hasTitle(malId)` is false for a fresh negative entry,
+  so the fan-out queues no mirror for it; `getEntry` throws an `item`-class
+  error for it (the drain drops the item), and `tracker:get-rate` answers
+  `{ values: null, stale: false }` with no `mediaId`. A cold map offline queues
+  by MAL id, and the drain resolves it at `interactive`.
+
+### The list
+
+- **Read**: `MediaListCollection(userId, type: ANIME, forceSingleCompletedList:
+  true, perChunk: 500, chunk)`, following `hasNextChunk`, scores as
+  `score(format: POINT_100)`. Custom lists are skipped and entries deduped by
+  `mediaId`. An entry with no `idMal`, and the higher media id of two sharing
+  one, are left out and counted in the refresh log line (`[anilist] list
+  refresh: …`).
+- **Known gap of the MAL-keyed model: entries with no `idMal`** (AniList-only
+  titles) never reach the normalized list, so an AniList-only user doesn't see
+  them in the Home rail, the Library tabs or the list view. An AniList-native
+  key would change every store key #690 defines; it is a follow-up.
+- **Normalized**: `malId` = `media.idMal`, `remoteId` = the list-entry `id`,
+  `updatedAt` = `updatedAt × 1000`; `anime.title` is English, else romaji;
+  `poster` is `coverImage.large`, an absolute URL; `kind` the `format`;
+  `episodesAired` as `getAiringInfo` counts it. `native` is the `MediaList`
+  row, untouched, and the cache row is `{ entry: native, smotretAnime }`.
+- **`getEntry`** reads `MediaList(userId, mediaId) { id status
+  score(format: POINT_100) progress repeat updatedAt }`; its "not found"
+  (`errors[].status` 404) is null, the drain's create branch.
+- **`upsertEntry`** sends `SaveMediaListEntry(mediaId, …)` with only the
+  changed fields: `status`, `progress` for `episodes`, `scoreRaw = appScore ×
+  10` for `score` (never `score`), and `repeat` for `rewatches`. With nothing
+  changed it writes nothing and reads the entry back. It returns the entry with
+  `getEntry`'s selection, which the drain adopts: the stored POINT_100 score
+  and the list-entry `id` (the `remoteId` T10's `deleteEntry` needs).
+- **`deleteEntry`** sends `DeleteMediaListEntry(id)` with the list-entry id; a
+  404 means already gone and counts as success.
+- **The rewatch count** is translated on every read and write, so the cache,
+  the mirrors and T10 all see the app's count-at-start (`nextWatchedRate`).
+  `ANILIST_REPEAT_SHIFT` is the shift on a `REPEATING` entry: 0 (the identity)
+  until the verify task below decides it. Under a shift of 1, a status write
+  into or out of `rewatching` also sends `repeat`.
+
+### Statuses, scores and lossy scales
+
+The status table is [below](#statuses-and-scores). Every read is POINT_100 and
+the user's `scoreFormat` only gives the scale's precision, so an untouched
+POINT_100 85 (app 9) is never part of `changedFields` and is never rewritten
+by an episode bump. **On a lossy scale** (`POINT_5`, `POINT_3`) a written
+`scoreRaw: 70` is stored at the scale's step (80, 85) and reads back as a
+different app score (8, 9). The cache adopts what the server returns, so the
+app's 7 becomes the read-back value and a second drain sends nothing. T10 must
+treat that read-back as no diff. The cache codec keeps a stored raw while it
+still reads as the app score, else stores the app score on the format's step.
+
+### The primary branch
+
+`createAniListPrimary` is AniList's writer for `applyChange` (#692),
+registered as the AniList fan-out entry's `writePrimary`. It is queue-first:
+every user change to an AniList primary is queued through the instance's
+`enqueue` (the append, the cache patch and the broadcasts in one step) and the
+drain sends it, where Shikimori's branch sends live. AniList allows 30 requests
+a minute, and a live send would spend two on every edit (the `MediaList` read
+and the write); the drain sends only the changed fields through the limiter.
+The entry is field-scoped (`fields`, no `via`): the fields that differ from
+AniList's projection. So the drain's drift check keeps a progress the server
+has moved past, and a mark-watched never lowers it. With no row, cached or
+queued, the branch reads the live entry once (a cold cache can't tell a title
+off the list from a list not loaded yet, and a create-rule entry against a
+row the server has would drain as drift and send nothing); with no live entry
+either, or offline, it takes the create rule, all four fields. A switch
+during that read parks the change for the account it was made on. It stamps
+`anilist:<userId>:<malId>`, calls `maybeBroadcastCleanupPrompt` with the
+AniList row's own `smotretAnime`, and returns its `basis` and `after` (the
+values are its `result`), which feed the mirrors as Shikimori's do. A set for
+a title not on AniList throws; a mark-watched for one is null.
+
+### Capabilities
+
+- **`getAiringInfo(malId)`** (T11a's `airing`) is cache-first: an on-list
+  title answers from `anilistUserRates` while the list cache is younger than
+  6 h, an `anilistAnimeDetails` entry younger than 6 h answers next, and only
+  then one `Page.media(idMal_in)` read at `interactive`. The cache's age is
+  `ratesFetchedAt`, in memory on the provider, stamped when `refreshRates`
+  writes the list (the instance's `onRatesRefreshed`, before any caller's), 0
+  at boot. Aired is `nextAiringEpisode − 1`, else a `FINISHED` title's total,
+  else 0; `episodes` can be null. An off-list answer is kept in memory only.
+- **`getDetails` and the prefetch.** `prefetchDetails` fetches the list
+  titles' description and genres in batches of 50 at `prefetch`, never beyond
+  the list (ToU clauses 2 and 3), returns early offline, and is abortable
+  (`abortPrefetch`). It is the AniList entry's `prefetch` on the online edge
+  and the third phase of the `anilist-rates` step, and a logout or a switch
+  aborts it. Each entry it writes, and an on-list `getDetails` write, is
+  broadcast as `tracker:details-updated` through `onDetailsWritten` (#706);
+  `cachedDetails(malId)` maps an entry's AniList status (`FINISHED` →
+  `released`, `RELEASING` / `HIATUS` → `ongoing`, `NOT_YET_RELEASED` →
+  `anons`, `CANCELLED` → unknown) and strips the description's markup.
+- **`getCalendar`**: `Page.media(id_in)` with `nextAiringEpisode`, chunked by
+  50, matched on `id`, adult titles filtered by `displayAdultContent`.
+- **`getRelated(ref)`** returns `Media.relations` edges with MANGA dropped,
+  raw-typed; **`getRelatedBatch(anilistIds, { priority })`** (T11c's walk) the
+  same per media, matched on `id`, a node with no `idMal` kept.
+- **`getRecommendations(seedMalIds)`**: `Media.recommendations` per mapped
+  seed, adult ones filtered by `displayAdultContent`.
+- **`getFriendsRates(session, malId)`**: `Page.mediaList(mediaId,
+  isFollowing: true)` with the AniList id. **`getFriendsActivity(session)`**:
+  `Page.activities(isFollowing: true, type_in: [ANIME_LIST])`, adult media
+  filtered. `getFriends` (`Page.following`) is T12's.
+
+### Terms of use
+
+The background details prefetch never goes beyond the user's own list. Copy
+says "Connect AniList" / "Open AniList", never "AniList" in the app's own
+name. The token is in the vault and in `FORBIDDEN_FIELDS`, and never reaches a
+log line: an error carries only the scrubbed response body.
+
+### Verify tasks still open
+
+None of these could be run in #703 (no real AniList account, and no live
+requests). Until a real-account check answers them, the code takes the
+conservative default named in each:
+
+- **The token-rejection shapes** for a revoked token and a truncated paste.
+  Only an expired or missing token was probed (HTTP 401, `errors[0].status`
+  401). Default: an `Invalid token` message is `auth` whatever its status; the
+  400 fixture (`invalid-token-400.json`) is a guess, not a capture.
+- **Whether `repeat` counts a rewatch at its start.** Default:
+  `ANILIST_REPEAT_SHIFT = 0`. The round-trip test runs both shifts.
+- **Whether `Page.media` filters adult titles implicitly** for a viewer with
+  `displayAdultContent: false` and unauthenticated. Default: no `isAdult`
+  argument anywhere; if the probe finds a filter, the disabling argument goes
+  into `ID_MAP_LOOKUP`.
 
 ## Statuses and scores
 

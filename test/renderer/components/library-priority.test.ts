@@ -9,7 +9,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import LibraryView from '../../../src/renderer/src/components/views/LibraryView.vue'
-import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
+import { useTrackersStore } from '../../../src/renderer/src/stores/trackers'
+import {
+  accountsState,
+  snapshotOf,
+  trackerEntry,
+  trackersApi,
+  type TrackersApi
+} from '../../helpers/trackers-api'
 
 function anime(id: number): AnimeSearchResult {
   return {
@@ -25,21 +32,37 @@ function anime(id: number): AnimeSearchResult {
   }
 }
 
-function stubApi(overrides: Record<string, unknown>): void {
-  ;(window as unknown as { api: unknown }).api = new Proxy(overrides, {
+function stubApi(overrides: Record<string, unknown>, trackers: TrackersApi = trackersApi()): void {
+  const target = { ...trackers.api, ...overrides }
+  ;(window as unknown as { api: unknown }).api = new Proxy(target, {
     get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : () => () => {})
   })
 }
 
 /** LibraryView with three entries; priority + rates are the variables. */
-function mountLibrary(priority: string[], extra: Record<string, unknown> = {}) {
-  stubApi({
-    libraryGet: vi.fn().mockResolvedValue([anime(1), anime(2), anime(3)]),
-    libraryGetStatus: vi.fn().mockResolvedValue({}),
-    libraryGetPriority: vi.fn().mockResolvedValue(priority),
-    ...extra
-  })
+function mountLibrary(
+  priority: string[],
+  extra: Record<string, unknown> = {},
+  trackers: TrackersApi = trackersApi()
+) {
+  stubApi(
+    {
+      libraryGet: vi.fn().mockResolvedValue([anime(1), anime(2), anime(3)]),
+      libraryGetStatus: vi.fn().mockResolvedValue({}),
+      libraryGetPriority: vi.fn().mockResolvedValue(priority),
+      ...extra
+    },
+    trackers
+  )
   return mount(LibraryView)
+}
+
+/** `trackerId` alone connected, watching anime 1. */
+function watchingOne(trackerId: TrackerId): TrackersApi {
+  return trackersApi({
+    accounts: accountsState([trackerId]),
+    rates: { [trackerId]: [trackerEntry(trackerId, 501, 'watching', { smotretAnime: anime(1) })] }
+  })
 }
 
 function tabLabels(wrapper: ReturnType<typeof mount>): string[] {
@@ -119,28 +142,15 @@ describe('LibraryView — Priority tab', () => {
     expect(tabLabels(wrapper)).toEqual(['All', 'Priority'])
   })
 
-  it('renders Priority alongside the Shikimori status pills, second in the strip', async () => {
-    const wrapper = mountLibrary(['2'])
-    const shiki = useShikimoriStore()
-    shiki.rates = [
-      {
-        rate: {
-          id: 1,
-          score: 0,
-          status: 'watching',
-          episodes: 0,
-          rewatches: 0,
-          updated_at: '',
-          target_id: 1
-        },
-        shikiAnime: { id: 1, name: 'Anime 1' },
-        smotretAnime: anime(1)
-      }
-    ] as unknown as typeof shiki.rates
-    await flushPromises()
+  it.each(['shikimori', 'anilist'] as const)(
+    'renders Priority alongside the %s status pills, second in the strip',
+    async (trackerId) => {
+      const wrapper = mountLibrary(['2'], {}, watchingOne(trackerId))
+      await flushPromises()
 
-    expect(tabLabels(wrapper)).toEqual(['All', 'Priority', 'Watching', 'Planned', 'Completed'])
-  })
+      expect(tabLabels(wrapper)).toEqual(['All', 'Priority', 'Watching', 'Planned', 'Completed'])
+    }
+  )
 
   it('falls back to the onboarding copy when the last entry leaves an empty library', async () => {
     // Un-starring the last (prioritized) entry from the Priority tab empties the
@@ -211,5 +221,68 @@ describe('LibraryView — poster ids (#570)', () => {
     resolveIds([1])
     await flushPromises()
     expect(wrapper.find('img.poster').attributes('src')).toBe('anime-poster://1')
+  })
+})
+
+// #698: the hydrate gate goes through `useTrackersStore().refreshRates`.
+describe('LibraryView — hydrating the primary rates (#698)', () => {
+  const ENTRY = trackerEntry('anilist', 501, 'watching', { smotretAnime: anime(1) })
+
+  function libraryApi(trackers: TrackersApi): void {
+    stubApi(
+      {
+        libraryGet: vi.fn().mockResolvedValue([anime(1), anime(2), anime(3)]),
+        libraryGetStatus: vi.fn().mockResolvedValue({}),
+        libraryGetPriority: vi.fn().mockResolvedValue([])
+      },
+      trackers
+    )
+  }
+
+  it('a cold cache: the gate calls the store action, whose reply alone fills the tabs', async () => {
+    const trackers = trackersApi({ accounts: accountsState(['anilist']) })
+    // The store's first pull found nothing (offline, nothing cached); by the
+    // time Library mounts, the cold-cache fetch answers. No broadcast follows it.
+    trackers.api.trackerGetRates
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(snapshotOf('anilist', [ENTRY]))
+    libraryApi(trackers)
+    useTrackersStore()
+    await flushPromises()
+    expect(trackers.api.trackerGetRates).toHaveBeenCalledTimes(1)
+
+    const wrapper = mount(LibraryView)
+    await flushPromises()
+
+    expect(trackers.api.trackerGetRates.mock.calls).toEqual([['anilist'], ['anilist']])
+    expect(tabLabels(wrapper)).toEqual(['All', 'Watching', 'Planned', 'Completed'])
+  })
+
+  it("mounting during the store's first pull sends no second trackerGetRates", async () => {
+    const trackers = trackersApi({ accounts: accountsState(['anilist']) })
+    let answer!: (s: TrackerRatesSnapshot) => void
+    trackers.api.trackerGetRates.mockImplementation(
+      () => new Promise<TrackerRatesSnapshot>((r) => (answer = r))
+    )
+    libraryApi(trackers)
+    useTrackersStore()
+    await flushPromises()
+    expect(trackers.api.trackerGetRates).toHaveBeenCalledTimes(1)
+
+    const wrapper = mount(LibraryView)
+    await flushPromises()
+    expect(trackers.api.trackerGetRates).toHaveBeenCalledTimes(1)
+
+    answer(snapshotOf('anilist', [ENTRY]))
+    await flushPromises()
+    expect(tabLabels(wrapper)).toEqual(['All', 'Watching', 'Planned', 'Completed'])
+  })
+
+  it('no account: no rates are asked for', async () => {
+    const trackers = trackersApi()
+    libraryApi(trackers)
+    mount(LibraryView)
+    await flushPromises()
+    expect(trackers.api.trackerGetRates).not.toHaveBeenCalled()
   })
 })

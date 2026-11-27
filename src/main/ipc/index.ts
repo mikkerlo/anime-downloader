@@ -4,6 +4,7 @@ import type { StorageService } from '../store/types'
 import type { CredentialVault } from '../trackers/credential-vault'
 import type { TrackerLifecycle } from '../trackers/lifecycle'
 import type { TrackerAuthSessions } from '../trackers/auth-session'
+import type { TrackerRateEntry } from '../trackers/types'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
 import type { ColdStorageService } from '../services/cold-storage'
@@ -115,6 +116,12 @@ export interface AppDeps {
    */
   trackerRates: TrackerRates
   /**
+   * The primary tracker's cached entries, read-side normalized with `native`
+   * kept (#698): what the Home rail and local search read. `[]` with no
+   * account. `index.ts` passes `trackerRates.primaryEntries`.
+   */
+  primaryEntries: () => TrackerRateEntry<unknown>[]
+  /**
    * The account lifecycle per tracker (#695): login, switch and logout with
    * #588's park/restore, the session generation, and the accounts state. The
    * Shikimori router sets Shikimori's timer, drain and status steps on it.
@@ -124,6 +131,12 @@ export interface AppDeps {
   trackerAuth: TrackerAuthSessions
   /** The primary, mirror and feature-source setters (#696). */
   trackerChoices: TrackerChoices
+  /**
+   * The AniList and MyAnimeList cards (`trackers/flags.ts`, #703/#702),
+   * computed once from `app.isPackaged`. While false, `tracker:begin-auth` and
+   * `tracker:complete-auth` refuse both trackers.
+   */
+  newTrackerCardsEnabled: boolean
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

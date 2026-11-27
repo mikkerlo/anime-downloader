@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import AnimeDetailView from '../../../src/renderer/src/components/views/AnimeDetailView.vue'
+import { useTrackersStore } from '../../../src/renderer/src/stores/trackers'
 import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
 import { trackerAccounts } from '../../helpers/tracker-accounts'
 
@@ -68,12 +69,46 @@ function episodeDetail(translationId: number): EpisodeDetail {
   } as unknown as EpisodeDetail
 }
 
+function noAccounts(): TrackerAccountsState {
+  return { accounts: [], primary: null, mirror: {}, featureSources: {} }
+}
+
+function shikimoriOnly(): TrackerAccountsState {
+  return {
+    accounts: [
+      {
+        trackerId: 'shikimori',
+        user: { id: 1, nickname: 'me', avatar: null },
+        hasCredentials: true,
+        sessionExpired: false,
+        needsSetup: false,
+        credentialState: 'ok'
+      }
+    ],
+    primary: 'shikimori',
+    mirror: {},
+    featureSources: {}
+  }
+}
+
+function syncStatus(): TrackerSyncStatus {
+  return {
+    state: 'idle',
+    queueLength: 0,
+    lastSyncAt: 0,
+    lastSyncError: null,
+    sessionExpired: false,
+    needsSetup: false
+  }
+}
+
 interface ApiOverrides {
   getAnimeCache?: ReturnType<typeof vi.fn>
   getAnime?: ReturnType<typeof vi.fn>
   offline?: OfflineApi
   /** `tracker:list-accounts` (#706); no account by default. */
   accounts?: TrackerAccountsState
+  trackerListAccounts?: ReturnType<typeof vi.fn>
   extra?: Record<string, ReturnType<typeof vi.fn>>
 }
 
@@ -83,7 +118,9 @@ let detailsListeners: ((e: TrackerDetailsUpdatedEvent) => void)[] = []
 function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typeof vi.fn>> {
   detailsListeners = []
   const base: Record<string, ReturnType<typeof vi.fn>> = {
-    trackerListAccounts: vi.fn().mockResolvedValue(overrides.accounts ?? trackerAccounts()),
+    trackerListAccounts:
+      overrides.trackerListAccounts ??
+      vi.fn().mockResolvedValue(overrides.accounts ?? noAccounts()),
     onTrackerDetailsUpdated: vi.fn((cb: (e: TrackerDetailsUpdatedEvent) => void) => {
       detailsListeners.push(cb)
       return () => {}
@@ -109,8 +146,8 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
     libraryIsDownloaded: vi.fn().mockResolvedValue(false),
     autoDlGetSubscription: vi.fn().mockResolvedValue(null),
     shikimoriGetUser: vi.fn().mockResolvedValue(null),
-    shikimoriGetSyncStatus: vi.fn().mockResolvedValue({ state: 'idle', queueLength: 0 }),
-    shikimoriGetOfflineQueueLength: vi.fn().mockResolvedValue(0),
+    trackerGetSyncStatus: vi.fn().mockResolvedValue(syncStatus()),
+    trackerGetOfflineQueueLength: vi.fn().mockResolvedValue(0),
     ...overrides.extra
   }
   const target = { ...(overrides.offline ?? offlineApi()).api, ...base }
@@ -499,6 +536,121 @@ describe('AnimeDetailView — the details source (#706)', () => {
     expect(api.trackerGetDetails).toHaveBeenCalled()
     expect(synopsis(wrapper)).toBe('smotret text')
     expect(genres(wrapper)).toEqual(['Комедия'])
+    wrapper.unmount()
+  })
+})
+
+// The rate panel's gate and Continue timing (#704). The panel mounts while the
+// accounts aren't known yet, stays out with none, and from the second detail
+// page on (`accountsLoaded` already true) it shows "Loading…" and holds
+// Continue until the primary's rate lands, as the per-mount Shikimori user
+// read did.
+describe('AnimeDetailView — tracker panel gate (#704)', () => {
+  const MAL_ID = 5114
+  const ep = (n: number): EpisodeSummary => ({
+    id: 9 + n,
+    episodeInt: String(n),
+    episodeFull: `Episode ${n}`,
+    episodeType: 'tv',
+    isActive: 1
+  })
+  const malDetail = (): AnimeDetail =>
+    detail({ myAnimeListId: MAL_ID, numberOfEpisodes: 3, episodes: [ep(1), ep(2), ep(3)] })
+
+  function shikimoriExtras(): Record<string, ReturnType<typeof vi.fn>> {
+    return {
+      shikimoriGetFriendsRates: vi.fn().mockResolvedValue([]),
+      shikimoriGetAnimeDetails: vi.fn().mockResolvedValue(null),
+      shikimoriGetRelated: vi.fn().mockResolvedValue([]),
+      trackerGetRates: vi.fn(async (trackerId: TrackerId) => ({
+        trackerId,
+        entries: [],
+        queuedAfter: {}
+      }))
+    }
+  }
+
+  const continueButton = (w: ReturnType<typeof mount>) => w.find('.detail-actions .btn-primary')
+
+  it('with no account the panel stays absent after the check', async () => {
+    installApi({
+      getAnime: vi.fn().mockResolvedValue({ source: 'api', data: malDetail() }),
+      extra: shikimoriExtras()
+    })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('h1').text()).toBe('Tesuto')
+    expect(wrapper.find('.sk-logo').exists()).toBe(false)
+    expect(wrapper.find('.shiki-loading').exists()).toBe(false)
+    expect(continueButton(wrapper).attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('before the accounts check resolves the panel is present and shows "Loading…"', async () => {
+    installApi({
+      getAnime: vi.fn().mockResolvedValue({ source: 'api', data: malDetail() }),
+      trackerListAccounts: vi.fn(() => new Promise(() => {})),
+      extra: shikimoriExtras()
+    })
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('h1').text()).toBe('Tesuto')
+    expect(wrapper.find('.side-panel .shiki-loading').text()).toBe('Loading…')
+    expect(continueButton(wrapper).attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('second open: Continue waits and the panel shows "Loading…" until the primary rate lands', async () => {
+    let resolveRate!: (v: TrackerRateResult) => void
+    const trackerGetRate = vi.fn(
+      () => new Promise<TrackerRateResult>((resolve) => (resolveRate = resolve))
+    )
+    // Held, so the page sits in the window before the rate load starts: the
+    // episode list is painted, `accountsLoaded` is already true, and only the
+    // per-mount `loading` keeps Continue off the local-progress target.
+    let resolveUser!: (v: ShikiUser) => void
+    const shikimoriGetUser = vi.fn(() => new Promise<ShikiUser>((r) => (resolveUser = r)))
+    installApi({
+      getAnime: vi.fn().mockResolvedValue({ source: 'api', data: malDetail() }),
+      trackerListAccounts: vi.fn().mockResolvedValue(shikimoriOnly()),
+      extra: { ...shikimoriExtras(), shikimoriGetUser, trackerGetRate }
+    })
+    // An earlier detail page already loaded the accounts.
+    const trackers = useTrackersStore()
+    await flushPromises()
+    expect(trackers.accountsLoaded).toBe(true)
+    expect(trackers.primary).toBe('shikimori')
+
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+
+    expect(wrapper.find('h1').text()).toBe('Tesuto')
+    expect(wrapper.findAll('.ep-row')).toHaveLength(3)
+    expect(trackerGetRate).not.toHaveBeenCalled()
+    expect(continueButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.side-panel .shiki-loading').text()).toBe('Loading…')
+    expect(wrapper.find('#shiki-ep').exists()).toBe(false)
+
+    resolveUser({ id: 1, nickname: 'me', avatar: '' } as ShikiUser)
+    await flushPromises()
+
+    expect(trackerGetRate).toHaveBeenCalledWith('shikimori', MAL_ID)
+    expect(continueButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.sk-logo').exists()).toBe(true)
+    expect(wrapper.find('.side-panel .shiki-loading').text()).toBe('Loading…')
+    expect(wrapper.find('#shiki-ep').exists()).toBe(false)
+
+    resolveRate({
+      values: { status: 'watching', episodes: 2, score: 0, rewatches: 0 },
+      stale: false
+    })
+    await flushPromises()
+
+    expect((wrapper.find('#shiki-ep').element as HTMLInputElement).value).toBe('2')
+    expect(continueButton(wrapper).attributes('disabled')).toBeUndefined()
+    expect(continueButton(wrapper).text()).toBe('Continue · Ep 3')
     wrapper.unmount()
   })
 })

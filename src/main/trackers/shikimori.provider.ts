@@ -5,6 +5,7 @@
 // intercepts every call.
 
 import * as shikimori from '../shikimori'
+import { SHIKIMORI_ORIGIN } from '../../shared/shikimori'
 import { rateValues } from '../lib/shikimori-rate'
 import { buildRateCacheEntries, type CachedRateEntry } from '../lib/shikimori-rate-cache'
 import type { AnimeSearchResult } from '../smotret-api'
@@ -146,6 +147,16 @@ function toEntry(
   }
 }
 
+// The Home rail's pick (#698): `preview`, then `x96`, then `original`, with a
+// relative path made absolute on the Shikimori origin. Null when there is none.
+function posterOf(
+  image: shikimori.ShikiAnimeRateEntry['anime']['image'] | undefined
+): string | null {
+  const img = image?.preview || image?.x96 || image?.original || ''
+  if (!img) return null
+  return img.startsWith('http') ? img : `${SHIKIMORI_ORIGIN}${img}`
+}
+
 // A cached row from an older version can lack `shikiAnime`.
 function animeOf(
   anime: shikimori.ShikiAnimeRateEntry['anime'] | undefined
@@ -153,7 +164,7 @@ function animeOf(
   return {
     // The app's display rule: the Russian title, else the romaji name.
     title: anime?.russian || anime?.name || '',
-    poster: anime?.image?.original ?? null,
+    poster: posterOf(anime?.image),
     kind: anime?.kind ?? null,
     episodes: anime?.episodes ?? null,
     episodesAired: anime?.episodes_aired ?? null,

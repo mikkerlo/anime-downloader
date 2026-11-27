@@ -17,21 +17,16 @@ import { useChronology } from '../../composables/use-chronology';
 import { provide } from 'vue';
 import { useEpisodeList, PAGE_SIZE } from '../../composables/use-episode-list';
 import { useEpisodeDownloads } from '../../composables/use-episode-downloads';
-import { useShikimori } from '../../composables/use-shikimori';
+import { useTrackerRate } from '../../composables/use-tracker-rate';
 import { useSkipDetection } from '../../composables/use-skip-detection';
 import ChronologyPanel from '../detail/ChronologyPanel.vue';
 import FriendsPanel from '../detail/FriendsPanel.vue';
-import ShikimoriPanel from '../detail/ShikimoriPanel.vue';
+import TrackerPanel from '../detail/TrackerPanel.vue';
 import SkipDetectionPanel from '../detail/SkipDetectionPanel.vue';
 import EpisodeList from '../detail/EpisodeList.vue';
 import DriveEpisodes from '../shared-library/DriveEpisodes.vue';
 import { rateText, useSharedLibrariesStore } from '../../stores/shared-libraries';
-import {
-  ShikimoriKey,
-  SkipDetectionKey,
-  EpisodeListKey,
-  EpisodeDownloadsKey
-} from '../detail/keys';
+import { TrackerKey, SkipDetectionKey, EpisodeListKey, EpisodeDownloadsKey } from '../detail/keys';
 import { TRANSLATION_TYPES } from '../detail/translation-types';
 
 const props = defineProps<{
@@ -44,9 +39,11 @@ const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const shikimoriStore = useShikimoriStore();
 const trackersStore = useTrackersStore();
+const { anyAccount, accountsLoaded } = storeToRefs(trackersStore);
 const downloadsStore = useDownloadsStore();
-// syncStatus + offlineQueueLength are consumed by ShikimoriPanel directly from
-// the store; the composable handles syncState/lastSyncError projections.
+// The primary's sessionExpired + offline queue length are consumed by
+// TrackerPanel directly from the trackers store; the composable handles the
+// syncState/lastSyncError projections.
 
 const anime = ref<AnimeDetail | null>(null);
 const loading = ref(true);
@@ -167,18 +164,16 @@ const {
   resetEpisodeOverrides
 } = episodeList;
 
-const shikimori = useShikimori({ anime, shikimoriStore, trackersStore });
-provide(ShikimoriKey, shikimori);
+const trackerRate = useTrackerRate({ anime, shikimoriStore, trackersStore });
+provide(TrackerKey, trackerRate);
 const {
   shikiUser,
-  shikiRate,
-  shikiEpisodes,
   shikiUserChecked,
-  shikiLoading,
+  resumeProgress,
   friendsRates,
   friendsLoading,
   friendsCollapsed
-} = shikimori;
+} = trackerRate;
 
 const skipDetection = useSkipDetection({
   getAnimeId: () => props.animeId,
@@ -212,11 +207,7 @@ const downloads = useEpisodeDownloads({
   isPaginated,
   goToPage,
   loadingEpisodes,
-  shikiRate,
-  shikiUser,
-  shikiEpisodes,
-  shikiUserChecked,
-  shikiLoading,
+  resumeProgress,
   downloadsStore,
   playerStore,
   playerMode,
@@ -299,17 +290,16 @@ onMounted(async () => {
   // the currently displayed anime name).
   unsubFileEpisodesChanged = subscribeFileEpisodesChanged();
 
-  // Load Shikimori data (non-blocking — don't hold up the episode list)
-  void shikimori.loadShikimoriData(chronology.loadRelated);
+  // Load the tracker data (non-blocking — don't hold up the episode list)
+  void trackerRate.loadTrackerData(chronology.loadRelated);
 
   // Load watch progress for episode indicators
   loadWatchProgress();
   window.addEventListener('watch-progress-updated', loadWatchProgress);
 
-  // Hydrate the store-owned sync-status + offline-queue length on mount; later
-  // updates arrive via the store's broadcasts.
-  void shikimoriStore.refreshOfflineQueueLength();
-  void shikimoriStore.refreshSyncStatus();
+  // Hydrate the primary's store-owned sync-status + offline-queue length on
+  // mount; later updates arrive via the store's broadcasts.
+  trackerRate.hydrateSyncState();
 
   // Skip-detector + chapter-inject progress are anime-specific, so they stay
   // as component-local subscriptions (filtered by props.animeId).
@@ -331,7 +321,7 @@ watch(appOffline, (offline) => {
   if (loading.value) return;
   loading.value = true;
   void loadDetail().then((current) => {
-    if (current && anime.value) void shikimori.loadShikimoriData(chronology.loadRelated);
+    if (current && anime.value) void trackerRate.loadTrackerData(chronology.loadRelated);
   });
 });
 
@@ -487,9 +477,9 @@ const airingSource = computed(() => trackersStore.featureSource('airing'));
 const isShowFinished = computed<boolean>(() => {
   const source = airingSource.value;
   if (source && source !== 'shikimori') {
-    return shikimori.trackerDetailsFor(source)?.status === 'released';
+    return trackerRate.trackerDetailsFor(source)?.status === 'released';
   }
-  return shikimori.shikiDetails.value?.status === 'released';
+  return trackerRate.shikiDetails.value?.status === 'released';
 });
 
 const canAutoDl = computed<boolean>(() => {
@@ -612,7 +602,7 @@ const synopsisExpanded = ref(false);
 // The `details` source (#706): today's Shikimori path for Shikimori (or no
 // source), that tracker's cached details otherwise.
 const detailsSource = computed(() => trackersStore.featureSource('details'));
-const sourceDetails = computed(() => shikimori.trackerDetailsFor(detailsSource.value));
+const sourceDetails = computed(() => trackerRate.trackerDetailsFor(detailsSource.value));
 const usesShikimoriDetails = computed(
   () => !detailsSource.value || detailsSource.value === 'shikimori'
 );
@@ -621,7 +611,7 @@ const synopsisText = computed<string>(() => {
   const local = anime.value?.descriptions?.[0]?.value?.trim();
   if (local) return local;
   if (!usesShikimoriDetails.value) return sourceDetails.value?.description?.trim() || '';
-  return shikimori.shikiDetailsDescription.value || '';
+  return trackerRate.shikiDetailsDescription.value || '';
 });
 
 const genreTags = computed<{ key: string; label: string }[]>(() => {
@@ -630,7 +620,7 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
   if (!usesShikimoriDetails.value) {
     return (sourceDetails.value?.genres ?? []).map((g) => ({ key: `t${g}`, label: g }));
   }
-  const shiki = shikimori.shikiDetails.value?.genres;
+  const shiki = trackerRate.shikiDetails.value?.genres;
   if (shiki?.length) return shiki.map((g) => ({ key: `s${g.id}`, label: g.russian || g.name }));
   return [];
 });
@@ -928,8 +918,8 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
         </div>
 
         <aside class="detail-side">
-          <ShikimoriPanel
-            v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
+          <TrackerPanel
+            v-if="anime.myAnimeListId && (anyAccount || !accountsLoaded)"
             :anime="anime"
           />
 

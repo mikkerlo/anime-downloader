@@ -671,21 +671,13 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     return result
   }
 
-  const detailsCache = (): Record<string, TrackerDetailsCacheEntry> =>
-    (store.get(keys.animeDetails) as Record<string, TrackerDetailsCacheEntry> | undefined) ?? {}
-
-  function writeDetails(malId: number, details: TrackerDetails): void {
-    store.set(keys.animeDetails, {
-      ...detailsCache(),
-      [String(malId)]: { details, fetchedAt: Date.now() }
-    })
-    if (deps.detailsUpdatedChannel) {
-      broadcast(deps.detailsUpdatedChannel, {
-        trackerId,
-        malId,
-        details
-      } satisfies TrackerDetailsUpdatedEvent)
-    }
+  function broadcastDetails(malId: number, details: TrackerDetails): void {
+    if (!deps.detailsUpdatedChannel) return
+    broadcast(deps.detailsUpdatedChannel, {
+      trackerId,
+      malId,
+      details
+    } satisfies TrackerDetailsUpdatedEvent)
   }
 
   function requestDetails(malId: number): void {
@@ -724,8 +716,8 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     broadcastQueueChanged,
     needsSetup: () => needsSetupFlag,
     clearNeedsSetup,
-    cachedDetails: (malId) => detailsCache()[String(malId)]?.details ?? null,
-    writeDetails,
+    cachedDetails: (malId) => provider.cachedDetails?.(malId) ?? null,
+    broadcastDetails,
     requestDetails
   }
 }
@@ -753,9 +745,9 @@ export interface TrackerSyncReads<TRate, TRow> extends TrackerDetailsCache {
 /** The details deps (#706), declared here so the deps above keep their lines. */
 export interface TrackerDetailsDeps {
   /**
-   * `tracker:details-updated`: `writeDetails` broadcasts every write on it.
-   * AniList's and MyAnimeList's constructions pass it; Shikimori's doesn't,
-   * since its details stay on `shikimori:anime-details-updated`.
+   * `tracker:details-updated`: `broadcastDetails` sends every details-cache
+   * write on it. AniList's and MyAnimeList's constructions pass it; Shikimori's
+   * doesn't, since its details stay on `shikimori:anime-details-updated`.
    */
   detailsUpdatedChannel?: string
   /**
@@ -766,26 +758,20 @@ export interface TrackerDetailsDeps {
   prefetchDetails?: (malId: number) => void
 }
 
-/** One `animeDetails` cache entry (#706), keyed by MAL id. */
-export interface TrackerDetailsCacheEntry {
-  details: TrackerDetails
-  fetchedAt: number
-}
-
 /** An instance's details cache (#706): `tracker:get-details` and #702's / #703's writers. */
 export interface TrackerDetailsCache {
   /**
-   * The `animeDetails` cache entry's details for `malId`, or null. Never the
-   * network. AniList and MyAnimeList only: Shikimori's cache holds its own
-   * `ShikiAnimeDetails` rows, which `shikimori:get-anime-details` reads.
+   * The provider's `cachedDetails`: its own details cache entry for `malId`,
+   * normalized, or null. Never the network. AniList and MyAnimeList only:
+   * Shikimori's details stay on `shikimori:get-anime-details`.
    */
   cachedDetails(malId: number): TrackerDetails | null
   /**
-   * A details-cache write: the `animeDetails` `store.set`, then the
-   * `detailsUpdatedChannel` broadcast `{ trackerId, malId, details }`. #702's
-   * and #703's details writers go through it.
+   * The emit after a details-cache write: `{ trackerId, malId, details }` on
+   * `detailsUpdatedChannel`. Each provider writes its cache in its own shape,
+   * then calls this with the normalized entry (#702's and #703's writers).
    */
-  writeDetails(malId: number, details: TrackerDetails): void
+  broadcastDetails(malId: number, details: TrackerDetails): void
   /** A details-cache miss: kicks `prefetchDetails`, except while offline. */
   requestDetails(malId: number): void
 }

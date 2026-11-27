@@ -1,0 +1,41 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 207,
+          "idMal": 6,
+          "isAdult": false,
+          "format": "TV_SHORT",
+          "title": { "romaji": "Shared MAL Id B", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx207.jpg"
+          },
+          "nextAiringEpisode": { "episode": 1, "airingAt": 1764600000 }
+        },
+        {
+          "id": 103,
+          "idMal": 3,
+          "isAdult": false,
+          "format": "TV",
+          "title": { "romaji": "One Piece", "english": "ONE PIECE" },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx103.jpg"
+          },
+          "nextAiringEpisode": { "episode": 1101, "airingAt": 1764300000 }
+        },
+        {
+          "id": 950,
+          "idMal": 950,
+          "isAdult": true,
+          "format": "ONA",
+          "title": { "romaji": "Adult Title", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx950.jpg"
+          },
+          "nextAiringEpisode": { "episode": 3, "airingAt": 1764400000 }
+        }
+      ]
+    }
+  }
+}

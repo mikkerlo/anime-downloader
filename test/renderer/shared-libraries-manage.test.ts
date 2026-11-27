@@ -24,6 +24,8 @@ function lib(libraryId: string, over: Partial<AttachedLibraryInfo> = {}): Attach
     name: `Library ${libraryId}`,
     mode: 'metadata',
     ownerNickname: 'owner',
+    ownerProvider: 'shikimori',
+    layoutVersion: 1,
     role: 'owner',
     access: 'read-write',
     available: true,
@@ -48,6 +50,13 @@ function stubApi(overrides: Record<string, unknown> = {}): void {
         foundCb = cb
         return () => {}
       },
+      // The identity warning reads the connected trackers (#714): none here.
+      trackerListAccounts: async (): Promise<TrackerAccountsState> => ({
+        accounts: [],
+        primary: null,
+        mirror: {},
+        featureSources: {}
+      }),
       ...overrides
     },
     {
@@ -269,6 +278,7 @@ describe('the found-on-a-drive toast', () => {
         libraryId: 'aaaaaaaa-0000-4000-8000-000000000001',
         name: 'Anime',
         ownerNickname: 'friend',
+        ownerProvider: 'shikimori',
         mode: 'metadata',
         titleCount: 3,
         identity: 'choose'
@@ -339,5 +349,27 @@ describe("the detail page's Sync now (#584)", () => {
     ])
     await store.syncNow(1)
     expect(syncNow).toHaveBeenCalledWith({ animeId: 1 })
+  })
+
+  it('is not offered for a v2 owned or claimed library until #715 runs v2 legs (#714)', async () => {
+    list = [
+      lib('v2-own', {
+        role: 'owner',
+        ownerProvider: 'anilist',
+        layoutVersion: 2,
+        titles: [title(1)]
+      }),
+      lib('v2-claim', {
+        role: 'claim',
+        ownerProvider: 'anilist',
+        layoutVersion: 2,
+        titles: [title(2)]
+      }),
+      lib('v1-own', { role: 'owner', titles: [title(3)] })
+    ]
+    stubApi()
+    const store = useSharedLibrariesStore()
+    await store.refresh()
+    expect([1, 2, 3].map((id) => store.canSyncTitle(id))).toEqual([false, false, true])
   })
 })

@@ -109,6 +109,18 @@ export interface TrackerLifecycleDeps {
   broadcast?: (channel: string, ...args: unknown[]) => void
   /** `EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED`, passed in by `index.ts` (#696). */
   accountsChangedChannel?: string
+  /**
+   * The `afterLogin` step of any tracker whose steps set none (AniList, MAL,
+   * registered or not): the Shared Library login run (#714), which drops a
+   * claim and merges the owner's libraries. Shikimori's router sets its own.
+   */
+  afterLogin?: (trackerId: TrackerId) => void
+  /**
+   * The AniList and MyAnimeList cards' flag (`trackers/flags.ts`), computed
+   * once by `index.ts`: the accounts state carries it as
+   * `newTrackerCardsEnabled`. Absent means off.
+   */
+  newTrackerCardsEnabled?: boolean
 }
 
 export interface TrackerLifecycle {
@@ -180,16 +192,22 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
   const bump = (id: TrackerId): void => void generations.set(id, generation(id) + 1)
 
   function stepsOf(id: TrackerId): TrackerSessionSteps {
+    const afterLogin = deps.afterLogin
+    const login = afterLogin ? { afterLogin: () => afterLogin(id) } : {}
+    // Registered steps (Shikimori's router; AniList's and MAL's once #703 and
+    // #702 set theirs) keep their own `afterLogin`; without one, the Shared
+    // Library login run still fires (#714).
     const own = registered.get(id)
-    if (own) return own
+    if (own) return own.afterLogin ? own : { ...own, ...login }
     const t = trackerRates.instance(id)
-    if (!t) return NO_STEPS
+    if (!t) return { ...NO_STEPS, ...login }
     return {
       startTimer: () => t.startSyncTimer(),
       drain: () => void t.syncQueue(),
       stopTimer: () => t.stopSyncTimer(),
       broadcastStatus: () => t.broadcastSyncStatus(),
-      broadcastQueue: () => t.broadcastQueueChanged()
+      broadcastQueue: () => t.broadcastQueueChanged(),
+      ...login
     }
   }
 
@@ -329,13 +347,18 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     // credential never calls the vault.
     const locked = hasCredentials && credKey !== null && vault.isLocked(credKey)
     const missingClientId = id === 'mal' && !getClientConfig(store).clientId
+    // AniList's token `exp`, mirrored in plain text on its user (#703): no decrypt.
+    const expiresAt = (user as { tokenExpiresAt?: unknown } | null)?.tokenExpiresAt
     return {
       trackerId: id,
       user,
       hasCredentials,
       sessionExpired: user !== null && !hasCredentials,
       needsSetup: missingClientId || (trackerRates.instance(id)?.needsSetup() ?? false),
-      credentialState: !hasCredentials ? 'none' : locked ? 'locked' : 'ok'
+      credentialState: !hasCredentials ? 'none' : locked ? 'locked' : 'ok',
+      ...(id === 'anilist' && hasCredentials && typeof expiresAt === 'number'
+        ? { sessionExpiresAt: expiresAt }
+        : {})
     }
   }
 
@@ -350,7 +373,8 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
       mirror: (store.get('trackerMirror') as TrackerAccountsState['mirror'] | undefined) ?? {},
       featureSources:
         (store.get('trackerFeatureSource') as TrackerAccountsState['featureSources'] | undefined) ??
-        {}
+        {},
+      newTrackerCardsEnabled: deps.newTrackerCardsEnabled === true
     }
   }
 

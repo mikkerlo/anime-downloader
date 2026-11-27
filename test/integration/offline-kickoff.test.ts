@@ -4,8 +4,14 @@
 // buckets stay parked. After #600, a 429 during that drain stops it and keeps
 // the queue. After #693 every connected tracker drains on that edge: the
 // AniList instance here gets the same case.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
+import {
+  createAniListServer,
+  createTestAniList,
+  type AniListReply,
+  type AniListServer
+} from '../helpers/anilist-server'
 
 const ensureFreshToken = vi.fn()
 const getUserRate = vi.fn()
@@ -28,7 +34,8 @@ vi.mock('../../src/main/shikimori', async () => {
 import { ShikiApiError } from '../../src/main/shikimori'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { createOfflineService } from '../../src/main/services/offline'
-import { createOfflineKickoff } from '../../src/main/services/offline/kickoff'
+import { createOfflineKickoff, PREFETCH_STAGGER_MS } from '../../src/main/services/offline/kickoff'
+import { createAniListSyncService } from '../../src/main/trackers/anilist/sync'
 import { kickoffTrackers } from '../../src/main/services/trackers/edges'
 import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
 import { createGenericTracker } from '../helpers/generic-tracker'
@@ -191,5 +198,85 @@ describe('the online edge drains the live queue only (#567 × #588)', () => {
     expect(getUserRate).toHaveBeenCalledTimes(1)
     expect(store.get('shikimoriUpdateQueue')).toHaveLength(2)
     expect(store.get('shikimoriParkedQueues')).toEqual(PARKED)
+  })
+})
+
+describe('AniList’s details prefetch on the online edge (#703)', () => {
+  let server: AniListServer | null = null
+  afterEach(() => {
+    server?.restore()
+    server = null
+  })
+
+  async function anilistEdge(details: () => AniListReply) {
+    server = createAniListServer((call) =>
+      call.operation === 'Details' ? details() : { status: 400, body: {} }
+    )
+    const row = (mal: number) => ({
+      entry: {
+        id: mal,
+        mediaId: 100 + mal,
+        status: 'CURRENT',
+        score: 0,
+        progress: 0,
+        repeat: 0,
+        updatedAt: 1,
+        media: { id: 100 + mal, idMal: mal }
+      },
+      smotretAnime: null
+    })
+    const t = await createTestAniList({ seed: { anilistUserRates: [row(1), row(2)] } })
+    const sync = createAniListSyncService(t.provider, {
+      store: t.store as never,
+      broadcast: () => {},
+      syncStatusChannel: 's',
+      offlineQueueChangedChannel: 'q',
+      rateUpdatedChannel: 'r',
+      ratesRefreshedChannel: 'rr'
+    }) as unknown as TrackerSyncService<unknown, unknown>
+    const kickoff = createOfflineKickoff({
+      // As `index.ts` builds it.
+      trackers: () =>
+        kickoffTrackers(t.store, [sync], vi.fn(), { anilist: () => t.provider.prefetchDetails() }),
+      suspendDownloads: vi.fn(),
+      resumeDownloads: vi.fn(),
+      suspendSyncplay: vi.fn(),
+      resumeSyncplay: vi.fn(),
+      retryBinaries: vi.fn(),
+      runAutoDownloadTick: vi.fn()
+    })
+    return { t, kickoff }
+  }
+
+  it('the online edge schedules it at the PREFETCH_STAGGER_MS mark', async () => {
+    const { kickoff, t } = await anilistEdge(() => ({
+      body: { data: { Page: { media: [{ id: 101, idMal: 1, description: 'd', genres: [] }] } } }
+    }))
+    kickoff.onOnline()
+    await vi.advanceTimersByTimeAsync(PREFETCH_STAGGER_MS - 1)
+    expect(server!.of('Details')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    await vi.waitFor(() => expect(server!.of('Details')).toHaveLength(1))
+    expect(server!.of('Details')[0].variables).toEqual({ ids: [1, 2] })
+    await vi.waitFor(() =>
+      expect(Object.keys(t.store.get('anilistAnimeDetails') as object)).toEqual(['1'])
+    )
+  })
+
+  it('a failure logs [offline] AniList details prefetch failed:', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { kickoff } = await anilistEdge(() => ({ status: 500, body: {} }))
+      kickoff.onOnline()
+      await vi.advanceTimersByTimeAsync(PREFETCH_STAGGER_MS)
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[offline] AniList details prefetch failed:',
+          expect.anything()
+        )
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

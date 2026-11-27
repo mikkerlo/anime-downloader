@@ -235,7 +235,9 @@ describe('net adoption guard — src/main', () => {
       'src/main/fpcalc-binaries.ts': 1,
       'src/main/lib/manual-update.ts': 1,
       'src/main/download-manager.ts': 1,
-      'src/main/services/offline/index.ts': 1
+      'src/main/services/offline/index.ts': 1,
+      // AniList's GraphQL client (#703): every query and mutation is one POST.
+      'src/main/trackers/anilist/client.ts': 1
     })
   })
 })

@@ -59,10 +59,14 @@ function target(over: Partial<ExportTarget>): ExportTarget {
 
 let api: Record<string, unknown>
 
+type Account = Partial<
+  Pick<ExportPlan, 'canExportMetadata' | 'nickname' | 'owners' | 'defaultOwner'>
+>
+
 function stubApi(
   t: ExportTarget | ((req: ExportPlanRequest) => ExportTarget),
   pf: ExportPreflight | null = null,
-  account: Partial<Pick<ExportPlan, 'canExportMetadata' | 'nickname'>> = {}
+  account: Account = {}
 ): void {
   api = {
     exportPlan: vi.fn(async (req: ExportPlanRequest) => ({
@@ -83,7 +87,7 @@ async function open(
   t: ExportTarget | ((req: ExportPlanRequest) => ExportTarget),
   preselect = true,
   pf: ExportPreflight | null = null,
-  account: Partial<Pick<ExportPlan, 'canExportMetadata' | 'nickname'>> = {}
+  account: Account = {}
 ) {
   stubApi(t, pf, account)
   const w = mount(ExportDialog, { props: { animeIds: [1], preselect } })
@@ -585,5 +589,187 @@ describe('ExportDialog preflight panel (#575)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('ExportDialog owner picker (#714)', () => {
+  const SHIKI: ExportOwnerOption = { provider: 'shikimori', nickname: 'me', olderVersions: true }
+  const ALIST: ExportOwnerOption = { provider: 'anilist', nickname: 'al', olderVersions: false }
+  const BOTH: Account = {
+    canExportMetadata: true,
+    nickname: 'al',
+    owners: [SHIKI, ALIST],
+    defaultOwner: 'anilist'
+  }
+  const metadataTarget =
+    (over: Partial<ExportTarget> = {}, sibling: Partial<ExportTarget> = {}) =>
+    (req: ExportPlanRequest) =>
+      req.sibling
+        ? target({ mode: 'metadata', ...sibling })
+        : target({ mode: req.mode ?? 'videos', ...over })
+  const lastPlan = (): ExportPlanRequest => {
+    const calls = (api.exportPlan as ReturnType<typeof vi.fn>).mock.calls
+    return calls[calls.length - 1][0] as ExportPlanRequest
+  }
+  async function toMetadata(w: ReturnType<typeof mount>): Promise<void> {
+    await w.find('[data-testid="export-mode-metadata"]').trigger('change')
+    await flushPromises()
+  }
+
+  it('two owners: the primary preselected, the older-versions label on Shikimori only, the v7 note only for AniList', async () => {
+    const w = await open(metadataTarget(), true, null, BOTH)
+    expect(w.find('[data-testid="export-owner"]').exists()).toBe(false)
+    await toMetadata(w)
+    expect(radio(w, 'export-owner-anilist').checked).toBe(true)
+    expect(radio(w, 'export-owner-shikimori').checked).toBe(false)
+    const labels = w.findAll('[data-testid="export-owner"] label').map((l) => l.text())
+    expect(labels).toEqual(['Shikimori — me (works with older versions)', 'AniList — al'])
+    expect(w.find('[data-testid="export-v7-note"]').text()).toBe(
+      'Only this app v7 or later can open this library. Older versions show it as made by a newer version; its videos still play in VLC or mpv.'
+    )
+    expect((w.find('[data-testid="export-name"]').element as HTMLInputElement).value).toBe(
+      'Anime Library (al)'
+    )
+    await w.find('[data-testid="export-owner-shikimori"]').trigger('change')
+    await flushPromises()
+    expect(w.find('[data-testid="export-v7-note"]').exists()).toBe(false)
+    // The default name follows the pick, and the target is planned for it.
+    expect((w.find('[data-testid="export-name"]').element as HTMLInputElement).value).toBe(
+      'Anime Library (me)'
+    )
+    expect(lastPlan()).toMatchObject({ owner: 'shikimori', name: 'Anime Library (me)' })
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(expect.objectContaining({ owner: 'shikimori' }))
+  })
+
+  it('one AniList account: no picker, and the v7 note', async () => {
+    const w = await open(metadataTarget(), true, null, {
+      canExportMetadata: true,
+      nickname: 'al',
+      owners: [ALIST],
+      defaultOwner: 'anilist'
+    })
+    await toMetadata(w)
+    expect(w.find('[data-testid="export-owner"]').exists()).toBe(false)
+    expect(w.find('[data-testid="export-v7-note"]').exists()).toBe(true)
+  })
+
+  it('Shikimori only: no picker, no note, and today’s requests', async () => {
+    const w = await open(metadataTarget(), true, null, {
+      canExportMetadata: true,
+      nickname: 'me',
+      owners: [SHIKI],
+      defaultOwner: 'shikimori'
+    })
+    await toMetadata(w)
+    expect(w.find('[data-testid="export-owner"]').exists()).toBe(false)
+    expect(w.find('[data-testid="export-v7-note"]').exists()).toBe(false)
+    expect(lastPlan()).not.toHaveProperty('owner')
+    expect(lastPlan()).not.toHaveProperty('sibling')
+  })
+
+  it('an own library preselects its owner, not the primary', async () => {
+    const w = await open(
+      metadataTarget({
+        kind: 'own-metadata',
+        libraryName: 'Trip',
+        owner: { provider: 'shikimori', nickname: 'me' }
+      }),
+      true,
+      null,
+      BOTH
+    )
+    await toMetadata(w)
+    expect(radio(w, 'export-owner-shikimori').checked).toBe(true)
+    expect(w.find('[data-testid="export-v7-note"]').exists()).toBe(false)
+    expect(lastPlan()).not.toHaveProperty('owner')
+  })
+
+  it('other-owner: its own line, never the foreign line with the user’s own nickname', async () => {
+    const w = await open(
+      metadataTarget({
+        kind: 'other-owner',
+        ownerNickname: 'me',
+        owner: { provider: 'shikimori', nickname: 'me' },
+        root: '/drive/Trip (2)'
+      }),
+      true,
+      null,
+      BOTH
+    )
+    await toMetadata(w)
+    const line = w.find('[data-testid="export-target-line"]').text()
+    expect(line).toBe(
+      'Your Shikimori library is here; this creates a separate library owned by al (AniList) next to it.'
+    )
+    expect(line).not.toContain("me's library")
+  })
+
+  it('other-owner in Videos only: its own line, with no owner named (PR #730 review)', async () => {
+    const w = await open(
+      metadataTarget({
+        kind: 'other-owner',
+        ownerNickname: 'al',
+        owner: { provider: 'anilist', nickname: 'al' },
+        root: '/drive/Trip (2)'
+      }),
+      true,
+      null,
+      { canExportMetadata: false, nickname: null, owners: [], defaultOwner: null }
+    )
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe(
+      'Your AniList library is here. Your export goes into a new library next to it.'
+    )
+    expect(startButton(w).disabled).toBe(false)
+  })
+
+  it('an upgrade with an AniList owner: the v2 warning and "Create a separate library instead", which re-plans with sibling', async () => {
+    const w = await open(
+      metadataTarget(
+        { kind: 'upgrade', libraryName: 'Trip', root: '/drive/Trip' },
+        { kind: 'new', libraryName: 'Trip', root: '/drive/Trip (2)' }
+      ),
+      true,
+      null,
+      BOTH
+    )
+    await toMetadata(w)
+    expect(w.find('[data-testid="export-takeover"]').text()).toBe(
+      "You'll become the owner of this library. Other PCs that use it will see it as al's library. This rewrites the library in a format older versions of the app can’t open."
+    )
+    await w.find('[data-testid="export-separate"]').trigger('click')
+    await flushPromises()
+    expect(lastPlan()).toMatchObject({ sibling: true })
+    expect(w.find('[data-testid="export-target-line"]').text()).toBe("New library 'Trip'")
+    expect(w.find('[data-testid="export-takeover"]').exists()).toBe(false)
+    await w.find('[data-testid="export-start"]').trigger('click')
+    await flushPromises()
+    expect(api.exportStart).toHaveBeenCalledWith(expect.objectContaining({ sibling: true }))
+  })
+
+  it('an upgrade with a Shikimori owner: today’s warning only, no separate button', async () => {
+    const w = await open(
+      metadataTarget({ kind: 'upgrade', libraryName: 'Trip', root: '/drive/Trip' }),
+      true,
+      null,
+      { ...BOTH, defaultOwner: 'shikimori' }
+    )
+    await toMetadata(w)
+    expect(w.find('[data-testid="export-takeover"]').text()).toBe(
+      "You'll become the owner of this library. Other PCs that use it will see it as me's library."
+    )
+    expect(w.find('[data-testid="export-separate"]').exists()).toBe(false)
+  })
+
+  it('shows why a takeover was routed to a separate library', async () => {
+    const w = await open(
+      metadataTarget({ kind: 'new', separateReason: 'made by a newer version' }),
+      true,
+      null,
+      BOTH
+    )
+    await toMetadata(w)
+    expect(w.find('[data-testid="export-separate-reason"]').text()).toBe('made by a newer version')
   })
 })

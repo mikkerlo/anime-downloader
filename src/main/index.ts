@@ -83,9 +83,15 @@ import { createTrackerRates } from './services/trackers/rates'
 import { createTrackerChoices } from './services/trackers/choices'
 import { createShikimoriEventBridge } from './trackers/events'
 import { createTrackerLifecycle } from './trackers/lifecycle'
+import { connectedAccounts } from './trackers/primary'
 import { createTrackerAuthSessions } from './trackers/auth-session'
 import { createShikimoriProvider } from './trackers/shikimori.provider'
-import { createAiringDep } from './trackers/feature-source'
+import { createAiringDep, createTickIfAiringSource } from './trackers/feature-source'
+import { createAniListProvider } from './trackers/anilist/provider'
+import { createAniListSyncService } from './trackers/anilist/sync'
+import { createAniListEventBridge } from './trackers/anilist/events'
+import { createAniListPrimary } from './services/trackers/anilist-primary'
+import { newTrackerCardsEnabled } from './trackers/flags'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
@@ -102,6 +108,7 @@ import { createSyncRunner, type SyncRunner } from './services/sync-runner'
 import { createRunnerRateRefresh } from './services/sync-runner/rate-refresh'
 import { createLocalFiles } from './services/sync-runner/local-files'
 import { createMountCandidates, mountParents } from './lib/shared-library/mount-candidates'
+import { ownerAccountsOf } from './lib/shared-library/owner'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -122,6 +129,8 @@ export interface AutoDownloadSubscription {
 }
 
 applyApiBaseOverrides(process.env, app.isPackaged)
+// The AniList and MyAnimeList cards (#703/#702): off in a packaged build until the flag lifts.
+const newTrackerCards = newTrackerCardsEnabled(app.isPackaged)
 
 const store = openStorageOrExit()
 
@@ -400,13 +409,75 @@ shikimori.setOnSessionExpired(() => {
   shikimoriSyncService.broadcastSyncStatus()
   trackerLifecycle.notifyAccountsChanged()
 })
+// AniList (#703): its provider, on the module-level host limiter, and its sync
+// instance, which emits `tracker:*` only through its own bridge. A token
+// AniList refuses clears the credential (session expired) and is an
+// accounts-state change (#696 § 6); so is each "Needs setup" transition.
+const anilistProvider = createAniListProvider({
+  store,
+  vault: credentialVault,
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  isOffline,
+  onSessionExpired: () => {
+    anilistSync.broadcastSyncStatus()
+    trackerLifecycle.notifyAccountsChanged()
+  },
+  // Each `anilistAnimeDetails` write goes out as `tracker:details-updated` (#706).
+  onDetailsWritten: (malId, details) => anilistSync.broadcastDetails(malId, details)
+})
+const anilistSync = createAniListSyncService(anilistProvider, {
+  store,
+  broadcast: createAniListEventBridge({
+    broadcast: broadcastToAll,
+    channels: {
+      rateUpdated: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
+      ratesRefreshed: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
+      syncStatus: EVENT_CHANNELS.TRACKER_SYNC_STATUS,
+      offlineQueueChanged: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
+    },
+    rateCache: anilistProvider.rateCache,
+    needsSetup: () => anilistSync.needsSetup(),
+    queuedAfter: () => trackerRates.queuedAfter('anilist')
+  }),
+  syncStatusChannel: EVENT_CHANNELS.TRACKER_SYNC_STATUS,
+  offlineQueueChangedChannel: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED,
+  rateUpdatedChannel: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
+  ratesRefreshedChannel: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
+  isOffline,
+  onNeedsSetupChanged: () => trackerLifecycle.notifyAccountsChanged(),
+  // The details read (#706): a `tracker:get-details` miss kicks the list
+  // prefetch, and each write it makes is broadcast on this channel.
+  detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED,
+  prefetchDetails: () =>
+    void anilistProvider
+      .prefetchDetails()
+      .catch((err) => console.warn('[anilist] details prefetch failed:', err)),
+  // A refresh of AniList's list ticks auto-download while AniList is the
+  // `airing` source (#706). Shikimori's tick stays in `ipc/shikimori.ipc.ts`.
+  onRatesRefreshed: createTickIfAiringSource({
+    store,
+    runTick: () => runAutoDownloadTick('rates-refreshed')
+  })
+})
+// AniList's primary branch (#703): queue-first, through the instance's drain.
+const anilistPrimary = createAniListPrimary({
+  store,
+  sync: anilistSync as unknown as TrackerSyncService<unknown, unknown>,
+  maybeBroadcastCleanupPrompt
+})
 // The fan-out writer (#692): one entry per tracker whose sync service has
-// landed, Shikimori only for now. The Shikimori router sets its primary branch.
+// landed. The Shikimori router sets its primary branch; AniList's is set here.
 // Its primary is the lifecycle's (#696 § 0), read at call time: the lifecycle
 // is declared below, and nothing writes a rate while this module is set up.
 const trackerFanOut = createTrackerFanOut({
   store,
-  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }],
+  trackers: [
+    { sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> },
+    {
+      sync: anilistSync as unknown as TrackerSyncService<unknown, unknown>,
+      writePrimary: (malId, change) => anilistPrimary.write(malId, change)
+    }
+  ],
   primary: () => trackerLifecycle.primary()
 })
 // The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
@@ -421,18 +492,35 @@ const trackerLifecycle = createTrackerLifecycle({
   trackerRates,
   cancelAttempt: (id) => trackerAuth.cancel(id),
   broadcast: broadcastToAll,
-  accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED
+  accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED,
+  // An AniList or MAL login runs the Shared Library login run too (#714), as
+  // Shikimori's does from its own steps: it drops a claim, then merges.
+  afterLogin: () =>
+    void syncRunner
+      ?.runAll('login')
+      .catch((err) => console.error('[sync] the login run failed:', err)),
+  newTrackerCardsEnabled: newTrackerCards
 })
-// AniList (#703) and MyAnimeList (#702) add their providers here: the sign-in
-// flows, and the `airing` source's `getAiringInfo` (#706). Their sync
-// constructions pass the `tracker:details-updated` channel as
-// `detailsUpdatedChannel`, and AniList's passes `createTickIfAiringSource`'s
-// check as `onRatesRefreshed` (#706).
+// AniList's steps: the instance's own, plus the details prefetch's abort on a
+// logout or a switch, so no prefetch outlives the account it was for.
+trackerLifecycle.setSteps('anilist', {
+  resetExtra: () => anilistProvider.abortPrefetch(),
+  startTimer: () => anilistSync.startSyncTimer(),
+  drain: () => void anilistSync.syncQueue(),
+  stopTimer: () => anilistSync.stopSyncTimer(),
+  broadcastStatus: () => anilistSync.broadcastSyncStatus(),
+  broadcastQueue: () => anilistSync.broadcastQueueChanged()
+})
+// MyAnimeList (#702) adds its provider here: the sign-in flows, and the
+// `airing` source's `getAiringInfo` (#706), which MyAnimeList doesn't have.
+// Its sync construction passes `detailsUpdatedChannel` too, but no
+// `onRatesRefreshed` tick: MyAnimeList can't be the `airing` source.
 const trackerProviders = {
   shikimori: createShikimoriProvider({
     store,
     refreshDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId)
-  })
+  }),
+  anilist: anilistProvider
 }
 const trackerAuth = createTrackerAuthSessions({
   lifecycle: trackerLifecycle,
@@ -500,12 +588,13 @@ const sharedLibraryExport = createSharedLibraryExportService({
   sanitizeFilename,
   mergeStatus: (translationId) => downloadManager.getMergeStatus(translationId),
   presence: playerPresenceService,
+  // Every connected account (#714): the export creates or takes over a
+  // library for the owner the user picked, never through a claim.
   actor: () => ({
     installId: store.ensureInstallId(),
     appVersion: app.getVersion(),
-    shikimoriUserId: (store.get('shikimoriUser') as { id: number } | null)?.id ?? null,
-    claim: null,
-    trackerAccounts: []
+    ...ownerAccountsOf(connectedAccounts(store)),
+    claim: null
   }),
   broadcast: (job) => broadcastToAll(EVENT_CHANNELS.EXPORT_JOB_UPDATED, job),
   onLibraryWritten: (libraryId, root) => attachedLibraryService.refresh(libraryId, root),
@@ -657,8 +746,18 @@ prepareOffline.registerStep(
   })
 )
 // #693: one rates step per known tracker but Shikimori, connected or not; each
-// joins a run only while its tracker is connected. None until T6/T7 land.
-registerTrackerRatesSteps(prepareOffline, { store, trackers: () => trackerFanOut.syncServices() })
+// joins a run only while its tracker is connected. AniList's runs its details
+// prefetch as the third phase (#703).
+registerTrackerRatesSteps(prepareOffline, {
+  store,
+  trackers: () => trackerFanOut.syncServices(),
+  prefetch: {
+    anilist: {
+      prefetch: () => anilistProvider.prefetchDetails(),
+      abortPrefetch: () => anilistProvider.abortPrefetch()
+    }
+  }
+})
 prepareOffline.registerStep(
   createMetadataStep(
     metadataDeps({ store, isCachable: isCachableAnime, smotretApi, animeCacheService })
@@ -859,9 +958,11 @@ function registerIpcHandlers(): void {
     shikimoriSyncService,
     trackers: trackerFanOut,
     trackerRates,
+    primaryEntries: () => trackerRates.primaryEntries(),
     trackerLifecycle,
     trackerAuth,
     trackerChoices,
+    newTrackerCardsEnabled: newTrackerCards,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,
@@ -1103,8 +1204,12 @@ async function bootstrap(): Promise<void> {
   offlineKickoff = createOfflineKickoff({
     // Read at each online edge (#693): Shikimori, then every connected tracker.
     trackers: () =>
-      kickoffTrackers(store, trackerFanOut.syncServices(), () =>
-        shikimoriSyncService.prefetchShikimoriDetails()
+      kickoffTrackers(
+        store,
+        trackerFanOut.syncServices(),
+        () => shikimoriSyncService.prefetchShikimoriDetails(),
+        // AniList's: list titles only, per the AniList terms of use (#703).
+        { anilist: () => anilistProvider.prefetchDetails() }
       ),
     suspendDownloads: () => downloadManager.suspendForOffline(),
     resumeDownloads: () => downloadManager.resumeAfterOffline(),

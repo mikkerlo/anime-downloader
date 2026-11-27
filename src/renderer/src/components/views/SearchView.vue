@@ -92,6 +92,8 @@ let landedGeneration = 0;
 const genreChips = computed(() =>
   Array.from(new Set(localAll.value.flatMap((a) => a.genres))).sort((a, b) => a.localeCompare(b))
 );
+// `listStatus` is the primary tracker's status (#698), in the canonical
+// vocabulary, so the chips are the same for every tracker.
 const statusChips = computed(() =>
   STATUS_CHIPS.filter((s) => localAll.value.some((a) => a.listStatus === s.id))
 );

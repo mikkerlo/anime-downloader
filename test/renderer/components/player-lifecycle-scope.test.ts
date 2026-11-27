@@ -2332,8 +2332,10 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
     expect(maybeMarkWatched).not.toContain('currentEpisodeInt')
     // #565 — that `epNum` is what main's mark-episode-watched sends or queues.
     // A renderer-side `shikimoriGetRate` first would throw offline and lose it.
-    expect(maybeMarkWatched).toContain('window.api.shikimoriMarkEpisodeWatched(props.malId, epNum)')
-    expect(SRC.split('shikimoriMarkEpisodeWatched(').length - 1).toBe(2)
+    // #699 — both marks go through the tracker channel, which fans out.
+    expect(maybeMarkWatched).toContain('window.api.trackerMarkEpisodeWatched(props.malId, epNum)')
+    expect(SRC.split('trackerMarkEpisodeWatched(').length - 1).toBe(2)
+    expect(SRC.split('shikimoriMarkEpisodeWatched(').length - 1).toBe(0)
     expect(SRC).not.toContain('shikimoriGetRate')
     expect(SRC).not.toContain('shikimoriUpdateRate')
   })

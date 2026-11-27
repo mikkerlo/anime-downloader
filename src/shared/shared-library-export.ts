@@ -128,3 +128,40 @@ export const takeoverWarning = (nickname: string): string =>
   `You'll become the owner of this library. Other PCs that use it will see it as ${nickname}'s library.`
 export const takeoverUnconfirmed = (name: string): string =>
   `Upgrading '${name}' to With metadata makes you its owner: confirm it first.`
+
+// The owner picker and the v2 warnings (#714).
+const TRACKER_NAMES: Readonly<Record<string, string>> = {
+  shikimori: 'Shikimori',
+  anilist: 'AniList',
+  mal: 'MyAnimeList'
+}
+/** A Shared Library owner's tracker by name; null for a provider this version doesn't know. */
+export const trackerName = (provider: string | null | undefined): string | null =>
+  provider && Object.prototype.hasOwnProperty.call(TRACKER_NAMES, provider)
+    ? TRACKER_NAMES[provider]
+    : null
+export const OLDER_VERSIONS_LABEL = 'works with older versions'
+/** One owner picker entry: "Shikimori — akira (works with older versions)". */
+export const ownerOptionLabel = (o: {
+  provider: string
+  nickname: string
+  olderVersions: boolean
+}): string =>
+  `${trackerName(o.provider) ?? o.provider} — ${o.nickname}${o.olderVersions ? ` (${OLDER_VERSIONS_LABEL})` : ''}`
+export const V7_ONLY_NOTE =
+  'Only this app v7 or later can open this library. Older versions show it as made by a newer version; its videos still play in VLC or mpv.'
+export const V2_TAKEOVER_WARNING =
+  'This rewrites the library in a format older versions of the app can’t open.'
+export const SEPARATE_LIBRARY = 'Create a separate library instead'
+export const OWNER_NOT_OFFERED = 'That account isn’t connected, or can’t own a library yet.'
+export const SEPARATE_NEWER_MINOR =
+  'This library was made by a newer version of the app, so this account can’t take it over. Your export goes into a separate library next to it.'
+/** `other-owner`: the user's own library under another account is at the picked folder. */
+export const otherOwnerTarget = (tracker: string | null, picked: string): string =>
+  `Your ${tracker ? `${tracker} ` : ''}library is here; this creates a separate library owned by ${picked} next to it.`
+/** `other-owner` with a Videos only export: no owner is picked, the export just goes next to it. */
+export const otherOwnerVideosTarget = (tracker: string | null): string =>
+  `Your ${tracker ? `${tracker} ` : ''}library is here. Your export goes into a new library next to it.`
+/** The With metadata help for an owner's tracker; Shikimori's is `METADATA_HELP`. */
+export const metadataHelp = (tracker: string): string =>
+  `Includes watch progress, ${tracker} status, stars and priority for these titles only. Never includes passwords or tokens.`

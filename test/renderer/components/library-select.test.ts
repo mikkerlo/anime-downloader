@@ -7,6 +7,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { isProxy } from 'vue'
 import LibraryView from '../../../src/renderer/src/components/views/LibraryView.vue'
 import { useLibraryStore } from '../../../src/renderer/src/stores/library'
+import { trackersApi } from '../../helpers/trackers-api'
 
 function anime(id: number): AnimeSearchResult {
   return {
@@ -28,6 +29,8 @@ beforeEach(() => {
   setActivePinia(createPinia())
   exportPlan = vi.fn(async () => ({ titles: [], target: null }))
   const overrides: Record<string, unknown> = {
+    // The status tabs read `useTrackersStore` (#698); signed out here.
+    ...trackersApi().api,
     libraryGet: vi.fn().mockResolvedValue([anime(1), anime(2), anime(3)]),
     libraryGetStatus: vi.fn().mockResolvedValue({}),
     libraryGetPriority: vi.fn().mockResolvedValue([]),

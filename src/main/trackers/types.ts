@@ -217,7 +217,13 @@ export interface TrackerProvider<TSession, TNative, TRate = unknown> {
   getCalendar?(): Promise<unknown>
   getRelated?(ref: TrackerRef): Promise<unknown>
   getRecommendations?(seedMalIds: readonly number[]): Promise<unknown>
-  getDetails?(malId: number): Promise<TrackerDetails | null>
+  getDetails?(malId: number): Promise<unknown>
+  /**
+   * The tracker's own details cache entry for `malId`, normalized (#706):
+   * what `tracker:get-details` returns. Never the network; null on a miss.
+   * Each provider keeps its cache in its own shape and normalizes it here.
+   */
+  cachedDetails?(malId: number): TrackerDetails | null
 }
 
 /** Each tracker's name in the sync service's strings (`Shikimori rate limit — will retry`). */

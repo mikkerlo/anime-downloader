@@ -246,12 +246,16 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
     }
   }
 
-  /** Whether an owned or claimed library has `animeId` in scope (the detail page's Sync now). */
+  /**
+   * Whether an owned or claimed library has `animeId` in scope (the detail
+   * page's Sync now); a v1 library only until #715 runs v2 legs (#714).
+   */
   function canSyncTitle(animeId: number): boolean {
     return libraries.value.some(
       (l) =>
         l.mode === 'metadata' &&
         (l.role === 'owner' || l.role === 'claim') &&
+        l.layoutVersion === 1 &&
         l.titles.some((t) => t.animeId === animeId)
     )
   }

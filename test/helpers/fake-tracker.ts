@@ -11,7 +11,8 @@
 // AniList and MAL error replies encode the epic's documented
 // behaviour only; #703 (T7) and #702 (T6) replace them with captured fixtures.
 // AniList has a cache-first `getAiringInfo` and AniList and MAL a `getDetails`
-// (#706), each recording the reads its server answered in `serverReads`.
+// (#706), each recording the reads its server answered in `serverReads`, and a
+// `cachedDetails` over `detailsCache`.
 
 import { ShikiApiError, ShikiAuthError } from '../../src/main/shikimori'
 import type { RateValues } from '../../src/main/lib/shikimori-rate'
@@ -211,6 +212,8 @@ export interface FakeTracker<P extends TrackerId> {
   readonly airing: Map<number, AiringInfo>
   /** The server's details by MAL id (AniList, MyAnimeList). */
   readonly details: Map<number, TrackerDetails>
+  /** The provider's own details cache, normalized: what its `cachedDetails` answers. */
+  readonly detailsCache: Map<number, TrackerDetails>
   /** Every read the server answered, in order. */
   readonly serverReads: FakeServerRead[]
   user: TrackerUser & { token: string }
@@ -286,11 +289,13 @@ export function createFakeTracker<P extends TrackerId>(
       return airing.get(malId) ?? null
     }
   }
+  const detailsCache = new Map<number, TrackerDetails>()
   if (FAKE_MEMBERS[id].includes('getDetails')) {
     capabilityReads.getDetails = async (malId) => {
       serverReads.push({ member: 'getDetails', malId })
       return details.get(malId) ?? null
     }
+    capabilityReads.cachedDetails = (malId) => detailsCache.get(malId) ?? null
   }
   let clock = T0 + 1_000_000
   let failures: { reply: string; times: number; member?: FakeMember }[] = []
@@ -447,6 +452,7 @@ export function createFakeTracker<P extends TrackerId>(
     upserts,
     airing,
     details,
+    detailsCache,
     serverReads,
     signIn,
     user: { id: 1, nickname: `${id}-user`, avatar: null, token: `fake-access-token-${id}` },
@@ -487,6 +493,7 @@ export function createFakeTracker<P extends TrackerId>(
       upserts.length = 0
       airing.clear()
       details.clear()
+      detailsCache.clear()
       serverReads.length = 0
       failures = []
       clock = T0 + 1_000_000

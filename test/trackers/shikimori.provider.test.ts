@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import ratesFixture from '../fixtures/shikimori/user-anime-rates.json'
+import { SHIKIMORI_ORIGIN } from '../../src/shared/shikimori'
 
 const api = {
   ensureFreshToken: vi.fn(),
@@ -283,7 +284,8 @@ describe('listEntries', () => {
       updatedAt: Date.parse('2026-05-01T12:00:00.000+03:00'),
       anime: {
         title: 'Стальной алхимик: Братство',
-        poster: '/system/animes/original/5114.jpg',
+        // The Home rail's pick (#698): preview first, absolute on the Shikimori origin.
+        poster: `${SHIKIMORI_ORIGIN}/system/animes/preview/5114.jpg`,
         kind: 'tv',
         episodes: 64,
         episodesAired: 64,

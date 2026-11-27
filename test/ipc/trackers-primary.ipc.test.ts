@@ -238,6 +238,7 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
     trackerLifecycle: lifecycle,
     trackerAuth: auth,
     trackerChoices: choices,
+    newTrackerCardsEnabled: true,
     coldStorageService: { getDownloadDir: () => '/dl' },
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => {}),

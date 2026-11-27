@@ -1,13 +1,15 @@
 // `tracker:get-details` and `tracker:details-updated` (#706): a non-Shikimori
-// tracker's details cache, read with no network call, and the generic sync
-// service's `writeDetails`, the one emitter #702's and #703's details writers
-// go through. AniList and MyAnimeList run the generic sync service over the
-// fake-tracker personalities, as `index.ts` will construct them.
+// tracker's details cache, read through its provider's `cachedDetails` with no
+// network call, and the generic sync service's `broadcastDetails`, the one
+// emitter #702's and #703's details writers call. AniList and MyAnimeList run
+// the generic sync service over the fake-tracker personalities. The real
+// AniList provider's writes are `test/api-clients/anilist.test.ts`'s.
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { ipcMain } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { createGenericTracker } from '../helpers/generic-tracker'
+import { createFakeTracker } from '../helpers/fake-tracker'
 import { createTrackerFanOut } from '../../src/main/services/trackers/fan-out'
 import { createTrackerRates } from '../../src/main/services/trackers/rates'
 import { register as registerTrackers } from '../../src/main/ipc/trackers.ipc'
@@ -77,38 +79,43 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
-describe('writeDetails', () => {
-  it('writes the details cache, then broadcasts { trackerId, malId, details } on the configured channel', () => {
+describe('broadcastDetails and cachedDetails', () => {
+  it('broadcasts { trackerId, malId, details } on the configured channel, once per call', () => {
     const r = rig()
-    r.anilist.sync.writeDetails(1, DETAILS)
-    expect(
-      (r.store.get('anilistAnimeDetails') as Record<string, { details: TrackerDetails }>)['1']
-        .details
-    ).toEqual(DETAILS)
+    r.anilist.sync.broadcastDetails(1, DETAILS)
     expect(r.broadcast).toHaveBeenCalledTimes(1)
     expect(r.broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.TRACKER_DETAILS_UPDATED, {
       trackerId: 'anilist',
       malId: 1,
       details: DETAILS
     })
+    r.mal.sync.broadcastDetails(2, DETAILS)
+    expect(r.broadcast).toHaveBeenLastCalledWith(EVENT_CHANNELS.TRACKER_DETAILS_UPDATED, {
+      trackerId: 'mal',
+      malId: 2,
+      details: DETAILS
+    })
   })
 
-  it('keeps the other titles, and the other tracker’s cache', () => {
+  it('cachedDetails is the provider’s own, per tracker; a provider without one has none', () => {
     const r = rig()
-    r.anilist.sync.writeDetails(1, DETAILS)
-    r.anilist.sync.writeDetails(2, { ...DETAILS, status: 'released' })
-    r.mal.sync.writeDetails(1, { ...DETAILS, description: 'MAL' })
+    r.anilist.fake.detailsCache.set(1, DETAILS)
+    r.mal.fake.detailsCache.set(1, { ...DETAILS, description: 'MAL' })
     expect(r.anilist.sync.cachedDetails(1)).toEqual(DETAILS)
-    expect(r.anilist.sync.cachedDetails(2)?.status).toBe('released')
+    expect(r.anilist.sync.cachedDetails(2)).toBeNull()
     expect(r.mal.sync.cachedDetails(1)?.description).toBe('MAL')
+    const fake = createFakeTracker('anilist')
+    fake.detailsCache.set(1, DETAILS)
+    delete (fake.provider as { cachedDetails?: unknown }).cachedDetails
+    const bare = createGenericTracker('anilist', new InMemoryStorage({}) as never, { fake })
+    expect(bare.sync.cachedDetails(1)).toBeNull()
   })
 
-  it('a construction without the channel (Shikimori’s) writes and broadcasts nothing on it', () => {
-    const store = new InMemoryStorage({ anilistAnimeDetails: {} })
+  it('a construction without the channel (Shikimori’s) broadcasts nothing', () => {
+    const store = new InMemoryStorage({})
     const broadcast = vi.fn()
     const { sync } = createGenericTracker('anilist', store as never, { deps: { broadcast } })
-    sync.writeDetails(1, DETAILS)
-    expect(sync.cachedDetails(1)).toEqual(DETAILS)
+    sync.broadcastDetails(1, DETAILS)
     expect(broadcast).not.toHaveBeenCalled()
   })
 })
@@ -116,7 +123,7 @@ describe('writeDetails', () => {
 describe('tracker:get-details', () => {
   it('a cache hit answers from the cache: no prefetch and no server read', async () => {
     const r = rig()
-    r.anilist.sync.writeDetails(1, DETAILS)
+    r.anilist.fake.detailsCache.set(1, DETAILS)
     expect(await r.getDetails(1, 'anilist')).toEqual(DETAILS)
     expect(r.prefetch.anilist).not.toHaveBeenCalled()
     expect(serverReads(r)).toEqual([])
@@ -140,8 +147,8 @@ describe('tracker:get-details', () => {
 
   it('without a trackerId it reads the details source', async () => {
     const r = rig()
-    r.mal.sync.writeDetails(1, { ...DETAILS, description: 'from MAL' })
-    r.anilist.sync.writeDetails(1, DETAILS)
+    r.mal.fake.detailsCache.set(1, { ...DETAILS, description: 'from MAL' })
+    r.anilist.fake.detailsCache.set(1, DETAILS)
     // No account: no source.
     expect(await r.getDetails(1)).toBeNull()
     r.signIn('mal')
@@ -156,7 +163,7 @@ describe('tracker:get-details', () => {
     const r = rig()
     r.signIn('shikimori')
     r.signIn('anilist')
-    r.anilist.sync.writeDetails(1, DETAILS)
+    r.anilist.fake.detailsCache.set(1, DETAILS)
     expect(await r.getDetails(1)).toBeNull()
     expect(await r.getDetails(1, 'shikimori')).toBeNull()
     expect(r.prefetch.anilist).not.toHaveBeenCalled()

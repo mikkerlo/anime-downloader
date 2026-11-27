@@ -1,0 +1,98 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 111,
+          "idMal": 11,
+          "format": "TV",
+          "startDate": { "year": 2021, "month": 10, "day": 10 },
+          "title": { "romaji": "Yuukaku-hen", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx111.jpg"
+          },
+          "siteUrl": "https://anilist.co/anime/111",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "PREQUEL",
+                "node": {
+                  "id": 101,
+                  "idMal": 1,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2019, "month": 4, "day": 6 },
+                  "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+                  "coverImage": {
+                    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg"
+                  },
+                  "siteUrl": "https://anilist.co/anime/101"
+                }
+              },
+              {
+                "relationType": "SIDE_STORY",
+                "node": {
+                  "id": 777,
+                  "idMal": null,
+                  "type": "ANIME",
+                  "format": "ONA",
+                  "startDate": { "year": 2022, "month": 1, "day": 1 },
+                  "title": { "romaji": "No MAL Id Special", "english": null },
+                  "coverImage": {
+                    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx777.jpg"
+                  },
+                  "siteUrl": "https://anilist.co/anime/777"
+                }
+              },
+              {
+                "relationType": "SOURCE",
+                "node": {
+                  "id": 87216,
+                  "idMal": 96299,
+                  "type": "MANGA",
+                  "format": "MANGA",
+                  "startDate": { "year": 2016, "month": 2, "day": 15 },
+                  "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+                  "coverImage": {
+                    "large": "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx87216.jpg"
+                  },
+                  "siteUrl": "https://anilist.co/manga/87216"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 101,
+          "idMal": 1,
+          "format": "TV",
+          "startDate": { "year": 2019, "month": 4, "day": 6 },
+          "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg"
+          },
+          "siteUrl": "https://anilist.co/anime/101",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "SEQUEL",
+                "node": {
+                  "id": 111,
+                  "idMal": 11,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2021, "month": 10, "day": 10 },
+                  "title": { "romaji": "Yuukaku-hen", "english": null },
+                  "coverImage": {
+                    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx111.jpg"
+                  },
+                  "siteUrl": "https://anilist.co/anime/111"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

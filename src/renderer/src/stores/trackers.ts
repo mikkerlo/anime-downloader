@@ -85,7 +85,7 @@ function summaryOf(status: TrackerSyncStatus, queueLength: number): TrackerSyncS
   return 'synced'
 }
 
-function labelOf(state: TrackerSyncSummaryState, queueLength: number): string {
+export function labelOf(state: TrackerSyncSummaryState, queueLength: number): string {
   switch (state) {
     case 'session-expired':
       return 'Session expired'
@@ -103,11 +103,17 @@ function labelOf(state: TrackerSyncSummaryState, queueLength: number): string {
 export const useTrackersStore = defineStore('trackers', () => {
   const accounts = ref<TrackerAccount[]>([])
   const primary = ref<TrackerId | null>(null)
+  // True from the first accounts payload on (or a failed first read), set in
+  // the same step as `accounts` and `primary`, so the three settle together
+  // (#704). It never goes back to false.
+  const accountsLoaded = ref(false)
   const mirror = ref<TrackerAccountsState['mirror']>({})
   // The stored overrides only; `featureSource` resolves them.
   const featureSources = ref<TrackerAccountsState['featureSources']>({})
   // `tracker:details-updated` entries per tracker, by MAL id (#706).
   const detailsByTracker = ref<PerTracker<Record<number, TrackerDetails>>>({})
+  // The AniList and MyAnimeList cards (#703/#702): false until a payload says true.
+  const newTrackerCardsEnabled = ref(false)
   const ratesByTracker = ref<PerTracker<TrackerRateEntry[]>>({})
   const queuedAfterByTracker = ref<PerTracker<Record<number, TrackerRateValues>>>({})
   const syncByTracker = ref<PerTracker<TrackerSyncStatus>>({})
@@ -229,6 +235,26 @@ export const useTrackersStore = defineStore('trackers', () => {
     applySyncStatus(id, status)
   }
 
+  async function refreshOfflineQueueLength(id: TrackerId): Promise<void> {
+    const e = epoch.get(id) ?? 0
+    const length = await window.api.trackerGetOfflineQueueLength(id)
+    if ((epoch.get(id) ?? 0) !== e || !isConnected(id)) return
+    queueLengthByTracker.value = { ...queueLengthByTracker.value, [id]: length }
+  }
+
+  function syncStatusFor(id: TrackerId | null): TrackerSyncStatus {
+    return (id && syncByTracker.value[id]) || EMPTY_SYNC_STATUS
+  }
+
+  function queueLengthFor(id: TrackerId | null): number {
+    if (!id) return 0
+    return queueLengthByTracker.value[id] ?? syncByTracker.value[id]?.queueLength ?? 0
+  }
+
+  function triggerSync(id: TrackerId): Promise<void> {
+    return window.api.trackerTriggerSync(id)
+  }
+
   function applySyncStatus(id: TrackerId, status: TrackerSyncStatus): void {
     syncByTracker.value = { ...syncByTracker.value, [id]: status }
     queueLengthByTracker.value = { ...queueLengthByTracker.value, [id]: status.queueLength }
@@ -333,6 +359,8 @@ export const useTrackersStore = defineStore('trackers', () => {
     primary.value = next.primary
     mirror.value = next.mirror
     featureSources.value = next.featureSources
+    newTrackerCardsEnabled.value = next.newTrackerCardsEnabled === true
+    accountsLoaded.value = true
   }
 
   function applyAccounts(next: TrackerAccountsState): void {
@@ -414,14 +442,20 @@ export const useTrackersStore = defineStore('trackers', () => {
     .then((next) => {
       if (accountsSeq === initSeq) applyAccounts(next)
     })
-    .catch(() => {})
+    // No accounts to wait for: the detail panel stays hidden and Continue
+    // uses local progress, as a failed Shikimori user read did.
+    .catch(() => {
+      accountsLoaded.value = true
+    })
 
   return {
     accounts,
     primary,
+    accountsLoaded,
     mirror,
     featureSources,
     detailsByTracker,
+    newTrackerCardsEnabled,
     ratesByTracker,
     queuedAfterByTracker,
     syncByTracker,
@@ -436,6 +470,11 @@ export const useTrackersStore = defineStore('trackers', () => {
     rateFor,
     rateStateFor,
     holdTitle,
-    refreshRates
+    refreshRates,
+    refreshSyncStatus,
+    refreshOfflineQueueLength,
+    syncStatusFor,
+    queueLengthFor,
+    triggerSync
   }
 })

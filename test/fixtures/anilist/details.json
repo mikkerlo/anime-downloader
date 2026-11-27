@@ -1,0 +1,28 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 103,
+          "idMal": 3,
+          "description": "Gol D. Roger was known as the Pirate King.",
+          "genres": ["Action", "Adventure", "Comedy"],
+          "format": "TV",
+          "episodes": null,
+          "status": "RELEASING",
+          "nextAiringEpisode": { "episode": 1101 }
+        },
+        {
+          "id": 101,
+          "idMal": 1,
+          "description": "It is the Taisho Period in Japan.",
+          "genres": ["Action", "Supernatural"],
+          "format": "TV",
+          "episodes": 26,
+          "status": "FINISHED",
+          "nextAiringEpisode": null
+        }
+      ]
+    }
+  }
+}

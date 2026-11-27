@@ -73,7 +73,12 @@ kind, episodes, episodesAired, status }, smotretAnime, native }`.
 - **`updatedAt` is in ms, and `null`** when the row has no timestamp or it
   doesn't parse. Never `NaN`.
 - **`smotretAnime`** is the smotret catalog join (`lookupByMalIds`), as the rate
-  refresh does it today; null for a title the catalog doesn't have.
+  refresh does it today; null for a title the catalog doesn't have. Every
+  provider shares one lookup (`createMalIdLookup`, `src/main/lib/mal-id-lookup.ts`,
+  #744): `malIdMap` hits come from the cache and only the uncached ids go to
+  smotret. A smotret failure doesn't fail the list read: the uncached ids are
+  `null` for that read and nothing is cached for them, so the next successful
+  lookup fills them in; the cache hits keep their join.
 - **Shikimori's `anime.title` is `russian || name`**, the app's display rule;
   `name` stays available as `native.anime.name`.
 - **`anime.poster` is an absolute URL, or null.** Shikimori's is the Home
@@ -886,11 +891,16 @@ Shikimori's words (`anons` / `ongoing` / `released`, null when unknown),
 `episodes`, `episodesAired` and `kind`. `trackerId` defaults to the `details`
 source; for Shikimori it is null, since Shikimori's details stay on
 `shikimori:get-anime-details`. A miss kicks that instance's `prefetchDetails`
-(except offline), and the write arrives as `tracker:details-updated`. The
+(except offline), and the write arrives as `tracker:details-updated`. So does
+a stale hit (#744): the handler answers the cached entry and, when the
+instance's `detailsStale(malId)` is true, kicks the same `requestDetails`. The
 generic sync service carries both halves:
 
-- `cachedDetails(malId)` (the provider's member) and `requestDetails(malId)`
-  behind the handler;
+- `cachedDetails(malId)` (the provider's member), `detailsStale(malId)` (the
+  provider's optional member, `false` when absent: AniList has none, since its
+  prefetch walk refetches past `DETAILS_STALE_MS` on its own) and
+  `requestDetails(malId)` behind the handler. `DETAILS_STALE_MS` (7 days) is
+  one window both providers import from `src/main/trackers/details-freshness.ts`;
 - `broadcastDetails(malId, details)`: the `{ trackerId, malId, details }`
   broadcast on `detailsUpdatedChannel`, which a provider's details writer
   calls after its `store.set`. AniList's provider takes it as
@@ -1648,6 +1658,9 @@ clears the credentials only while the generation is unchanged too.
   never leaves the stub. A status filter is applied locally. `getEntry` reads
   `/anime/{id}?fields=my_list_status{…},num_episodes,status&nsfw=true`; no
   `my_list_status` is `null` (not on the list: the drain's create branch).
+  `readEntry` is that same request returning `{ entry, numEpisodes }`, the
+  title's total kept beside the entry (0 read as `null`), also for a title off
+  the list; `getEntry` is its `entry` (#744).
   `nsfw=true` on every list and title read, so a gray or black title never
   looks "not on list".
 - **Normalization.** `malId` and `remoteId` are the node id (MAL needs no id
@@ -1656,8 +1669,9 @@ clears the credentials only while the generation is unchanged too.
   (`media_type`), `episodes` (`num_episodes`, 0 read as `null`, MAL's
   "unknown"), `episodesAired` (`num_episodes` when `finished_airing`, else
   `null`: MAL has no aired count for an airing title) and `status`.
-  `smotretAnime` is the `lookupByMalIds` join. `native` is the `data[]`
-  element as read, `{ node, list_status }`.
+  `smotretAnime` is the `lookupByMalIds` join (a smotret failure leaves the
+  uncached titles `null`, see the normalized fields above). `native` is the
+  `data[]` element as read, `{ node, list_status }`.
 - **The cache.** `myanimelistUserRates` rows are `native` plus its
   `smotretAnime` (`malRateCache.fromEntries`); a patch writes the values back
   in MAL's own form (`status` + `is_rewatching`, `num_episodes_watched`,
@@ -1704,7 +1718,13 @@ the aired count when finished, `media_type`); a `tracker:get-details` miss
 kicks `requestPrefetch(malId)`, which fetches only a title on the user's list
 (the API agreement isn't settled for caching beyond it) and joins a fetch for
 that title already in flight; each write is broadcast on
-`tracker:details-updated` (`sync.broadcastDetails`). `createMalTracker` passes
+`tracker:details-updated` (`sync.broadcastDetails`). `fetchedAt` also decides
+staleness (#744): `detailsStale(malId)` is true for an entry with no
+`fetchedAt` or once `Date.now() - fetchedAt >= DETAILS_STALE_MS` (7 days,
+the window AniList's walk uses), and false on a miss, so a
+`tracker:get-details` on a stale entry answers it and kicks the same
+`requestPrefetch`. Offline nothing is fetched. A title off the list keeps its
+stale entry, by design: `requestPrefetch` refuses it. `createMalTracker` passes
 `detailsUpdatedChannel` and `prefetchDetails`, and no `onRatesRefreshed`.
 T11c and T11d consume the relations and recommendations reads. No
 `getAiringInfo` or `getCalendar` (MAL has a total and a status only, so it is
@@ -1737,6 +1757,16 @@ friends.
   cleanup prompt with the MAL row's own `smotretAnime`. The body of #702 named
   no primary writer; it was added because without one a MAL-only user's
   update-rate and mark-watched throw `MyAnimeList has no primary write path`.
+- **A mark past the total** (#744). MAL stores at most `num_episodes` and
+  answers the PATCH anyway, so mark-watched clamps its episode before
+  `nextWatchedRate`, before the send and before the queue: past a known total
+  it marks the total, so at the total it is a no-op (`null`, no PATCH, nothing
+  reaches a mirror), and on a `completed` title it is a no-op too, with no
+  rewatch (a mark at exactly the total still starts one, as before). The total
+  is `readEntry`'s `numEpisodes` online (a title off the list included) and
+  the cached row's `node.num_episodes` offline; with no row, or MAL's 0, there
+  is no clamp. MAL-local: mirrors compute their own value from the user's
+  episode, and update-rate isn't clamped.
 
 ### The MAL card
 

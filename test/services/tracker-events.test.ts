@@ -34,6 +34,7 @@ import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { createRunnerRateRefresh } from '../../src/main/services/sync-runner/rate-refresh'
+import { createMalIdLookup } from '../../src/main/lib/mal-id-lookup'
 import { queuedAfterOf } from '../../src/main/services/trackers/rates'
 import { createShikimoriEventBridge } from '../../src/main/trackers/events'
 import { shikimoriRateCache } from '../../src/main/trackers/shikimori.provider'
@@ -365,6 +366,40 @@ describe('the double-emit table: the router and the sync service (#694)', () => 
       entries: [expect.objectContaining({ malId: MAL, values: rv(6) })],
       raw: refreshed.legacy
     })
+  })
+
+  // #744: through the real shared lookup with smotret rejecting. Red on main:
+  // the rejection failed the whole rate write and only logged.
+  it('the runner’s refresh with smotret down still writes the rows and broadcasts them', async () => {
+    const r = rig({ malIdMap: {}, recentAnimeMeta: {} })
+    server.set(MAL, rv(6))
+    const warn = vi.fn()
+    const lookupByMalIds = createMalIdLookup({
+      store: r.store as never,
+      smotretApi: {
+        lookupByMalIds: async () => {
+          throw new Error('API error: 404 Not Found')
+        },
+        getAnime: async () => {
+          throw new Error('unused')
+        }
+      },
+      rememberAnimeMeta: () => {},
+      log: { warn }
+    })
+
+    await createRunnerRateRefresh({
+      store: r.store as never,
+      lookupByMalIds,
+      broadcast: r.bridge,
+      log: { warn }
+    })()
+
+    expect(warn.mock.calls.map(([m]) => String(m))).not.toContain('[sync] the rate refresh failed:')
+    const rows = r.store.get('shikimoriUserRates') as { smotretAnime: unknown }[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].smotretAnime).toBeNull()
+    expect(onlyTwin(r.calls(), SRR).legacy).toEqual(rows)
   })
 
   it('a write through services/trackers (applyChange) emits exactly one tracker:rate-updated: the instance and the bridge never both do', async () => {

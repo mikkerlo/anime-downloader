@@ -717,6 +717,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     needsSetup: () => needsSetupFlag,
     clearNeedsSetup,
     cachedDetails: (malId) => provider.cachedDetails?.(malId) ?? null,
+    detailsStale: (malId) => provider.detailsStale?.(malId) ?? false,
     broadcastDetails,
     requestDetails
   }
@@ -766,6 +767,12 @@ export interface TrackerDetailsCache {
    * Shikimori's details stay on `shikimori:get-anime-details`.
    */
   cachedDetails(malId: number): TrackerDetails | null
+  /**
+   * The provider's `detailsStale` (#744): its cache entry is past its window,
+   * so `tracker:get-details` kicks `requestDetails` beside the stale answer.
+   * False on a miss, and for a provider without one.
+   */
+  detailsStale(malId: number): boolean
   /**
    * The emit after a details-cache write: `{ trackerId, malId, details }` on
    * `detailsUpdatedChannel`. Each provider writes its cache in its own shape,

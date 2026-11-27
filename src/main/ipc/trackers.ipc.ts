@@ -378,7 +378,8 @@ export function register({
       const t = rates.instance(id)
       if (!t) return null
       const details = t.cachedDetails(mal)
-      if (!details) t.requestDetails(mal)
+      // A stale entry is still answered; its refetch arrives as `tracker:details-updated`.
+      if (!details || t.detailsStale(mal)) t.requestDetails(mal)
       return details
     }
   )

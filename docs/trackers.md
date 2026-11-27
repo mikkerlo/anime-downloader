@@ -1302,14 +1302,17 @@ with Shikimori exactly as before. [Shared Library › Merge](shared-library.md#m
 has the leg; this is what it takes from a tracker.
 
 - **The runner's deps.** `SyncRunnerDeps.legs` lists each non-Shikimori
-  tracker's sync instance and provider (`index.ts` passes AniList's; MAL's
-  joins with #702). The leg drains that instance, reads the list once through
+  tracker's sync instance and provider (`index.ts` passes AniList's and
+  MyAnimeList's). The leg drains that instance, reads the list once through
   `provider.listEntries` (its session from `auth()`), reads the cache through
   the codec's `entryOf`, patches it through `patchCachedRate`, queues through
   `mergeQueues` into `<provider>UpdateQueue` (never `applyChange`), and listens
-  to the instance's `onItemSettled` for path C and the drop counter. A
-  tracker with no instance here can't be an owner PC's leg: its library is
-  skipped as foreign, while a claim PC still merges its drive.
+  to the instance's `onItemSettled` for path C and the drop counter. Both
+  AniList's and MAL's codecs move a row's only time on a local patch, so a
+  pending field counts as replaced by a refresh when the cache shows another
+  value. A tracker with no instance passed (only in tests now) can't be an
+  owner PC's leg: its library is skipped as foreign, while a claim PC still
+  merges its drive.
 - **Owners** are `(provider, userId)`, compared through the owner key. A
   settle event's numeric user id becomes `{ provider, userId: String(id) }`
   before any lookup.

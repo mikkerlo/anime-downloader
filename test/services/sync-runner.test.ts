@@ -15,6 +15,8 @@ import { F, doc, rate, watch } from '../helpers/sync-merge'
 import {
   ANILIST_5,
   ANILIST_USER,
+  MAL_5,
+  MAL_USER,
   ANIME,
   MAL,
   OWNER,
@@ -2655,6 +2657,82 @@ describe.each(TRACKER_CASES)('an $label-owned library: the owner tracker’s leg
       name: 'Drive'
     })
     expect(switched).toMatchObject({ drive: 'skipped', driveReason: 'foreign' })
+  })
+})
+
+describe('a MyAnimeList-owned library: the MAL leg (#715, after #702)', () => {
+  it('the drive flips episode 6; the MAL leg queues one field-scoped entry, mal-5.json holds it, and the drain settles it into mal-5', async () => {
+    const pendingFile = (pc: Pc) =>
+      path.join(pc.userData, 'sync-pending', `mal-${MAL_USER.id}.json`)
+    const lib = await makeLibrary({
+      tracker: MAL_5,
+      doc: titleDoc({
+        watch: { ...W([1, 2, 3, 4, 5], T0, 'pc-owner'), ...W([6], T0 + 1000) },
+        rate: rate({ episodes: 5 }, T0, 'pc-owner', MAL)
+      })
+    })
+    const pc = makePc({
+      user: null,
+      mal: {},
+      store: {
+        myanimelistUserRates: [
+          {
+            malId: MAL,
+            remoteId: MAL,
+            values: vals({ episodes: 5 }),
+            updatedAt: T0,
+            smotretAnime: { id: ANIME }
+          }
+        ],
+        watchProgress: localRows([1, 2, 3, 4, 5], T0)
+      }
+    })
+    pc.mal!.fake.set(MAL, { episodes: 5 }, { at: T0 })
+    await pc.attach(lib.root)
+    expect(pc.attached.get(lib.libraryId)).toMatchObject({ role: 'owner', ownerProvider: 'mal' })
+    await seedBase(
+      pc,
+      lib.libraryId,
+      lib.root,
+      titleDoc({
+        watch: W([1, 2, 3, 4, 5], T0, 'pc-owner'),
+        rate: rate({ episodes: 5 }, T0, 'pc-owner', MAL)
+      })
+    )
+    await pc.bases.write(`mal-${MAL_USER.id}`, {
+      stateGeneration: null,
+      doc: titleDoc({ rate: rate({ episodes: 5 }, T0, 'mal', MAL) })
+    })
+    const drain = vi.spyOn(pc.mal!.sync, 'syncQueue').mockResolvedValue(undefined)
+    const res = await pc.runner.runAll('manual')
+    expect(res.libraries[0]).toMatchObject({
+      drive: 'ok',
+      shikimori: 'skipped',
+      tracker: { id: 'mal', status: 'ok' }
+    })
+    expect(pc.store.get('myanimelistUpdateQueue')).toEqual([
+      expect.objectContaining({
+        malId: MAL,
+        rateId: MAL,
+        before: vals({ episodes: 5 }),
+        after: vals({ episodes: 6 }),
+        fields: ['episodes']
+      })
+    ])
+    expect(pc.store.get('anilistUpdateQueue') ?? []).toEqual([])
+    expect(queue(pc)).toEqual([])
+    expect(JSON.parse(fs.readFileSync(pendingFile(pc), 'utf8'))).toMatchObject({
+      ownerId: String(MAL_USER.id),
+      rates: { [MAL]: { episodes: { value: 6 } } }
+    })
+    drain.mockRestore()
+    await pc.mal!.sync.drainNow()
+    await pc.runner.quiesce()
+    expect(pc.mal!.fake.rows.get(MAL)!.values.episodes).toBe(6)
+    expect(fs.existsSync(pendingFile(pc))).toBe(false)
+    expect(
+      (await pc.bases.read(`mal-${MAL_USER.id}`))!.doc.titles[ID].rate!.episodes
+    ).toMatchObject({ value: 6, origin: 'mal' })
   })
 })
 

@@ -594,12 +594,13 @@ syncRunner = createSyncRunner({
   attached: attachedLibraryService,
   sync: shikimoriSyncService,
   trackers: trackerFanOut.syncServices(),
-  // The owner tracker's leg for an AniList-owned library (#715); MAL's joins with #702.
+  // The owner tracker's leg for an AniList- or MAL-owned library (#715).
   legs: [
     {
       sync: anilistSync as unknown as TrackerSyncService<unknown, unknown>,
       provider: anilistProvider
-    }
+    },
+    { sync: mal.sync as TrackerSyncService<unknown, unknown>, provider: mal.provider as never }
   ],
   isOffline,
   onOnline: (listener) => {

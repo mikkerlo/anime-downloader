@@ -194,6 +194,12 @@ describe('MyAnimeList as the primary', () => {
     expect(r.cleanupPrompt).toHaveBeenCalledWith(SMOTRET, 52991, 'completed', 'watching')
   })
 
+  // #701: the primary picker offers MAL only once its writer is registered.
+  it('the accounts state lists MAL in primaryCapable after registerPrimary, and not without it', async () => {
+    expect((await rig()).listAccounts().primaryCapable).toEqual(['mal'])
+    expect((await rig({ registerPrimary: false })).listAccounts().primaryCapable).toEqual([])
+  })
+
   // The mutation: without `registerPrimary` (its `setPrimaryWriter('mal', …)`) this is main's throw.
   it('without the primary writer the fan-out refuses: what main does', async () => {
     serveEntry(3)

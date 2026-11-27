@@ -22,6 +22,8 @@ import {
   syntheticRate
 } from '../services/trackers/shikimori-primary'
 import type { TrackerStatus } from '../services/trackers/rates'
+import { assertMayConnect } from '../trackers/flags'
+import { isConnected } from '../trackers/primary'
 import { shikimoriAuthFlow } from '../trackers/shikimori.provider'
 import type { AppDeps } from './index'
 
@@ -39,7 +41,8 @@ export function register({
   runAutoDownloadTick,
   broadcast,
   offlineService,
-  syncRunner
+  syncRunner,
+  secondTrackerEnabled
 }: AppDeps) {
   // The shared refresh (#694): the calendar, recs and `SHIKIMORI_RATES_REFRESHED`
   // go with the instance's `refreshRates`, and this tail runs after it.
@@ -496,7 +499,12 @@ export function register({
   // The four account aliases (#695) delegate to the tracker lifecycle and
   // Shikimori's `authFlow`, with today's payloads, until v7.0 (#717). Unlike
   // `tracker:begin-auth`, none of them refuses while offline.
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => shikimoriAuthFlow.begin().authorizeUrl)
+  // The second-tracker flag (#701) refuses here as `tracker:begin-auth` does;
+  // the exchange below meets the lifecycle's commit-time check.
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => {
+    assertMayConnect(secondTrackerEnabled, 'shikimori', (t) => isConnected(store, t))
+    return shikimoriAuthFlow.begin().authorizeUrl
+  })
 
   // The live queue only ever holds the signed-in user's changes (#588); the
   // lifecycle writes nothing until `getUser` resolves (`trackers/lifecycle.ts`).

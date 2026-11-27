@@ -15,6 +15,7 @@
 
 import * as http from 'http'
 import type { AddressInfo } from 'net'
+import { SecondTrackerRefusedError } from './flags'
 import type { TrackerLifecycle } from './lifecycle'
 import type { TrackerAuthAttempt, TrackerAuthFlow, TrackerProvider } from './types'
 import { TRACKER_LABELS } from './types'
@@ -154,7 +155,10 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
             ? { status: 'connected', account: lifecycle.account(a.trackerId) }
             : { status: 'cancelled' }
       } catch (err) {
-        result = { status: 'error', kind: a.provider.classifyError(err), message: messageOf(err) }
+        // The second-tracker refusal (#701) is the app's, not the provider's.
+        const kind =
+          err instanceof SecondTrackerRefusedError ? 'auth' : a.provider.classifyError(err)
+        result = { status: 'error', kind, message: messageOf(err) }
       }
       // Overtaken: a committed login still reports itself; anything else is `cancelled`.
       if (!isCurrent()) return result.status === 'connected' ? result : { status: 'cancelled' }

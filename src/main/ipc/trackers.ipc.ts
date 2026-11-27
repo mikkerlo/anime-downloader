@@ -19,6 +19,8 @@ import { AniListUnmappedError } from '../trackers/anilist/errors'
 import { storedAnilistMediaId } from '../trackers/anilist/id-map'
 import { getClientConfig, setClientConfig } from '../trackers/client-config'
 import { storedFeatureSource } from '../trackers/feature-source'
+import { assertMayConnect } from '../trackers/flags'
+import { isConnected } from '../trackers/primary'
 import { createShikimoriCalendar } from '../services/shikimori-sync/calendar'
 import { TRACKER_LABELS } from '../trackers/types'
 import type { AppDeps } from './index'
@@ -115,6 +117,7 @@ export function register({
   trackerAuth: auth,
   trackerChoices: choices,
   newTrackerCardsEnabled,
+  secondTrackerEnabled,
   malSetup,
   shikimoriSyncService,
   lookupByMalIds,
@@ -154,7 +157,13 @@ export function register({
 
   ipcMain.handle(
     CHANNELS.TRACKER_BEGIN_AUTH,
-    (_event, trackerId: unknown): Promise<TrackerAuthResult> => auth.begin(signInArg(trackerId))
+    (_event, trackerId: unknown): Promise<TrackerAuthResult> => {
+      const id = signInArg(trackerId)
+      // The second-tracker flag (#701), before the attempt: no bind, no
+      // browser. The commit re-checks it (`trackers/lifecycle.ts`).
+      assertMayConnect(secondTrackerEnabled, id, (t) => isConnected(store, t))
+      return auth.begin(id)
+    }
   )
 
   ipcMain.handle(

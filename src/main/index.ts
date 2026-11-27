@@ -93,7 +93,7 @@ import { anilistSessionSteps, createAniListSyncService } from './trackers/anilis
 import { anilistCalendarSyncHooks, createAniListCalendar } from './trackers/anilist/calendar'
 import { createAniListEventBridge } from './trackers/anilist/events'
 import { createAniListPrimary } from './services/trackers/anilist-primary'
-import { newTrackerCardsEnabled } from './trackers/flags'
+import { newTrackerCardsEnabled, secondTrackerEnabled } from './trackers/flags'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
 import { malLoopbackPort } from './trackers/mal/auth'
@@ -135,6 +135,8 @@ export interface AutoDownloadSubscription {
 applyApiBaseOverrides(process.env, app.isPackaged)
 // The AniList and MyAnimeList cards (#703/#702): off in a packaged build until the flag lifts.
 const newTrackerCards = newTrackerCardsEnabled(app.isPackaged)
+// Connecting a second tracker (#701): off in a packaged build until #708 removes the flag.
+const secondTracker = secondTrackerEnabled(app.isPackaged)
 
 const store = openStorageOrExit()
 
@@ -549,7 +551,10 @@ const trackerLifecycle = createTrackerLifecycle({
     void syncRunner
       ?.runAll('login')
       .catch((err) => console.error('[sync] the login run failed:', err)),
-  newTrackerCardsEnabled: newTrackerCards
+  newTrackerCardsEnabled: newTrackerCards,
+  secondTrackerEnabled: secondTracker,
+  // Read at call time: the Shikimori router sets its writer after this.
+  hasPrimaryWriter: (id) => trackerFanOut.hasPrimaryWriter(id)
 })
 // AniList's steps: the instance's own, plus the details prefetch's abort and
 // the calendar snapshot's deletion (#709) on a logout or a switch.
@@ -922,6 +927,7 @@ function registerIpcHandlers(): void {
     trackerAuth,
     trackerChoices,
     newTrackerCardsEnabled: newTrackerCards,
+    secondTrackerEnabled: secondTracker,
     malSetup: mal.setup,
     anilistCalendar,
     lookupByMalIds,

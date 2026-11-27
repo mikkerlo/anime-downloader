@@ -165,9 +165,10 @@ function togglePopover(): void {
   if (popoverOpen.value) closePopover();
   else openPopover();
 }
-function openTrackerSettings(): void {
+// Settings › Trackers, scrolled to that tracker's card (#700).
+function openTrackerSettings(trackerId: TrackerId): void {
   closePopover();
-  libraryStore.navigateToSettingsTab('connectors');
+  libraryStore.navigateToSettingsTab('trackers', trackerId);
 }
 
 watch(multiTracker, (multi) => {
@@ -284,7 +285,7 @@ onBeforeUnmount(unlisten);
               type="button"
               class="sync-row-link"
               :title="rowTitle(row)"
-              @click="openTrackerSettings"
+              @click="openTrackerSettings(row.trackerId)"
             >
               Settings
             </button>
@@ -313,7 +314,7 @@ onBeforeUnmount(unlisten);
               class="u-sync"
               :class="sessionExpired ? 'expired' : 'offline'"
               :title="rowTitle(syncRows[0])"
-              @click="libraryStore.navigateToSettingsTab('connectors')"
+              @click="openTrackerSettings(syncRows[0].trackerId)"
             >
               <span class="dot"></span>{{ syncLabel }}
             </button>

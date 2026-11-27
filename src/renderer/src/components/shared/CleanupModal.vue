@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { formatBytes } from '../../utils';
+import { usePrimaryTrackerLabel } from '../../composables/use-primary-tracker-label';
 
 const props = defineProps<{
   animeId: number;
@@ -11,6 +12,8 @@ const emit = defineEmits<{
   closed: [];
   deleted: [];
 }>();
+
+const primaryTrackerLabel = usePrimaryTrackerLabel();
 
 const sizeLoading = ref(true);
 const bytes = ref(0);
@@ -69,7 +72,9 @@ function cancel(): void {
           {{ fileCount }} file{{ fileCount === 1 ? '' : 's' }} · {{ formatBytes(bytes) }} on disk.
         </p>
       </template>
-      <p class="cleanup-note">Watch progress and your Shikimori rate will be kept.</p>
+      <p class="cleanup-note">
+        Watch progress and your {{ primaryTrackerLabel }} rate will be kept.
+      </p>
       <p v-if="activeDownloads > 0" class="cleanup-warn">
         ⚠ {{ activeDownloads }} download{{ activeDownloads === 1 ? '' : 's' }} for this show
         {{ activeDownloads === 1 ? 'is' : 'are' }} still in flight and will be cancelled.

@@ -6,6 +6,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 // no Cancel and closing means Keep. `discard`: confirms dropping a kept row.
 const props = defineProps<{
   mode: 'disconnect' | 'switch' | 'discard';
+  /** The tracker's display name (`TRACKER_LABELS`), e.g. 'Shikimori'. */
+  trackerLabel: string;
   count: number;
   /** Whose changes these are; null for the unknown-account bucket. */
   nickname: string | null;
@@ -19,13 +21,15 @@ const emit = defineEmits<{
 }>();
 
 const changes = computed(() =>
-  props.count === 1 ? '1 Shikimori change' : `${props.count} Shikimori changes`
+  props.count === 1
+    ? `1 ${props.trackerLabel} change`
+    : `${props.count} ${props.trackerLabel} changes`
 );
 const notSynced = computed(() => (props.count === 1 ? "hasn't" : "haven't"));
 const owner = computed(() => props.nickname ?? 'an unknown account');
 
 const title = computed(() => {
-  if (props.mode === 'disconnect') return 'Disconnect Shikimori?';
+  if (props.mode === 'disconnect') return `Disconnect ${props.trackerLabel}?`;
   if (props.mode === 'switch') return 'Signed in to a different account';
   return 'Discard kept changes?';
 });

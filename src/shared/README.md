@@ -11,6 +11,7 @@ Reserved for the cross-cutting layer introduced by the
 - `shikimori.ts` — the Shikimori origin + its image hotlink filters
 - `episode-files.ts` — the episode-file extension sets and the regexes derived from them (#429)
 - `storage-roots.ts` — `ROOT_KEYS`, the storage root key list read by `storage:clear-root`, `set-setting`'s denylist, `missingConfiguredRoot()` and the Storage tab (#454)
+- `trackers/labels.ts` — `TRACKER_LABELS`, each tracker's display name for UI copy (#700)
 
 A `.d.ts` here emits no runtime values, so a shared constant needs a real `.ts`
 module; a shared *type* goes in `types/` and stays ambient.

@@ -451,6 +451,13 @@ describe('shikimori client — fixture replay', () => {
       expect((err as Error).message).toBe(shikimori.NOT_CONNECTED_MESSAGE)
     })
 
+    it('both messages send the user to Settings → Trackers, where the account card lives (#700)', () => {
+      expect(shikimori.SESSION_EXPIRED_MESSAGE).toContain('Settings → Trackers')
+      expect(shikimori.NOT_CONNECTED_MESSAGE).toContain('Settings → Trackers')
+      expect(shikimori.SESSION_EXPIRED_MESSAGE).not.toContain('Connectors')
+      expect(shikimori.NOT_CONNECTED_MESSAGE).not.toContain('Connectors')
+    })
+
     it('still says "session expired" once expiry has cleared the credentials', async () => {
       // The repeat-edit path after an expiry: credentials gone, flag set. This
       // is the case the offline queue relies on, so the class must not change.

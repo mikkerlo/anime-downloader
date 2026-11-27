@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 import ConflictRow from './ConflictRow.vue';
 import { suggestedChoice } from './format';
 import { useSyncStore } from '../../stores/sync';
@@ -96,8 +97,8 @@ async function applyPicked(): Promise<void> {
         Needs your input ({{ conflicts.length }})
       </div>
       <p class="sl-muted">
-        Applied here, on each connected library and on Shikimori. You can change any of these later
-        from the title page.
+        Applied here, on each connected library and on {{ TRACKER_LABELS.shikimori }}. You can
+        change any of these later from the title page.
       </p>
       <p v-if="conflicts.length === 0" class="sl-text" data-testid="review-empty">
         Nothing needs your input.

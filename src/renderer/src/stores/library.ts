@@ -26,6 +26,7 @@ export type SettingsTab =
   | 'storage'
   | 'player'
   | 'connectors'
+  | 'trackers'
   | 'merging'
   | 'shortcuts'
   | 'watch-together'
@@ -75,6 +76,9 @@ export const useLibraryStore = defineStore('library', () => {
   const animeHistoryByView = ref<Record<StackedView, number[]>>(emptyHistory())
   const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({})
   const pendingSettingsTab = ref<SettingsTab | null>(null)
+  // Its own ref: the shell consumes `pendingSettingsTab` before the Trackers
+  // tab exists, so an id parked beside it would be lost (#700).
+  const pendingSettingsTrackerId = ref<TrackerId | null>(null)
   // Ids with a poster in main's disk cache (#570): one request per view load,
   // not one per card. A poster cached since then falls back to its remote URL.
   const posterIds = ref<ReadonlySet<number>>(new Set())
@@ -114,8 +118,10 @@ export const useLibraryStore = defineStore('library', () => {
   // Deep-link target for the Settings view's tab strip. SettingsShell owns
   // `activeTab` locally, so a caller that needs a specific tab (the Shikimori
   // "sign in again" affordance, #244) parks it here and the shell consumes it.
-  function navigateToSettingsTab(tab: SettingsTab): void {
+  // A `trackerId` is for the Trackers tab, which scrolls to that card.
+  function navigateToSettingsTab(tab: SettingsTab, trackerId?: TrackerId): void {
     pendingSettingsTab.value = tab
+    pendingSettingsTrackerId.value = trackerId ?? null
     currentView.value = 'settings'
   }
 
@@ -123,6 +129,12 @@ export const useLibraryStore = defineStore('library', () => {
     const tab = pendingSettingsTab.value
     pendingSettingsTab.value = null
     return tab
+  }
+
+  function consumePendingSettingsTrackerId(): TrackerId | null {
+    const id = pendingSettingsTrackerId.value
+    pendingSettingsTrackerId.value = null
+    return id
   }
 
   function openAnime(id: number, focusEpisodeInt?: string): void {
@@ -157,6 +169,7 @@ export const useLibraryStore = defineStore('library', () => {
     animeHistoryByView,
     focusEpisodeIntForAnime,
     pendingSettingsTab,
+    pendingSettingsTrackerId,
     posterIds,
     loadPosterIds,
     activeAnimeId,
@@ -164,6 +177,7 @@ export const useLibraryStore = defineStore('library', () => {
     navigate,
     navigateToSettingsTab,
     consumePendingSettingsTab,
+    consumePendingSettingsTrackerId,
     openAnime,
     closeAnime,
     clearFocusEpisode

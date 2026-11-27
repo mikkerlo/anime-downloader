@@ -206,3 +206,21 @@ describe('CalendarView — offline (#568)', () => {
     expect(getCalendar).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('CalendarView — not connected', () => {
+  it('points to the Shikimori card in Settings → Trackers (#700)', async () => {
+    const getCalendar = vi.fn()
+    stubApi({
+      ...BASE,
+      shikimoriGetUser: vi.fn().mockResolvedValue(null),
+      shikimoriGetCalendar: getCalendar
+    })
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    expect(wrapper.find('.empty-state p').text()).toBe(
+      'Connect to Shikimori in Settings → Trackers to see the calendar.'
+    )
+    expect(getCalendar).not.toHaveBeenCalled()
+  })
+})

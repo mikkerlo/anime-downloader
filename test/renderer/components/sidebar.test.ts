@@ -203,7 +203,8 @@ describe('Sidebar', () => {
       await chip.trigger('click')
       expect(popover(w).exists()).toBe(false)
       expect(library.currentView).toBe('settings')
-      expect(library.pendingSettingsTab).toBe('connectors')
+      expect(library.pendingSettingsTab).toBe('trackers')
+      expect(library.pendingSettingsTrackerId).toBe('shikimori')
     })
 
     it('without Shikimori: the AniList account fills the chip with its own state', async () => {
@@ -224,8 +225,11 @@ describe('Sidebar', () => {
       expect(w.find('.u-sync').attributes('title')).toBe(
         'AniList rejected the stored session — sign in again'
       )
+      const library = useLibraryStore()
       await w.find('.u-sync').trigger('click')
       expect(popover(w).exists()).toBe(false)
+      expect(library.pendingSettingsTab).toBe('trackers')
+      expect(library.pendingSettingsTrackerId).toBe('anilist')
     })
 
     it('falls back to the initial when the primary has no avatar', async () => {
@@ -254,7 +258,8 @@ describe('Sidebar', () => {
       await chip.trigger('click')
       expect(popover(w).exists()).toBe(false)
       expect(library.currentView).toBe('settings')
-      expect(library.pendingSettingsTab).toBe('connectors')
+      expect(library.pendingSettingsTab).toBe('trackers')
+      expect(library.pendingSettingsTrackerId).toBe('mal')
     })
   })
 
@@ -346,7 +351,8 @@ describe('Sidebar', () => {
       expect(link.element.tagName).toBe('BUTTON')
       await link.trigger('click')
       expect(library.currentView).toBe('settings')
-      expect(library.pendingSettingsTab).toBe('connectors')
+      expect(library.pendingSettingsTab).toBe('trackers')
+      expect(library.pendingSettingsTrackerId).toBe('anilist')
       expect(popover(w).exists()).toBe(false)
     })
 
@@ -367,6 +373,10 @@ describe('Sidebar', () => {
       expect(mal.find('.sync-row-name').text()).toBe('MyAnimeList')
       expect(mal.find('.u-sync').text()).toBe('Needs setup')
       expect(mal.find('button.sync-row-link').exists()).toBe(true)
+      await mal.find('button.sync-row-link').trigger('click')
+      const library = useLibraryStore()
+      expect(library.pendingSettingsTab).toBe('trackers')
+      expect(library.pendingSettingsTrackerId).toBe('mal')
     })
 
     it('a tracker disconnecting back to one closes the popover and restores the plain chip', async () => {

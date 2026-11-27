@@ -190,13 +190,13 @@ describe('Sidebar', () => {
       expect(listButton(w, 'Shikimori').classes()).toContain('active')
     })
 
-    it('AniList-only: the group shows with an "AniList" list item and Calendar (#709 widened it)', async () => {
+    it('AniList-only: the group shows with an "AniList" list item, Friends (#712) and Calendar (#709)', async () => {
       stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
       const w = await mountSidebar()
 
       expect(w.find('.nav-label').text()).toBe('Lists')
-      // For You and Friends still read Shikimori only (T11d, T12).
-      expect(listItems(w)).toEqual(['AniList', 'Calendar'])
+      // For You still reads Shikimori only (T11d).
+      expect(listItems(w)).toEqual(['AniList', 'Friends', 'Calendar'])
     })
 
     it('AniList-only with the calendar row back at its T9 value: no Calendar', async () => {
@@ -205,11 +205,25 @@ describe('Sidebar', () => {
       VIEW_SOURCES.calendar = ['shikimori']
       stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
       const w = await mountSidebar()
-      expect(listItems(w)).toEqual(['AniList'])
+      expect(listItems(w)).toEqual(['AniList', 'Friends'])
     })
 
-    it('widening a row makes its item appear: friends gains AniList as T12 will', async () => {
-      VIEW_SOURCES.friends = ['shikimori', 'anilist']
+    it('AniList-only with the friends row back at its T9 value: no Friends', async () => {
+      // #712's mutation control: the Friends item is there only because the
+      // row is widened.
+      VIEW_SOURCES.friends = ['shikimori']
+      stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
+      const w = await mountSidebar()
+      expect(listItems(w)).toEqual(['AniList', 'Calendar'])
+    })
+
+    it('Shikimori + AniList, Shikimori primary: Friends shows as with AniList primary', async () => {
+      stubApi(accountsState({ shikimori: SHIKI_USER, anilist: ANILIST_USER }, 'shikimori'))
+      const w = await mountSidebar()
+      expect(listItems(w)).toEqual(['Shikimori', 'For You', 'Friends', 'Calendar'])
+    })
+
+    it('widening a row makes its item appear: forYou gains AniList as T11d will', async () => {
       VIEW_SOURCES.forYou = ['shikimori', 'anilist', 'mal']
       stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
       const w = await mountSidebar()

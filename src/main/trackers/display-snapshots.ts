@@ -1,8 +1,8 @@
 // Display snapshots (#568, #570; per provider since #709): what a view last
 // showed, kept for the account it was fetched for and persisted to one file
 // per provider, `userData/<provider>-snapshots.json`, as
-// `{ version: 1, userId, <section>?: { data, fetchedAt } }`. Shikimori's
-// calendar and friends activity and AniList's calendar use it.
+// `{ version: 1, userId, <section>?: { data, fetchedAt } }`. Each provider's
+// calendar and friends activity (Shikimori's, and AniList's since #709/#712) use it.
 //
 // - A record belongs to the user it was fetched for: a mismatch reads as none,
 //   and `put` stores (and persists) only a record for the signed-in user, so a

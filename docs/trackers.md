@@ -813,7 +813,7 @@ the renderer so the two can't disagree:
   | *(no feature key)* | `getFriends` | ✅ | ✅ | ❌ |
 
   The `getFriends` row isn't a `FeatureKey`: the sidebar's Friends gate (T9)
-  and the friends fan-out (T12) read it, and the resolver never does. A
+  and the friends fan-out (T12, § Friends) read it, and the resolver never does. A
   provider's `TrackerCapabilities` says which members it implements today; it
   never claims one the matrix lacks (the matrix test checks every real
   provider).
@@ -963,6 +963,11 @@ has the details).
   subscriber upserts per tracker. `defaultFeatureSource(feature)` is the same
   call with that feature's override left out, the "Default (‹tracker›)" label
   of Settings → Trackers (#701).
+- **Friends (#712).** `refreshFriends()` reads `tracker:get-friends` into
+  `friendsByTracker` and `friendsSources`; `friends` is the cards merged in
+  `TRACKER_ORDER`. The eager `tracker:friends-refreshed` subscriber replaces
+  only that event's source, and a reply that a refresh overtook keeps the
+  refreshed source's cards. A dropped tracker's cards go with it.
 - **The multi-account controls (#701)** read `multiAccount`,
   `secondTrackerEnabled`, `primaryCapable` and `mirrorOn(id)`, and call
   `setPrimary`, `setMirror` and `setFeatureSource`, which go through #696's
@@ -1368,10 +1373,21 @@ a title not on AniList throws; a mark-watched for one is null.
   same per media, matched on `id`, a node with no `idMal` kept.
 - **`getRecommendations(seedMalIds)`**: `Media.recommendations` per mapped
   seed, adult ones filtered by `displayAdultContent`.
-- **`getFriendsRates(session, malId)`**: `Page.mediaList(mediaId,
-  isFollowing: true)` with the AniList id. **`getFriendsActivity(session)`**:
-  `Page.activities(isFollowing: true, type_in: [ANIME_LIST])`, adult media
-  filtered. `getFriends` (`Page.following`) is T12's.
+- **The friends reads (#712)**, all session-first, at `interactive`, and each
+  checking `errors` on a 200:
+  - **`getFriends(session)`**: `Page.following(userId)`, paged on
+    `pageInfo.hasNextPage` up to **4 pages of 50 (200 users)**; a fifth page
+    is logged as a truncation and not read. Each user is `{ id, nickname,
+    avatar, titles, mean }`: `titles` is `statistics.anime.count`, and `mean`
+    is `statistics.anime.meanScore`, which takes no `format` and is on the
+    0–100 scale, divided by 10 here.
+  - **`getFriendsRates(session, malId)`**: **one page of 50** of
+    `Page.mediaList(mediaId, isFollowing: true)` with the AniList id from the
+    id map, `score(format: POINT_100)`; a title the map knows isn't on AniList
+    is `[]` with no request. No adult filter: the user is on that title.
+  - **`getFriendsActivity(session)`**: **one page of 50** of
+    `Page.activities(isFollowing: true, type_in: [ANIME_LIST])`, adult media
+    dropped unless `displayAdultContent`.
 
 ### The calendar (#709)
 
@@ -1425,11 +1441,15 @@ Shikimori branch is `shikimori:get-calendar`'s body
 - **Snapshot:** `userData/anilist-snapshots.json`, per AniList user, created
   only by a successful fetch and deleted on logout and switch
   (`anilistSessionSteps`); see [Storage](./storage.md), *Per-provider display
-  snapshots*.
+  snapshots*. The Friends page's activity (#712) is a second section of the
+  same file (`AniListCalendar.snapshots`), so the deletion covers both.
 
 ### Terms of use
 
-The background details prefetch never goes beyond the user's own list. Copy
+The background details prefetch never goes beyond the user's own list. The
+Friends page (#712) keeps only the following list's display fields
+(`anilistFriends`) and the last activity page, refreshed when the page opens
+and cleared on logout; nothing crawls followed users' lists. Copy
 says "Connect AniList" / "Open AniList", never "AniList" in the app's own
 name. The token is in the vault and in `FORBIDDEN_FIELDS`, and never reaches a
 log line: an error carries only the scrubbed response body.
@@ -1462,6 +1482,69 @@ conservative default named in each:
   that shape. The same check found the read that discovered the revoke
   rejecting to the renderer instead of answering from the cache; `getEntry`'s
   rethrow fixes that (#740).
+
+## Friends
+
+#712 (T12) makes the Friends page and the detail page's Friends block one
+merged view: Shikimori's friends plus the users the AniList account follows.
+MyAnimeList's API has no friends feed. People are not de-duplicated across
+trackers. The service is `services/trackers/friends.ts` (`createTrackerFriends`),
+built once in `index.ts` and passed to both routers as `AppDeps.trackerFriends`.
+
+- **Sources.** A friends source is a connected tracker (`<provider>User` set)
+  whose `getFriends` row in `CAPABILITY_MATRIX` is ✅: Shikimori and AniList.
+  Every one contributes, in `TRACKER_ORDER`; there is no feature key and
+  `resolveFeatureSource` is never called. The sidebar item reads the same row
+  through `VIEW_SOURCES.friends = ['shikimori', 'anilist']`.
+- **Shikimori is unchanged.** Its three reads are today's handler bodies,
+  moved into the service: the card fetch with its smotret join and the
+  `shikimoriFriends` write, the activity with its snapshot rules, and the
+  rates. `shikimori:get-friends`, `shikimori:get-friends-activity` and
+  `shikimori:get-friends-rates` delegate to them with their exact payloads and
+  throws (`null` signed out; a throw with no snapshot; a throw signed out).
+  The background refresh is emitted twice: Shikimori's cards alone on
+  `shikimori:friends-refreshed`, and `{ trackerId: 'shikimori', cards }` on
+  `tracker:friends-refreshed`. `source` and the URLs are added on the way out,
+  never persisted, so `shikimoriFriends` and `shikimori-snapshots.json` are
+  6.x's byte for byte.
+- **AniList's cards** are cache-first on `anilistFriends` (the provider's
+  `{ id, nickname, avatar, titles, mean }` rows), refreshed in the background
+  on each read and broadcast on `tracker:friends-refreshed`. A card has no
+  presence, no `mutual` and no `watching`: those would cost one request per
+  followed user against the 30/min budget.
+- **Activity** is normalized to `TrackerFriendActivityEntry` and merged newest
+  first by time alone. Each source keeps its own cap (Shikimori's
+  `FRIENDS_ACTIVITY_TOTAL_LIMIT` 50, AniList's one page of 50), so the feed is
+  the union. An AniList item's `createdAt` (unix seconds) becomes ISO; its
+  `description` is built by the app from the activity's `status` and
+  `progress` (a string, kept verbatim when it is a number or a range like
+  `1 - 3`), so no AniList-provided text reaches the view's `innerHTML`; a
+  media with no `idMal` has `malId: null` and links to AniList only. Both
+  sources' MAL ids go through one `lookupByMalIds`; a failed lookup leaves
+  that batch `smotretAnime: null` and still returns both feeds.
+- **Rates on a title:** one list per source. AniList's statuses map through
+  T0's status table, and a friend's score is `score(format: POINT_100) / 10`,
+  never through the viewer's `scoreFormat`; 0 is unscored and hidden.
+- **Failure isolation.** Each source is read on its own. A failure (a 401, a
+  429, offline, Shikimori's no-snapshot or signed-out throw) is that source's
+  `{ status: 'error', error }` beside the other's data. An expired session
+  (`<provider>SessionExpired`) keeps the account connected: its cached cards
+  and activity snapshot are served, stale, with `sessionExpired: true`.
+- **Offline.** Each source's activity comes from its own snapshot (Shikimori's
+  in `shikimori-snapshots.json`, AniList's in the `friendsActivity` section of
+  `anilist-snapshots.json`, created only by a successful AniList fetch). The
+  merged result is `stale` when any source is, with the oldest stale
+  snapshot's `fetchedAt` as its stamp.
+- **Ownership.** An AniList card fetch records the user it began with and
+  writes `anilistFriends` (and broadcasts) only if that is still
+  `anilistUser.id`; the snapshot's `put` has the same rule. AniList's logout
+  and switch reset clears `anilistFriends` (`USER_SCOPED_STATE`) and deletes
+  the whole snapshot file, calendar included; `anilistIdMap` survives.
+- **AniList paging and budget.** `Page.following` 4 × 50, `Page.activities`
+  and `Page.mediaList` one page of 50 each, every one at `interactive` (§
+  AniList → Capabilities): the page costs one to four `Page.following`
+  requests and one `Page.activities` request, and the detail block one
+  `Page.mediaList` request.
 
 ## Statuses and scores
 

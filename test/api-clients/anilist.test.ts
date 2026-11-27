@@ -477,21 +477,108 @@ describe('capabilities', () => {
         : { body: anilistFixture('friends-rates') }
     )
     const { provider } = await createTestAniList()
-    const out = await provider.getFriendsRates(SESSION, 1)
+    const out = (await provider.getFriendsRates(SESSION, 1)) as { score: number }[]
     expect(out).toHaveLength(2)
+    // POINT_100 as read; a 0 is unscored.
+    expect(out.map((r) => r.score)).toEqual([85, 0])
     const call = s.of('FriendsRates')[0]
     expect(call.variables).toEqual({ mediaId: 101, page: 1 })
     expect(call.token).toBe('tok-alice')
     expect(call.query).toContain('mediaList(mediaId: $mediaId, isFollowing: true)')
+    expect(call.query).toContain('score(format: POINT_100)')
+    // One page of 50 (#712), though the fixture says there is another.
+    expect(s.of('FriendsRates')).toHaveLength(1)
   })
 
-  it('getFriendsActivity: Page.activities(isFollowing, type_in: [ANIME_LIST]), adult media filtered', async () => {
+  it('getFriendsRates for a title AniList doesn’t have: no request at all', async () => {
+    const s = serve(() => ({ body: anilistFixture('friends-rates') }))
+    const { provider } = await createTestAniList({
+      seed: { anilistIdMap: { '1': { anilistId: null, at: Date.now() } } }
+    })
+    expect(await provider.getFriendsRates(SESSION, 1)).toEqual([])
+    expect(s.calls).toEqual([])
+  })
+
+  it('getFriendsActivity: Page.activities(isFollowing, type_in: [ANIME_LIST]), one page, adult media filtered', async () => {
     const s = serve(() => ({ body: anilistFixture('activities') }))
     const { provider } = await createTestAniList()
-    const out = (await provider.getFriendsActivity(SESSION)) as { id: number }[]
-    expect(out.map((a) => a.id)).toEqual([7001])
+    const out = (await provider.getFriendsActivity(SESSION)) as {
+      id: number
+      progress: string | null
+    }[]
+    expect(out.map((a) => a.id)).toEqual([7001, 7003])
+    // `progress` is a string, a range kept as given.
+    expect(out[1].progress).toBe('1 - 3')
+    expect(s.calls).toHaveLength(1)
+    expect(s.calls[0].variables).toEqual({ page: 1 })
     expect(s.calls[0].query).toContain('activities(isFollowing: true, type_in: [ANIME_LIST]')
+    expect(s.calls[0].query).toContain('perPage: 50')
     expect(s.calls[0].token).toBe('tok-alice')
+  })
+
+  it('getFriends: Page.following(userId) over two pages, meanScore 0–100 normalized to 0–10', async () => {
+    const s = serve((call) =>
+      call.variables.page === 1
+        ? { body: anilistFixture('following-1') }
+        : { body: anilistFixture('following-2') }
+    )
+    const { provider } = await createTestAniList()
+    const out = await provider.getFriends(SESSION)
+    expect(out).toEqual([
+      {
+        id: 6001,
+        nickname: 'bob',
+        avatar: 'https://s4.anilist.co/file/anilistcdn/user/avatar/medium/b6001.png',
+        titles: 312,
+        mean: 7.84
+      },
+      { id: 6002, nickname: 'carol', avatar: '', titles: 0, mean: 0 },
+      { id: 6003, nickname: 'dave', avatar: '', titles: 45, mean: 8.5 }
+    ])
+    expect(s.of('Following').map((c) => c.variables)).toEqual([
+      { userId: ALICE.id, page: 1 },
+      { userId: ALICE.id, page: 2 }
+    ])
+    expect(s.calls[0].token).toBe('tok-alice')
+    expect(s.calls[0].query).toContain('following(userId: $userId')
+    expect(s.calls[0].query).toContain('statistics { anime { count meanScore } }')
+  })
+
+  it('getFriends stops at 4 pages of 50 when a fifth is there, and logs the truncation', async () => {
+    const page = (n: number) => ({
+      data: {
+        Page: {
+          pageInfo: { hasNextPage: true },
+          following: [{ id: 9000 + n, name: `u${n}`, avatar: null, statistics: null }]
+        }
+      }
+    })
+    const s = serve((call) => ({ body: page(call.variables.page as number) }))
+    const warn = vi.fn()
+    const { provider } = await createTestAniList({ provider: { log: { log: () => {}, warn } } })
+    const out = await provider.getFriends(SESSION)
+    expect(out.map((u) => u.id)).toEqual([9001, 9002, 9003, 9004])
+    expect(s.of('Following')).toHaveLength(4)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toMatch(/following: more than 200/)
+  })
+
+  it('the friends reads check `errors` on a 200', async () => {
+    serve((call) =>
+      call.operation === 'IdMap'
+        ? { body: { data: { Page: { media: [{ id: 101, idMal: 1 }] } } } }
+        : { status: 200, body: anilistFixture('error-on-200') }
+    )
+    const { provider } = await createTestAniList()
+    for (const read of [
+      () => provider.getFriends(SESSION),
+      () => provider.getFriendsActivity(SESSION),
+      () => provider.getFriendsRates(SESSION, 1)
+    ]) {
+      const err = await read().catch((e) => e)
+      expect(err).toBeInstanceOf(AniListApiError)
+      expect(err).toMatchObject({ status: 200, errorStatus: 500 })
+    }
   })
 
   it('a 200 carrying errors rejects', async () => {

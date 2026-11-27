@@ -13,7 +13,11 @@
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { resolveFeatureSource, type FeatureKey } from '@shared/trackers/feature-source'
+import {
+  resolveFeatureSource,
+  TRACKER_ORDER,
+  type FeatureKey
+} from '@shared/trackers/feature-source'
 
 export type TrackerSyncSummaryState =
   | 'session-expired'
@@ -129,6 +133,9 @@ export const useTrackersStore = defineStore('trackers', () => {
   const queueLengthByTracker = ref<PerTracker<number>>({})
   // `tracker:get-rate` results per held title, per connected tracker.
   const rateStates = ref<Record<number, PerTracker<TrackerRateResult | null>>>({})
+  // The Friends page's cards per source (#712), and each source's last state.
+  const friendsByTracker = ref<PerTracker<TrackerFriendCard[]>>({})
+  const friendsSources = ref<PerTracker<TrackerFriendsSourceState>>({})
 
   const connected = computed<TrackerId[]>(() =>
     accounts.value.filter((a) => a.user !== null).map((a) => a.trackerId)
@@ -293,6 +300,32 @@ export const useTrackersStore = defineStore('trackers', () => {
     queueLengthByTracker.value = { ...queueLengthByTracker.value, [id]: length }
   }
 
+  // ---- Friends (#712) --------------------------------------------------------
+  // Merged in `TRACKER_ORDER`: Shikimori's cards, then AniList's. A refresh
+  // broadcast replaces only its own source's cards; a `tracker:get-friends`
+  // reply that a broadcast overtook keeps that source's newer cards.
+  const friends = computed<TrackerFriendCard[]>(() =>
+    TRACKER_ORDER.flatMap((id) => friendsByTracker.value[id] ?? [])
+  )
+  const friendsGen = new Map<TrackerId, number>()
+
+  async function refreshFriends(): Promise<void> {
+    const gens = new Map(TRACKER_ORDER.map((id) => [id, friendsGen.get(id) ?? 0] as const))
+    const epochs = new Map(TRACKER_ORDER.map((id) => [id, epoch.get(id) ?? 0] as const))
+    const res = await window.api.trackerGetFriends()
+    const cards: PerTracker<TrackerFriendCard[]> = {}
+    for (const id of Object.keys(res.sources) as TrackerId[]) cards[id] = []
+    for (const card of res.cards) (cards[card.source] ??= []).push(card)
+    const next: PerTracker<TrackerFriendCard[]> = {}
+    for (const id of Object.keys(cards) as TrackerId[]) {
+      if ((epoch.get(id) ?? 0) !== epochs.get(id) || !isConnected(id)) continue
+      const overtaken = (friendsGen.get(id) ?? 0) !== gens.get(id)
+      next[id] = overtaken ? (friendsByTracker.value[id] ?? []) : cards[id]
+    }
+    friendsByTracker.value = next
+    friendsSources.value = res.sources
+  }
+
   function syncStatusFor(id: TrackerId | null): TrackerSyncStatus {
     return (id && syncByTracker.value[id]) || EMPTY_SYNC_STATUS
   }
@@ -325,6 +358,8 @@ export const useTrackersStore = defineStore('trackers', () => {
     queuedAfterByTracker.value = without(queuedAfterByTracker.value, id)
     syncByTracker.value = without(syncByTracker.value, id)
     queueLengthByTracker.value = without(queueLengthByTracker.value, id)
+    friendsByTracker.value = without(friendsByTracker.value, id)
+    friendsSources.value = without(friendsSources.value, id)
     const states: typeof rateStates.value = {}
     for (const [malId, byTracker] of Object.entries(rateStates.value)) {
       states[Number(malId)] = without(byTracker, id)
@@ -474,6 +509,12 @@ export const useTrackersStore = defineStore('trackers', () => {
     if (!isConnected(trackerId)) return
     applySyncStatus(trackerId, status)
   })
+  // One source's cards: the other source's stay as they are.
+  void window.api.onTrackerFriendsRefreshed(({ trackerId, cards }) => {
+    if (!isConnected(trackerId)) return
+    friendsGen.set(trackerId, (friendsGen.get(trackerId) ?? 0) + 1)
+    friendsByTracker.value = { ...friendsByTracker.value, [trackerId]: cards }
+  })
   // Details aren't the account's, so they land whether or not it is connected.
   void window.api.onTrackerDetailsUpdated(({ trackerId, malId, details }) => {
     detailsByTracker.value = {
@@ -538,6 +579,10 @@ export const useTrackersStore = defineStore('trackers', () => {
     refreshOfflineQueueLength,
     syncStatusFor,
     queueLengthFor,
-    triggerSync
+    triggerSync,
+    friendsByTracker,
+    friendsSources,
+    friends,
+    refreshFriends
   }
 })

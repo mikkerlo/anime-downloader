@@ -1,7 +1,7 @@
 // The `tracker:*` account, auth and logout channels (#695), the primary,
 // mirror and feature-source setters (#696), the rate, sync-status and
-// queue channels (#694, epic #688), the details read (#706) and the calendar
-// (#709). Each handler validates its
+// queue channels (#694, epic #688), the details read (#706), the calendar
+// (#709) and the merged Friends reads (#712). Each handler validates its
 // arguments, calls the shared function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
@@ -122,7 +122,8 @@ export function register({
   shikimoriSyncService,
   lookupByMalIds,
   offlineService,
-  anilistCalendar
+  anilistCalendar,
+  trackerFriends
 }: AppDeps): void {
   // `shikimori:get-calendar`'s body (#709): the same function, so the two
   // channels can't disagree while Shikimori is the `calendar` source.
@@ -349,6 +350,30 @@ export function register({
         return { trackerId: source, ...(await anilistCalendar.get(refetch)) }
       }
       return { trackerId: null, data: [], fetchedAt: null, stale: false }
+    }
+  )
+
+  // The merged Friends page and detail block (#712): every connected friends
+  // source, caught per source (`services/trackers/friends.ts`).
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_FRIENDS,
+    async (): Promise<TrackerFriendsResult> =>
+      trackerFriends ? trackerFriends.getFriends() : { cards: [], sources: {} }
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_FRIENDS_ACTIVITY,
+    async (): Promise<TrackerFriendsActivityResult> =>
+      trackerFriends
+        ? trackerFriends.getActivity()
+        : { data: [], fetchedAt: null, stale: false, sources: {} }
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_FRIENDS_RATES,
+    async (_event, malId: unknown): Promise<TrackerFriendRates[]> => {
+      const id = malIdArg(malId)
+      return trackerFriends ? trackerFriends.getRates(id) : []
     }
   )
 

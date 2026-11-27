@@ -1,7 +1,7 @@
 {
   "data": {
     "Page": {
-      "pageInfo": { "hasNextPage": false },
+      "pageInfo": { "hasNextPage": true },
       "mediaList": [
         {
           "user": {
@@ -12,7 +12,7 @@
             }
           },
           "status": "COMPLETED",
-          "score": 90,
+          "score": 85,
           "progress": 26,
           "repeat": 0,
           "updatedAt": 1763000000

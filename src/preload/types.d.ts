@@ -366,6 +366,11 @@ interface Api {
   // Details (#706)
   trackerGetDetails: (malId: number, trackerId?: TrackerId) => Promise<TrackerDetails | null>
   onTrackerDetailsUpdated: (callback: (data: TrackerDetailsUpdatedEvent) => void) => Unsubscribe
+  // Friends (#712)
+  trackerGetFriends: () => Promise<TrackerFriendsResult>
+  trackerGetFriendsActivity: () => Promise<TrackerFriendsActivityResult>
+  trackerGetFriendsRates: (malId: number) => Promise<TrackerFriendRates[]>
+  onTrackerFriendsRefreshed: (callback: (data: TrackerFriendsRefreshedEvent) => void) => Unsubscribe
   // Accounts, auth and logout (#695)
   trackerListAccounts: () => Promise<TrackerAccountsState>
   trackerBeginAuth: (trackerId: TrackerId) => Promise<TrackerAuthResult>

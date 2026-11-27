@@ -178,6 +178,11 @@ export const CHANNELS = {
   TRACKER_GET_CLIENT_CONFIG: 'tracker:get-client-config',
   // AniList's or MyAnimeList's cached details (#706); never the network.
   TRACKER_GET_DETAILS: 'tracker:get-details',
+  // The merged Friends page and detail block (#712). `SHIKIMORI_GET_FRIENDS`,
+  // `_FRIENDS_ACTIVITY` and `_FRIENDS_RATES` stay as delegating aliases until #717.
+  TRACKER_GET_FRIENDS: 'tracker:get-friends',
+  TRACKER_GET_FRIENDS_ACTIVITY: 'tracker:get-friends-activity',
+  TRACKER_GET_FRIENDS_RATES: 'tracker:get-friends-rates',
   TRACKER_GET_OFFLINE_QUEUE_LENGTH: 'tracker:get-offline-queue-length',
   TRACKER_GET_PARKED_QUEUES: 'tracker:get-parked-queues',
   TRACKER_GET_RATE: 'tracker:get-rate',
@@ -347,6 +352,9 @@ export const EVENT_CHANNELS = {
   TRACKER_ACCOUNTS_CHANGED: 'tracker:accounts-changed',
   // An AniList or MyAnimeList details-cache write (#706); never Shikimori's.
   TRACKER_DETAILS_UPDATED: 'tracker:details-updated',
+  // One source's friend cards after a background refresh (#712). Shikimori's
+  // also go out on `SHIKIMORI_FRIENDS_REFRESHED`, its cards only, until #717.
+  TRACKER_FRIENDS_REFRESHED: 'tracker:friends-refreshed',
   TRACKER_OFFLINE_QUEUE_CHANGED: 'tracker:offline-queue-changed',
   TRACKER_RATE_UPDATED: 'tracker:rate-updated',
   TRACKER_RATES_REFRESHED: 'tracker:rates-refreshed',

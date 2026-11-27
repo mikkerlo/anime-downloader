@@ -12,7 +12,10 @@ const api = {
   getUserRate: vi.fn(),
   createUserRate: vi.fn(),
   updateUserRate: vi.fn(),
-  getUserAnimeRates: vi.fn()
+  getUserAnimeRates: vi.fn(),
+  getFriendsWithStats: vi.fn(),
+  getFriendsActivity: vi.fn(),
+  getFriendsRatesForAnime: vi.fn()
 }
 
 vi.mock('../../src/main/shikimori', async (orig) => ({
@@ -22,7 +25,10 @@ vi.mock('../../src/main/shikimori', async (orig) => ({
   getUserRate: (...a: unknown[]) => api.getUserRate(...a),
   createUserRate: (...a: unknown[]) => api.createUserRate(...a),
   updateUserRate: (...a: unknown[]) => api.updateUserRate(...a),
-  getUserAnimeRates: (...a: unknown[]) => api.getUserAnimeRates(...a)
+  getUserAnimeRates: (...a: unknown[]) => api.getUserAnimeRates(...a),
+  getFriendsWithStats: (...a: unknown[]) => api.getFriendsWithStats(...a),
+  getFriendsActivity: (...a: unknown[]) => api.getFriendsActivity(...a),
+  getFriendsRatesForAnime: (...a: unknown[]) => api.getFriendsRatesForAnime(...a)
 }))
 
 import {
@@ -178,12 +184,44 @@ describe('data members', () => {
     expect(p.classifyError(new TypeError('fetch failed'))).toBe('network')
   })
 
-  it('is the shikimori provider and implements getAiringInfo only (#706)', () => {
+  it('is the shikimori provider and implements getAiringInfo (#706) and the friends reads (#712)', () => {
     const p = provider()
     expect(p.id).toBe('shikimori')
     expect(Object.keys(p.capabilities).sort()).toEqual([...TRACKER_CAPABILITIES].sort())
-    expect(Object.entries(p.capabilities).filter(([, v]) => v)).toEqual([['getAiringInfo', true]])
+    expect(
+      Object.entries(p.capabilities)
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+        .sort()
+    ).toEqual(['getAiringInfo', 'getFriends', 'getFriendsActivity', 'getFriendsRates'])
     expect(p.deleteEntry).toBeUndefined()
+  })
+})
+
+// The Friends page and detail block (#712): today's three calls, from the session.
+describe('the friends reads', () => {
+  const session = { token: 'token-b', userId: B.id }
+
+  it('getFriends is getFriendsWithStats with the session and the cached own list’s MAL ids', async () => {
+    store.set('shikimoriUserRates', [
+      { rate: { target_id: 5114 } },
+      { rate: {}, shikiAnime: { id: 9 } },
+      { rate: { target_id: null } }
+    ])
+    const cards = [{ id: 3 }]
+    api.getFriendsWithStats.mockResolvedValueOnce(cards)
+    expect(await provider().getFriends(session)).toBe(cards)
+    expect(api.getFriendsWithStats).toHaveBeenCalledWith('token-b', B.id, new Set([5114, 9]))
+  })
+
+  it('getFriendsActivity and getFriendsRates pass the session’s token and user id', async () => {
+    api.getFriendsActivity.mockResolvedValueOnce(['a'])
+    api.getFriendsRatesForAnime.mockResolvedValueOnce(['r'])
+    const p = provider()
+    expect(await p.getFriendsActivity(session)).toEqual(['a'])
+    expect(api.getFriendsActivity).toHaveBeenCalledWith('token-b', B.id)
+    expect(await p.getFriendsRates(session, 77)).toEqual(['r'])
+    expect(api.getFriendsRatesForAnime).toHaveBeenCalledWith('token-b', B.id, 77)
   })
 })
 

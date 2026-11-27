@@ -518,6 +518,18 @@ const api = {
   onTrackerDetailsUpdated: subscribe<TrackerDetailsUpdatedEvent>(
     EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
   ),
+  // The merged Friends page and detail block (#712).
+  trackerGetFriends: () =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_FRIENDS) as Promise<TrackerFriendsResult>,
+  trackerGetFriendsActivity: () =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_GET_FRIENDS_ACTIVITY
+    ) as Promise<TrackerFriendsActivityResult>,
+  trackerGetFriendsRates: (malId: number) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_FRIENDS_RATES, malId) as Promise<TrackerFriendRates[]>,
+  onTrackerFriendsRefreshed: subscribe<TrackerFriendsRefreshedEvent>(
+    EVENT_CHANNELS.TRACKER_FRIENDS_REFRESHED
+  ),
   // Accounts, auth and logout (#695).
   trackerListAccounts: () =>
     ipcRenderer.invoke(CHANNELS.TRACKER_LIST_ACCOUNTS) as Promise<TrackerAccountsState>,

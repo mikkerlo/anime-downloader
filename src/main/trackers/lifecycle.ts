@@ -55,7 +55,8 @@ export const USER_SCOPED_STATE: Readonly<
   ],
   anilist: [
     { key: 'anilistUserRates', empty: () => [] },
-    { key: 'anilistAnimeDetails', empty: () => ({}) }
+    { key: 'anilistAnimeDetails', empty: () => ({}) },
+    { key: 'anilistFriends', empty: () => [] }
   ],
   mal: [
     { key: 'myanimelistUserRates', empty: () => [] },

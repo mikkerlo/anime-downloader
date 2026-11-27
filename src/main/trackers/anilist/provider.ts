@@ -147,7 +147,8 @@ const USER_KEY = 'anilistUser'
 const RATES_KEY = 'anilistUserRates'
 const DETAILS_KEY = 'anilistAnimeDetails'
 const MAX_LIST_CHUNKS = 100
-const MAX_FRIEND_PAGES = 5
+/** `Page.following` pages read at most (#712): 200 followed users, the rest logged as truncated. */
+export const MAX_FOLLOWING_PAGES = 4
 
 const CAPABILITIES: TrackerCapabilities = {
   getAiringInfo: true,
@@ -155,10 +156,29 @@ const CAPABILITIES: TrackerCapabilities = {
   getRelated: true,
   getRecommendations: true,
   getDetails: true,
-  // `Page.following` (the friends list) is T12's.
-  getFriends: false,
+  getFriends: true,
   getFriendsActivity: true,
   getFriendsRates: true
+}
+
+/**
+ * A followed user, as `anilistFriends` keeps it (#712): the display fields
+ * only, `mean` on the 0–10 scale.
+ */
+export interface AniListFriend {
+  id: number
+  nickname: string
+  avatar: string
+  titles: number
+  mean: number
+}
+
+/** `statistics.anime.meanScore` (0–100, no `format` argument) on the app's 0–10 scale. */
+export function friendMeanOf(meanScore: number | null | undefined): number {
+  // / 10, kept to the hundredths so 78.4 reads 7.84, not 7.840000000000001.
+  return typeof meanScore === 'number' && Number.isFinite(meanScore)
+    ? Math.round(meanScore * 10) / 100
+    : 0
 }
 
 // ---- Value mapping ---------------------------------------------------------
@@ -350,7 +370,11 @@ export interface AniListProvider extends TrackerSyncProvider<
     opts?: { priority?: AniListPriority }
   ): Promise<Map<number, AniListRelatedMedia>>
   getRecommendations(seedMalIds: readonly number[]): Promise<unknown[]>
+  /** `Page.following` of the session's user, up to `MAX_FOLLOWING_PAGES` × 50 (#712). */
+  getFriends(session: AniListSession): Promise<AniListFriend[]>
+  /** One page of 50 of `Page.mediaList(mediaId, isFollowing)`; `[]` for an unmapped title. */
   getFriendsRates(session: AniListSession, malId: number): Promise<unknown[]>
+  /** One page of 50 `ANIME_LIST` activities, adult media dropped unless `displayAdultContent`. */
   getFriendsActivity(session: AniListSession): Promise<unknown[]>
   /** The list titles' details, in batches of 50 at `prefetch`. Never beyond the list (ToU). */
   prefetchDetails(): Promise<void>
@@ -994,22 +1018,51 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     return out
   }
 
+  async function getFriends(session: AniListSession): Promise<AniListFriend[]> {
+    type User = {
+      id?: number | null
+      name?: string | null
+      avatar?: { medium?: string | null } | null
+      statistics?: { anime?: { count?: number | null; meanScore?: number | null } | null } | null
+    }
+    const out: AniListFriend[] = []
+    for (let page = 1; page <= MAX_FOLLOWING_PAGES; page++) {
+      const data = await client.request<{
+        Page: { pageInfo?: { hasNextPage?: boolean | null } | null; following: User[] | null }
+      }>(
+        Q.FOLLOWING,
+        { userId: session.userId, page },
+        { priority: 'interactive', token: session.token }
+      )
+      for (const u of data?.Page?.following ?? []) {
+        if (typeof u?.id !== 'number' || typeof u.name !== 'string') continue
+        out.push({
+          id: u.id,
+          nickname: u.name,
+          avatar: u.avatar?.medium ?? '',
+          titles: u.statistics?.anime?.count ?? 0,
+          mean: friendMeanOf(u.statistics?.anime?.meanScore)
+        })
+      }
+      if (!data?.Page?.pageInfo?.hasNextPage) break
+      if (page === MAX_FOLLOWING_PAGES) {
+        log.warn(
+          `[anilist] following: more than ${MAX_FOLLOWING_PAGES * Q.PAGE_SIZE} users, showing the first ${out.length}`
+        )
+      }
+    }
+    return out
+  }
+
   async function getFriendsRates(session: AniListSession, malId: number): Promise<unknown[]> {
     const resolved = await resolveRef(malId)
     if (!resolved) return []
-    const out: unknown[] = []
-    for (let page = 1; page <= MAX_FRIEND_PAGES; page++) {
-      const data = await client.request<{
-        Page: { pageInfo?: { hasNextPage?: boolean | null } | null; mediaList: unknown[] | null }
-      }>(
-        Q.FRIENDS_RATES,
-        { mediaId: resolved.mediaId, page },
-        { priority: 'interactive', token: session.token }
-      )
-      out.push(...(data?.Page?.mediaList ?? []))
-      if (!data?.Page?.pageInfo?.hasNextPage) break
-    }
-    return out
+    const data = await client.request<{ Page: { mediaList: unknown[] | null } }>(
+      Q.FRIENDS_RATES,
+      { mediaId: resolved.mediaId, page: 1 },
+      { priority: 'interactive', token: session.token }
+    )
+    return data?.Page?.mediaList ?? []
   }
 
   async function getFriendsActivity(session: AniListSession): Promise<unknown[]> {
@@ -1045,6 +1098,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     getRelated,
     getRelatedBatch,
     getRecommendations,
+    getFriends,
     getFriendsRates,
     getFriendsActivity,
     prefetchDetails,

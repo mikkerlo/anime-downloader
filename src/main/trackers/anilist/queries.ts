@@ -159,6 +159,22 @@ export const FRIENDS_RATES = `query FriendsRates($mediaId: Int, $page: Int) {
   }
 }`
 
+/**
+ * The following list (#712). `Page.following` takes only `userId` and `sort`.
+ * `statistics.anime.meanScore` takes no `format`: it is on the 0–100 scale.
+ */
+export const FOLLOWING = `query Following($userId: Int, $page: Int) {
+  Page(page: $page, perPage: ${PAGE_SIZE}) {
+    pageInfo { hasNextPage }
+    following(userId: $userId, sort: [USERNAME]) {
+      id
+      name
+      avatar { medium }
+      statistics { anime { count meanScore } }
+    }
+  }
+}`
+
 export const FRIENDS_ACTIVITY = `query FriendsActivity($page: Int) {
   Page(page: $page, perPage: ${PAGE_SIZE}) {
     activities(isFollowing: true, type_in: [ANIME_LIST], sort: ID_DESC) {

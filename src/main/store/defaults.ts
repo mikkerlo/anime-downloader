@@ -134,6 +134,8 @@ export const STORE_DEFAULTS = {
   anilistParkedQueues: {} as ParkedQueues,
   anilistAnimeDetails: {} as Record<string, unknown>,
   anilistIdMap: {} as Record<string, unknown>,
+  // The Friends page's AniList cards (#712): a display cache, like `shikimoriFriends`.
+  anilistFriends: [] as unknown[],
   myanimelistCredentials: null as VaultBlob | null,
   myanimelistUser: null as TrackerUser | null,
   myanimelistSessionExpired: false,

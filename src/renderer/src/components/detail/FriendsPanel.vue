@@ -1,11 +1,20 @@
 <script setup lang="ts">
+// Friends' rates on this title (#712): one list per friends source, each its
+// own `v-for` (a nickname is unique only within one source), under a small
+// heading once 2 or more sources contribute. With one source it is the
+// Shikimori-only block as before.
 import { computed } from 'vue';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 
 const props = defineProps<{
-  friendsRates: ShikiFriendRate[];
+  friendsRates: TrackerFriendRates[];
   friendsLoading: boolean;
   numberOfEpisodes?: number;
 }>();
+
+const allRates = computed(() => props.friendsRates.flatMap((s) => s.rates));
+const sections = computed(() => props.friendsRates.filter((s) => s.rates.length > 0));
+const showHeadings = computed(() => props.friendsRates.length >= 2);
 
 const collapsed = defineModel<boolean>('collapsed', { default: false });
 
@@ -20,7 +29,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const friendsSummary = computed(() => {
   const counts = new Map<string, number>();
-  for (const r of props.friendsRates) {
+  for (const r of allRates.value) {
     counts.set(r.status, (counts.get(r.status) || 0) + 1);
   }
   const labels: Record<string, string> = {
@@ -56,7 +65,7 @@ const friendsSummary = computed(() => {
         />
       </svg>
       Friends
-      <span v-if="!friendsLoading && friendsRates.length > 0" class="panel-summary">{{
+      <span v-if="!friendsLoading && allRates.length > 0" class="panel-summary">{{
         friendsSummary
       }}</span>
       <span v-else-if="friendsLoading" class="panel-summary">Loading…</span>
@@ -75,23 +84,28 @@ const friendsSummary = computed(() => {
     </h4>
     <div v-if="!collapsed">
       <div v-if="friendsLoading" class="panel-muted">Loading friends…</div>
-      <div v-else-if="friendsRates.length === 0" class="panel-muted">
+      <div v-else-if="allRates.length === 0" class="panel-muted">
         None of your friends have watched this anime
       </div>
       <template v-else>
-        <div v-for="friend in friendsRates" :key="friend.nickname" class="friend-row">
-          <img :src="friend.avatar" class="friend-av" :alt="friend.nickname" />
-          <div class="friend-body">
-            <div class="friend-name">{{ friend.nickname }}</div>
-            <div class="friend-act">
-              <span class="friend-status" :class="'status-' + friend.status">{{
-                STATUS_LABELS[friend.status] || friend.status
-              }}</span>
-              <span v-if="friend.episodes > 0"
-                >· ep {{ friend.episodes
-                }}{{ numberOfEpisodes ? '/' + numberOfEpisodes : '' }}</span
-              >
-              <span v-if="friend.score > 0">· ★ {{ friend.score }}</span>
+        <div v-for="section in sections" :key="section.source" class="friend-source">
+          <div v-if="showHeadings" class="friend-source-head" data-testid="friends-source-head">
+            {{ TRACKER_LABELS[section.source] }}
+          </div>
+          <div v-for="friend in section.rates" :key="friend.nickname" class="friend-row">
+            <img :src="friend.avatar" class="friend-av" :alt="friend.nickname" />
+            <div class="friend-body">
+              <div class="friend-name">{{ friend.nickname }}</div>
+              <div class="friend-act">
+                <span class="friend-status" :class="'status-' + friend.status">{{
+                  STATUS_LABELS[friend.status] || friend.status
+                }}</span>
+                <span v-if="friend.episodes > 0"
+                  >· ep {{ friend.episodes
+                  }}{{ numberOfEpisodes ? '/' + numberOfEpisodes : '' }}</span
+                >
+                <span v-if="friend.score > 0">· ★ {{ friend.score }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -162,6 +176,20 @@ const friendsSummary = computed(() => {
 }
 
 .friend-row:first-of-type {
+  margin-top: 6px;
+  border-top: none;
+}
+
+.friend-source-head {
+  margin-top: 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.friend-source-head + .friend-row {
   margin-top: 6px;
   border-top: none;
 }

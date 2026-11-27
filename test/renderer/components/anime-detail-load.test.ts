@@ -150,6 +150,8 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
     // Must be a real stub: the Proxy fallback returns a thenable that resolves
     // to `undefined`, and `undefined.includes(...)` throws.
     libraryGetPriority: vi.fn().mockResolvedValue([]),
+    // The Friends block's merged read (#712): an array, as main answers.
+    trackerGetFriendsRates: vi.fn().mockResolvedValue([]),
     libraryIsDownloaded: vi.fn().mockResolvedValue(false),
     autoDlGetSubscription: vi.fn().mockResolvedValue(null),
     shikimoriGetUser: vi.fn().mockResolvedValue(null),

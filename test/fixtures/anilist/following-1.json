@@ -1,0 +1,23 @@
+{
+  "data": {
+    "Page": {
+      "pageInfo": { "hasNextPage": true },
+      "following": [
+        {
+          "id": 6001,
+          "name": "bob",
+          "avatar": {
+            "medium": "https://s4.anilist.co/file/anilistcdn/user/avatar/medium/b6001.png"
+          },
+          "statistics": { "anime": { "count": 312, "meanScore": 78.4 } }
+        },
+        {
+          "id": 6002,
+          "name": "carol",
+          "avatar": { "medium": null },
+          "statistics": { "anime": { "count": 0, "meanScore": 0 } }
+        }
+      ]
+    }
+  }
+}

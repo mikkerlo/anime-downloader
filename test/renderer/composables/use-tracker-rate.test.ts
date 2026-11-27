@@ -95,6 +95,7 @@ function installApi(
     trackerTriggerSync: vi.fn(async () => {}),
     shikimoriGetUser: vi.fn(async () => null),
     shikimoriGetFriendsRates: vi.fn(async () => []),
+    trackerGetFriendsRates: vi.fn(async () => []),
     shikimoriGetAnimeDetails: vi.fn(async () => null),
     shikimoriGetSyncStatus: vi.fn(async () => status()),
     // A non-Shikimori details / airing source's details (#706): a miss.
@@ -116,6 +117,7 @@ function installApi(
       onTrackerRatesRefreshed: noop,
       onTrackerSyncStatus: noop,
       onTrackerDetailsUpdated: noop,
+      onTrackerFriendsRefreshed: noop,
       onShikimoriProfileRefreshed: noop,
       onShikimoriFriendsRefreshed: noop,
       onShikimoriRecommendationsRefreshed: noop,
@@ -246,13 +248,19 @@ describe('useTrackerRate — loadTrackerData', () => {
   })
 
   it('a Shikimori primary: loads rate + friends + details + related when the user is signed in', async () => {
-    const friends: ShikiFriendRate[] = [{ nickname: 'F' } as unknown as ShikiFriendRate]
+    const friends: TrackerFriendRates[] = [
+      {
+        source: 'shikimori',
+        status: 'ok',
+        rates: [{ nickname: 'F' } as unknown as TrackerFriendRate]
+      }
+    ]
     const details = { description: 'd' } as unknown as ShikiAnimeDetails
     installApi({
       overrides: {
         shikimoriGetUser: vi.fn(async () => ({ id: 1 })),
         trackerGetRate: vi.fn(async () => ({ values: values(3, 'watching', 7), stale: false })),
-        shikimoriGetFriendsRates: vi.fn(async () => friends),
+        trackerGetFriendsRates: vi.fn(async () => friends),
         shikimoriGetAnimeDetails: vi.fn(async () => details)
       }
     })
@@ -307,7 +315,7 @@ describe('useTrackerRate — loadTrackerData', () => {
     expect(consoleErr).toHaveBeenCalled()
   })
 
-  it('an AniList primary loads through trackerGetRate("anilist", …), with no Shikimori friends or details', async () => {
+  it('an AniList primary loads through trackerGetRate("anilist", …), its friends through the merged read, and no Shikimori details', async () => {
     installApi({
       accounts: accountsState(['anilist']),
       overrides: {
@@ -328,11 +336,14 @@ describe('useTrackerRate — loadTrackerData', () => {
     expect(s.shikiUser.value).toBeNull()
     expect(s.shikiUserChecked.value).toBe(true)
     expect(api.shikimoriGetFriendsRates).not.toHaveBeenCalled()
+    // AniList is a friends source (#712).
+    expect(api.trackerGetFriendsRates).toHaveBeenCalledWith(99)
     expect(api.shikimoriGetAnimeDetails).not.toHaveBeenCalled()
     expect(s.resumeProgress.value).toMatchObject({ hasAccount: true, loading: false, episodes: 7 })
   })
 
-  // Step 8: friends and details stay on the Shikimori user, not on the primary.
+  // Step 8: details stay on the Shikimori user, not on the primary; the
+  // friends' rates are every friends source's (#712).
   it('a Shikimori user beside an AniList primary still loads the friends and details', async () => {
     installApi({
       accounts: accountsState(['shikimori', 'anilist'], 'anilist'),
@@ -341,9 +352,18 @@ describe('useTrackerRate — loadTrackerData', () => {
     const { s } = await makeRate({ anime: mkAnime({ malId: 99 }) })
     await s.loadTrackerData(loadRelated())
     expect(api.trackerGetRate).toHaveBeenCalledWith('anilist', 99)
-    expect(api.shikimoriGetFriendsRates).toHaveBeenCalledWith(99)
+    expect(api.trackerGetFriendsRates).toHaveBeenCalledWith(99)
+    expect(api.shikimoriGetFriendsRates).not.toHaveBeenCalled()
     expect(api.shikimoriGetAnimeDetails).toHaveBeenCalledWith(99)
     expect(s.shikiUser.value?.id).toBe(1)
+  })
+
+  it('MyAnimeList only: no friends source, so no friends read (#712)', async () => {
+    installApi({ accounts: accountsState(['mal']) })
+    const { s } = await makeRate({ anime: mkAnime({ malId: 99 }) })
+    await s.loadTrackerData(loadRelated())
+    expect(api.trackerGetFriendsRates).not.toHaveBeenCalled()
+    expect(s.friendsLoading.value).toBe(false)
   })
 
   it('the rate load waits for accountsLoaded, then reads the primary it settled on', async () => {

@@ -22,7 +22,9 @@ import {
   createCalendarCache,
   createDisplaySnapshots,
   serveCalendar,
-  type CalendarSnapshot
+  type CalendarSnapshot,
+  type DisplaySnapshots,
+  type SnapshotRecord
 } from '../display-snapshots'
 import { appStatusFromAnilist } from '../scores'
 import { titleOf, type AniListCachedRow, type AniListMedia, type AniListUser } from './provider'
@@ -129,6 +131,15 @@ export function anilistCalendarEntries(input: {
 
 export type AniListCachedCalendar = CalendarSnapshot<CalendarEntry>
 
+/** The Friends page's AniList activity snapshot (#712), a section of the same file. */
+export type AniListCachedFriendsActivity = SnapshotRecord<TrackerFriendActivityEntry[]>
+
+/** `userData/anilist-snapshots.json`'s sections: the calendar's and the friends activity's. */
+export type AniListSnapshots = DisplaySnapshots<{
+  calendar: AniListCachedCalendar
+  friendsActivity: AniListCachedFriendsActivity
+}>
+
 export interface AniListCalendarDeps {
   store: StorageService
   /** The provider's `getCalendar`: `Page.media(id_in)`, chunked by 50, at `interactive`. */
@@ -151,6 +162,8 @@ export interface AniListCalendar {
   clear(): void
   /** The signed-in user's snapshot, or null. */
   cached(): AniListCachedCalendar | null
+  /** The file's sections: the friends service (#712) reads and writes `friendsActivity`. */
+  readonly snapshots: AniListSnapshots
 }
 
 export function createAniListCalendar(deps: AniListCalendarDeps): AniListCalendar {
@@ -162,13 +175,17 @@ export function createAniListCalendar(deps: AniListCalendarDeps): AniListCalenda
   const cachedRows = (): AniListCachedRow[] =>
     (store.get('anilistUserRates') as AniListCachedRow[] | undefined) ?? []
 
-  // A loaded calendar starts invalidated, as Shikimori's does.
-  const snapshots = createDisplaySnapshots<{ calendar: AniListCachedCalendar }>({
+  // A loaded calendar starts invalidated, as Shikimori's does. The friends
+  // activity (#712) shares the file, as Shikimori's two sections do.
+  const snapshots: AniListSnapshots = createDisplaySnapshots({
     path: deps.snapshotsPath,
-    sections: ['calendar'],
+    sections: ['calendar', 'friendsActivity'],
     currentUserId,
     label: '[anilist]',
-    revive: { calendar: (stored, userId) => ({ ...stored, userId, invalidated: true }) }
+    revive: {
+      calendar: (stored, userId) => ({ ...stored, userId, invalidated: true }),
+      friendsActivity: (stored, userId) => ({ ...stored, userId })
+    }
   })
 
   const cache = createCalendarCache(snapshots)
@@ -207,7 +224,8 @@ export function createAniListCalendar(deps: AniListCalendarDeps): AniListCalenda
       }),
     invalidate: () => cache.invalidate(),
     clear: () => snapshots.clear(),
-    cached: () => cache.get()
+    cached: () => cache.get(),
+    snapshots
   }
 }
 

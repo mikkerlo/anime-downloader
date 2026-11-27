@@ -1050,7 +1050,11 @@ The primary branch is `services/trackers/anilist-primary.ts`.
   is cleared: `tracker:get-rate` from the cache, stale, and the primary
   branch's cold-cache read with the create rule, queued. It doesn't wait for
   the clear (`onTokenRejected` runs it on its own), and `isSessionGone` and
-  the sync service's `isQueueableError` are unchanged.
+  the sync service's `isQueueableError` are unchanged. The drain still aborts
+  on it as `auth`, but its `lastSyncError` is now the session-expired message
+  ("AniList session expired — sign in again in Settings → Trackers"), no
+  longer `AniList API error: 400 — Invalid token`; the raw refusal still
+  reaches the drain's `console.warn` as the error's `cause`.
 - **`upsertEntry`** sends `SaveMediaListEntry(mediaId, …)` with only the
   changed fields: `status`, `progress` for `episodes`, `scoreRaw = appScore ×
   10` for `score` (never `score`), and `repeat` for `rewatches`. With nothing

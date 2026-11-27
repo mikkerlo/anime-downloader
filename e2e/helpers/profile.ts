@@ -194,33 +194,9 @@ export function runAppToExit(profile: Profile, timeoutMs = 30_000): Promise<Exit
   })
 }
 
-/**
- * The first main-process evaluate after launch. On a CI runner a cold-profile
- * boot (#734) can answer it with a protocol error that Playwright rewrites as
- * "Execution context was destroyed", while the main process is alive and
- * ready: the same evaluate succeeds 200 ms later. Retried on that error only,
- * and only while the process is still running, so a main process that really
- * died still fails here.
- */
-async function firstMainEvaluate<T>(
-  app: ElectronApplication,
-  fn: Parameters<ElectronApplication['evaluate']>[0]
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return (await app.evaluate(fn)) as T
-    } catch (err) {
-      const transient = /Execution context was destroyed/.test(String(err))
-      if (!transient || attempt >= 10 || app.process().exitCode !== null) throw err
-      console.warn(`[e2e] main-process evaluate retried (attempt ${attempt}): ${String(err)}`)
-      await new Promise((r) => setTimeout(r, 200))
-    }
-  }
-}
-
 /** Fails unless the app's `userData` is exactly the dir the profile seeded. */
 export async function assertUserData(app: ElectronApplication, profile: Profile): Promise<void> {
-  const got = await firstMainEvaluate<string>(app, ({ app }) => app.getPath('userData'))
+  const got = await app.evaluate(({ app }) => app.getPath('userData'))
   if (got !== profile.userData) {
     throw new Error(
       `userData is ${got}, but the profile was seeded at ${profile.userData}: the seed would be ignored`

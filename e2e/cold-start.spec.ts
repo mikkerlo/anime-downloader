@@ -20,12 +20,6 @@ test('cold start: IPC answers while first-launch binary downloads are pending', 
     profile.cleanup()
     throw e
   })
-  // The main process's output, printed when the test fails: a main process
-  // that dies at boot otherwise reads only as "Execution context was destroyed".
-  const mainLog: string[] = []
-  app.process().stdout?.on('data', (b: Buffer) => mainLog.push(`[out] ${String(b)}`))
-  app.process().stderr?.on('data', (b: Buffer) => mainLog.push(`[err] ${String(b)}`))
-  app.process().on('exit', (code, signal) => mainLog.push(`[exit] code=${code} signal=${signal}`))
   try {
     await assertUserData(app, profile)
     const window = await app.firstWindow()
@@ -35,9 +29,6 @@ test('cold start: IPC answers while first-launch binary downloads are pending', 
       (window as unknown as { api: { libraryGet: () => Promise<unknown> } }).api.libraryGet()
     )
     expect(lib).toBeTruthy()
-  } catch (err) {
-    console.log(`[cold-start] main process output:\n${mainLog.join('')}`)
-    throw err
   } finally {
     await app.close()
     profile.cleanup()

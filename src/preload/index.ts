@@ -541,6 +541,11 @@ const api = {
       trackerId,
       config
     ) as Promise<TrackerClientConfig>,
+  trackerTestClientConfig: (trackerId: TrackerId) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_TEST_CLIENT_CONFIG,
+      trackerId
+    ) as Promise<TrackerTestClientConfigResult>,
   // The primary, mirrors and feature sources (#696).
   trackerSetPrimary: (trackerId: TrackerId) =>
     ipcRenderer.invoke(CHANNELS.TRACKER_SET_PRIMARY, trackerId) as Promise<TrackerAccountsState>,

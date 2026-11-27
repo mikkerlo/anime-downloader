@@ -1,0 +1,14 @@
+{
+  "id": 5114,
+  "title": "Fullmetal Alchemist: Brotherhood",
+  "synopsis": "Two brothers search for the Philosopher's Stone.",
+  "mean": 9.1,
+  "media_type": "tv",
+  "status": "finished_airing",
+  "num_episodes": 64,
+  "start_date": "2009-04-05",
+  "genres": [
+    { "id": 1, "name": "Action" },
+    { "id": 2, "name": "Adventure" }
+  ]
+}

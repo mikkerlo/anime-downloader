@@ -43,7 +43,8 @@ export function accountsState(
     accounts: IDS.map((id) => account(id, connected.includes(id))),
     primary,
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   }
 }
 

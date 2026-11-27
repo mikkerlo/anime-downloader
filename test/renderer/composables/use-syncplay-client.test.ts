@@ -533,7 +533,8 @@ function accountsState(
     })),
     primary,
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   }
 }
 

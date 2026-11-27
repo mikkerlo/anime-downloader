@@ -37,7 +37,8 @@ function stubTrackers(connected: TrackerId[]): void {
     ),
     primary: connected[0] ?? null,
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   }
   ;(window as unknown as { api: unknown }).api = new Proxy(
     { trackerListAccounts: async () => state },

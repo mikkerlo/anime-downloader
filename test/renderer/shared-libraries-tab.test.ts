@@ -73,7 +73,8 @@ const NO_TRACKERS: TrackerAccountsState = {
   accounts: [],
   primary: null,
   mirror: {},
-  featureSources: {}
+  featureSources: {},
+  newTrackerCardsEnabled: false
 }
 
 function stubApi(overrides: Record<string, unknown>): void {

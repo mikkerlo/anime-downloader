@@ -55,7 +55,8 @@ function stubApi(overrides: Record<string, unknown> = {}): void {
         accounts: [],
         primary: null,
         mirror: {},
-        featureSources: {}
+        featureSources: {},
+        newTrackerCardsEnabled: false
       }),
       ...overrides
     },

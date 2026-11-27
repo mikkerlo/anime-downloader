@@ -375,6 +375,7 @@ interface Api {
     trackerId: TrackerId,
     config: TrackerClientConfigInput
   ) => Promise<TrackerClientConfig>
+  trackerTestClientConfig: (trackerId: TrackerId) => Promise<TrackerTestClientConfigResult>
   // The primary, mirrors and feature sources (#696)
   trackerSetPrimary: (trackerId: TrackerId) => Promise<TrackerAccountsState>
   trackerSetMirror: (

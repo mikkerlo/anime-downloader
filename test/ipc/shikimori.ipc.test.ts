@@ -867,7 +867,7 @@ describe('shikimori IPC — unsynced changes on logout and account switch (#588)
 
     expect(queueOf(store)).toHaveLength(0)
     expect(store.get('shikimoriUserRates')).toEqual([bobsEntry])
-    // Connectors reloads its kept-changes rows on this broadcast.
+    // The Trackers card reloads its kept-changes rows on this broadcast's twin.
     expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
       length: 0
     })

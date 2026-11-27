@@ -1,60 +1,48 @@
 // @vitest-environment happy-dom
 // Unsynced Shikimori changes on logout and account switch (#588): Disconnect
 // asks before discarding them, a Reconnect into another account says they were
-// kept, and kept changes stay visible with a way to discard them.
+// kept, and kept changes stay visible with a way to discard them. Moved from
+// Connectors with the card (#700), onto the `tracker:*` logout and parked-queue
+// channels, whose bucket `ownerId` is a string.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ConnectorsTab from '../../../src/renderer/src/components/settings/ConnectorsTab.vue'
+import { markRaw } from 'vue'
+import TrackerAccountCard from '../../../src/renderer/src/components/settings/TrackerAccountCard.vue'
+import ShikimoriConnectForm from '../../../src/renderer/src/components/settings/ShikimoriConnectForm.vue'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
+import { createTrackerCardApi } from '../../helpers/tracker-card-api'
 
 const ME = { id: 1, nickname: 'mikkerlo', avatar: '' }
 const OTHER = { id: 2, nickname: 'akvasha', avatar: '' }
 
-const queueListeners = new Set<(data: { length: number }) => void>()
-
 enableAutoUnmount(afterEach)
 
-const api = {
-  getSetting: vi.fn(async () => ''),
-  setSetting: vi.fn(async () => undefined),
-  shikimoriGetUser: vi.fn(async () => null),
-  shikimoriGetAuthUrl: vi.fn(async () => 'https://shikimori.io/oauth/authorize?x=1'),
-  shellOpenExternal: vi.fn(async () => false),
-  shikimoriLogout: vi.fn(async () => undefined),
-  shikimoriExchangeCode: vi.fn(async () => OTHER),
-  shikimoriGetParkedQueues: vi.fn(async (): Promise<ShikiParkedQueueSummary[]> => []),
-  shikimoriDiscardParkedQueue: vi.fn(async () => undefined),
-  onShikimoriOfflineQueueChanged: vi.fn((cb: (data: { length: number }) => void) => {
-    queueListeners.add(cb)
-    return () => queueListeners.delete(cb)
-  }),
-  shikimoriGetSyncStatus: vi.fn(async () => ({
-    state: 'idle',
-    queueLength: 0,
-    lastSyncAt: 0,
-    lastSyncError: null,
-    sessionExpired: false
-  }))
+let fake = createTrackerCardApi()
+
+function parked(
+  ownerId: string | null,
+  nickname: string,
+  count: number
+): TrackerParkedQueueSummary {
+  return { trackerId: 'shikimori', ownerId, nickname, count, parkedAt: 1 }
 }
 
-const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
-  get: (target, prop) => (prop in target ? target[prop as string] : () => () => {})
-})
-
-async function mountTab(opts: { queueLength?: number; sessionExpired?: boolean } = {}) {
-  api.shikimoriGetSyncStatus.mockResolvedValue({
-    state: 'idle',
-    queueLength: opts.queueLength ?? 0,
-    lastSyncAt: 0,
-    lastSyncError: null,
-    sessionExpired: opts.sessionExpired ?? false
-  })
+async function mountCard(opts: { queueLength?: number; sessionExpired?: boolean } = {}) {
+  fake.main.user = ME
+  fake.main.queueLength = opts.queueLength ?? 0
+  fake.main.legacyQueueLength = opts.queueLength ?? 0
+  fake.main.sessionExpired = opts.sessionExpired ?? false
   const pinia = createPinia()
   setActivePinia(pinia)
-  const shiki = useShikimoriStore()
-  shiki.user = ME
-  const wrapper = mount(ConnectorsTab, { global: { plugins: [pinia] } })
+  const wrapper = mount(TrackerAccountCard, {
+    props: {
+      trackerId: 'shikimori',
+      desc: 'Connect your Shikimori account to sync watch progress.',
+      connectForm: markRaw(ShikimoriConnectForm)
+    },
+    global: { plugins: [pinia] }
+  })
   await flushPromises()
   return wrapper
 }
@@ -71,21 +59,20 @@ function dialogButton(wrapper: VueWrapper, action: 'keep' | 'discard' | 'cancel'
 
 beforeEach(() => {
   vi.clearAllMocks()
-  queueListeners.clear()
-  api.shikimoriGetParkedQueues.mockResolvedValue([])
-  api.shikimoriLogout.mockResolvedValue(undefined)
-  ;(window as unknown as { api: unknown }).api = apiProxy
+  fake = createTrackerCardApi()
+  fake.signInAs(OTHER)
+  fake.install()
   setActivePinia(createPinia())
 })
 
-describe('ConnectorsTab — Disconnect with unsynced changes', () => {
+describe('TrackerAccountCard — Disconnect with unsynced changes', () => {
   it('asks first, naming the count, and Keep parks them', async () => {
-    const wrapper = await mountTab({ queueLength: 3 })
+    const wrapper = await mountCard({ queueLength: 3 })
 
     await button(wrapper, 'Disconnect').trigger('click')
     await flushPromises()
 
-    expect(api.shikimoriLogout).not.toHaveBeenCalled()
+    expect(fake.api.trackerLogout).not.toHaveBeenCalled()
     const modal = wrapper.find('.pending-modal')
     expect(modal.text()).toContain("3 Shikimori changes haven't been synced yet")
     expect(dialogButton(wrapper, 'keep').text()).toBe('Keep for mikkerlo')
@@ -93,46 +80,87 @@ describe('ConnectorsTab — Disconnect with unsynced changes', () => {
     await dialogButton(wrapper, 'keep').trigger('click')
     await flushPromises()
 
-    expect(api.shikimoriLogout).toHaveBeenCalledWith({ pending: 'keep' })
+    expect(fake.api.trackerLogout).toHaveBeenCalledWith('shikimori', { pending: 'keep' })
     expect(wrapper.find('.pending-modal').exists()).toBe(false)
   })
 
   it('Discard drops them', async () => {
-    const wrapper = await mountTab({ queueLength: 3 })
+    const wrapper = await mountCard({ queueLength: 3 })
     await button(wrapper, 'Disconnect').trigger('click')
     await flushPromises()
 
     await dialogButton(wrapper, 'discard').trigger('click')
     await flushPromises()
 
-    expect(api.shikimoriLogout).toHaveBeenCalledWith({ pending: 'discard' })
+    expect(fake.api.trackerLogout).toHaveBeenCalledWith('shikimori', { pending: 'discard' })
   })
 
   it('Cancel keeps the session and makes no call', async () => {
-    const wrapper = await mountTab({ queueLength: 3 })
+    const wrapper = await mountCard({ queueLength: 3 })
     await button(wrapper, 'Disconnect').trigger('click')
     await flushPromises()
 
     await dialogButton(wrapper, 'cancel').trigger('click')
     await flushPromises()
 
-    expect(api.shikimoriLogout).not.toHaveBeenCalled()
+    expect(fake.api.trackerLogout).not.toHaveBeenCalled()
     expect(wrapper.find('.pending-modal').exists()).toBe(false)
     expect(wrapper.find('.conn-card').text()).toContain('mikkerlo')
   })
 
   it('with nothing pending, disconnects at once with no dialog', async () => {
-    const wrapper = await mountTab({ queueLength: 0 })
+    const wrapper = await mountCard({ queueLength: 0 })
 
     await button(wrapper, 'Disconnect').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.pending-modal').exists()).toBe(false)
-    expect(api.shikimoriLogout).toHaveBeenCalledTimes(1)
+    expect(fake.api.trackerLogout).toHaveBeenCalledTimes(1)
+    expect(fake.api.trackerLogout).toHaveBeenCalledWith('shikimori', undefined)
   })
 })
 
-describe('ConnectorsTab — Reconnect into a different account', () => {
+// `useShikimoriStore().user` isn't derived from the accounts broadcast (#697):
+// the card refreshes it, or every facade reader stays signed in.
+describe('TrackerAccountCard — the Shikimori facade user', () => {
+  it.each([
+    ['Keep', 3, 'keep'],
+    ['Discard', 3, 'discard'],
+    ['plain Disconnect', 0, null]
+  ] as const)('is null after %s', async (_name, queueLength, action) => {
+    const wrapper = await mountCard({ queueLength })
+    const shiki = useShikimoriStore()
+    expect(shiki.user).toEqual(ME)
+
+    await button(wrapper, 'Disconnect').trigger('click')
+    await flushPromises()
+    if (action) {
+      await dialogButton(wrapper, action).trigger('click')
+      await flushPromises()
+    }
+
+    expect(fake.api.trackerLogout).toHaveBeenCalledTimes(1)
+    expect(shiki.user).toBeNull()
+    expect(shiki.loggedIn).toBe(false)
+    expect(wrapper.find('.conn-card').exists()).toBe(false)
+  })
+
+  it('holds the new user after a connect', async () => {
+    const wrapper = await mountCard({ sessionExpired: true })
+    const shiki = useShikimoriStore()
+    expect(shiki.user).toEqual(ME)
+
+    await button(wrapper, 'Reconnect').trigger('click')
+    await flushPromises()
+    await wrapper.find('input[placeholder="Paste authorization code..."]').setValue('code')
+    await button(wrapper, 'Submit').trigger('click')
+    await flushPromises()
+
+    expect(shiki.user).toEqual(OTHER)
+  })
+})
+
+describe('TrackerAccountCard — Reconnect into a different account', () => {
   async function reconnectAsOther(wrapper: VueWrapper): Promise<void> {
     await button(wrapper, 'Reconnect').trigger('click')
     await flushPromises()
@@ -142,10 +170,8 @@ describe('ConnectorsTab — Reconnect into a different account', () => {
   }
 
   it('says the previous account’s changes were kept, and Discard drops that bucket', async () => {
-    const wrapper = await mountTab({ sessionExpired: true, queueLength: 2 })
-    api.shikimoriGetParkedQueues.mockResolvedValue([
-      { ownerId: ME.id, nickname: ME.nickname, count: 2, parkedAt: 1 }
-    ])
+    const wrapper = await mountCard({ sessionExpired: true, queueLength: 2 })
+    fake.api.trackerGetParkedQueues.mockResolvedValue([parked(String(ME.id), ME.nickname, 2)])
 
     await reconnectAsOther(wrapper)
 
@@ -158,11 +184,11 @@ describe('ConnectorsTab — Reconnect into a different account', () => {
     await dialogButton(wrapper, 'discard').trigger('click')
     await flushPromises()
 
-    expect(api.shikimoriDiscardParkedQueue).toHaveBeenCalledWith(ME.id)
+    expect(fake.api.trackerDiscardParkedQueue).toHaveBeenCalledWith('shikimori', String(ME.id))
   })
 
   it('opens no dialog when the previous account had nothing kept', async () => {
-    const wrapper = await mountTab({ sessionExpired: true })
+    const wrapper = await mountCard({ sessionExpired: true })
 
     await reconnectAsOther(wrapper)
 
@@ -170,13 +196,13 @@ describe('ConnectorsTab — Reconnect into a different account', () => {
   })
 })
 
-describe('ConnectorsTab — kept changes', () => {
+describe('TrackerAccountCard — kept changes', () => {
   it('shows a row for each other owner, and its Discard confirms then drops the bucket', async () => {
-    api.shikimoriGetParkedQueues.mockResolvedValue([
-      { ownerId: 9, nickname: 'friend', count: 4, parkedAt: 1 },
-      { ownerId: ME.id, nickname: ME.nickname, count: 1, parkedAt: 1 }
+    fake.api.trackerGetParkedQueues.mockResolvedValue([
+      parked('9', 'friend', 4),
+      parked(String(ME.id), ME.nickname, 1)
     ])
-    const wrapper = await mountTab()
+    const wrapper = await mountCard()
 
     const rows = wrapper.findAll('.kept-queue-row')
     expect(rows).toHaveLength(1)
@@ -184,9 +210,7 @@ describe('ConnectorsTab — kept changes', () => {
       'friend: 4 unsynced changes kept. They sync when friend signs in again.'
     )
 
-    api.shikimoriGetParkedQueues.mockResolvedValue([
-      { ownerId: ME.id, nickname: ME.nickname, count: 1, parkedAt: 1 }
-    ])
+    fake.api.trackerGetParkedQueues.mockResolvedValue([parked(String(ME.id), ME.nickname, 1)])
     await rows[0].find('button').trigger('click')
     await flushPromises()
     expect(wrapper.find('.pending-modal').text()).toContain('4 Shikimori changes for friend')
@@ -194,15 +218,13 @@ describe('ConnectorsTab — kept changes', () => {
     await dialogButton(wrapper, 'discard').trigger('click')
     await flushPromises()
 
-    expect(api.shikimoriDiscardParkedQueue).toHaveBeenCalledWith(9)
+    expect(fake.api.trackerDiscardParkedQueue).toHaveBeenCalledWith('shikimori', '9')
     expect(wrapper.findAll('.kept-queue-row')).toHaveLength(0)
   })
 
   it('shows the unknown-account bucket with Discard only', async () => {
-    api.shikimoriGetParkedQueues.mockResolvedValue([
-      { ownerId: null, nickname: '', count: 2, parkedAt: 1 }
-    ])
-    const wrapper = await mountTab()
+    fake.api.trackerGetParkedQueues.mockResolvedValue([parked(null, '', 2)])
+    const wrapper = await mountCard()
 
     const row = wrapper.find('.kept-queue-row')
     expect(row.text()).toContain(
@@ -214,17 +236,17 @@ describe('ConnectorsTab — kept changes', () => {
 
     await dialogButton(wrapper, 'discard').trigger('click')
     await flushPromises()
-    expect(api.shikimoriDiscardParkedQueue).toHaveBeenCalledWith(null)
+    expect(fake.api.trackerDiscardParkedQueue).toHaveBeenCalledWith('shikimori', null)
   })
 })
 
-describe('ConnectorsTab — dialog keyboard and failure handling (#588 review)', () => {
+describe('TrackerAccountCard — dialog keyboard and failure handling (#588 review)', () => {
   function pressEscape(): void {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   }
 
   it('Esc cancels the Disconnect prompt without logging out', async () => {
-    const wrapper = await mountTab({ queueLength: 3 })
+    const wrapper = await mountCard({ queueLength: 3 })
     await button(wrapper, 'Disconnect').trigger('click')
     await flushPromises()
 
@@ -232,14 +254,12 @@ describe('ConnectorsTab — dialog keyboard and failure handling (#588 review)',
     await flushPromises()
 
     expect(wrapper.find('.pending-modal').exists()).toBe(false)
-    expect(api.shikimoriLogout).not.toHaveBeenCalled()
+    expect(fake.api.trackerLogout).not.toHaveBeenCalled()
   })
 
   it('Esc on the switch prompt means Keep: it closes and discards nothing', async () => {
-    const wrapper = await mountTab({ sessionExpired: true, queueLength: 2 })
-    api.shikimoriGetParkedQueues.mockResolvedValue([
-      { ownerId: ME.id, nickname: ME.nickname, count: 2, parkedAt: 1 }
-    ])
+    const wrapper = await mountCard({ sessionExpired: true, queueLength: 2 })
+    fake.api.trackerGetParkedQueues.mockResolvedValue([parked(String(ME.id), ME.nickname, 2)])
     await button(wrapper, 'Reconnect').trigger('click')
     await flushPromises()
     await wrapper.find('input[placeholder="Paste authorization code..."]').setValue('code')
@@ -251,14 +271,14 @@ describe('ConnectorsTab — dialog keyboard and failure handling (#588 review)',
     await flushPromises()
 
     expect(wrapper.find('.pending-modal').exists()).toBe(false)
-    expect(api.shikimoriDiscardParkedQueue).not.toHaveBeenCalled()
+    expect(fake.api.trackerDiscardParkedQueue).not.toHaveBeenCalled()
   })
 
   it('a failed kept-changes load after a successful exchange is not a connect error', async () => {
-    const wrapper = await mountTab({ sessionExpired: true })
+    const wrapper = await mountCard({ sessionExpired: true })
     await button(wrapper, 'Reconnect').trigger('click')
     await flushPromises()
-    api.shikimoriGetParkedQueues.mockRejectedValueOnce(new Error('ipc down'))
+    fake.api.trackerGetParkedQueues.mockRejectedValueOnce(new Error('ipc down'))
     await wrapper.find('input[placeholder="Paste authorization code..."]').setValue('code')
     await button(wrapper, 'Submit').trigger('click')
     await flushPromises()
@@ -273,8 +293,8 @@ describe('ConnectorsTab — dialog keyboard and failure handling (#588 review)',
   })
 
   it('a failed logout from the prompt is shown, not left unhandled', async () => {
-    const wrapper = await mountTab({ queueLength: 3 })
-    api.shikimoriLogout.mockRejectedValueOnce(new Error('logout failed'))
+    const wrapper = await mountCard({ queueLength: 3 })
+    fake.api.trackerLogout.mockRejectedValueOnce(new Error('logout failed'))
     await button(wrapper, 'Disconnect').trigger('click')
     await flushPromises()
 
@@ -286,17 +306,46 @@ describe('ConnectorsTab — dialog keyboard and failure handling (#588 review)',
   })
 
   it('reloads the kept-changes rows when main announces a queue change', async () => {
-    const wrapper = await mountTab()
+    const wrapper = await mountCard()
     expect(wrapper.findAll('.kept-queue-row')).toHaveLength(0)
 
     // A late edit was parked for another account, or the drain consumed one.
-    api.shikimoriGetParkedQueues.mockResolvedValue([
-      { ownerId: 9, nickname: 'friend', count: 1, parkedAt: 1 }
-    ])
-    for (const listener of queueListeners) listener({ length: 0 })
+    fake.api.trackerGetParkedQueues.mockResolvedValue([parked('9', 'friend', 1)])
+    fake.emitQueueChanged('shikimori')
     await flushPromises()
 
     expect(wrapper.findAll('.kept-queue-row')).toHaveLength(1)
     expect(wrapper.find('.kept-queue-row').text()).toContain('friend: 1 unsynced change kept')
+  })
+})
+
+// Main double-emits Shikimori's queue change (#694); the card listens to the
+// `tracker:*` twin alone, filtered to its tracker.
+describe('TrackerAccountCard — the queue-changed subscription', () => {
+  it('a double-emitted Shikimori queue change reloads the rows once', async () => {
+    await mountCard()
+    fake.api.trackerGetParkedQueues.mockClear()
+
+    // Main's order: the `shikimori:*` event, then its `tracker:*` twin.
+    fake.emitShikimoriQueueChanged()
+    fake.emitQueueChanged('shikimori')
+    await flushPromises()
+
+    expect(fake.api.onShikimoriOfflineQueueChanged).not.toHaveBeenCalled()
+    expect(fake.api.trackerGetParkedQueues).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads once per event for its tracker, and not at all for another tracker', async () => {
+    await mountCard()
+    fake.api.trackerGetParkedQueues.mockClear()
+
+    fake.emitQueueChanged('anilist')
+    await flushPromises()
+    expect(fake.api.trackerGetParkedQueues).not.toHaveBeenCalled()
+
+    fake.emitQueueChanged('shikimori')
+    await flushPromises()
+    expect(fake.api.trackerGetParkedQueues).toHaveBeenCalledTimes(1)
+    expect(fake.api.trackerGetParkedQueues).toHaveBeenCalledWith('shikimori')
   })
 })

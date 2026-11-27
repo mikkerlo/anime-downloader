@@ -1,5 +1,13 @@
 # Settings (electron-store)
 
+Where the Settings view edits the account keys: **Connectors** holds the
+Anime 365 `token`. **Trackers** (#700) holds one account card per tracker
+(Shikimori's for now; MyAnimeList and AniList arrive with #702 and #703).
+The card writes no key through `set-setting`: its sign-in, logout and
+kept-changes Discard go through the tracker channels, which write
+`shikimoriCredentials`, `shikimoriUser`, `shikimoriUpdateQueue` and
+`shikimoriParkedQueues` ([Trackers](trackers.md#settings--trackers)).
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `token` | string | `''` | Anime 365 (smotret-anime.app) API token |

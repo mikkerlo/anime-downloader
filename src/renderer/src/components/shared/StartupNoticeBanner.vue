@@ -39,7 +39,7 @@ function dismiss(): void {
       </template>
       <template v-else>
         Anime DL couldn't read its settings file and started with default settings. You may need to
-        sign in to Shikimori again and re-open your Shared Libraries.
+        sign in to your trackers again and re-open your Shared Libraries.
       </template>
       <template v-if="corruptPath">
         The unreadable file was kept as <span class="mono">{{ fileName }}</span

@@ -91,12 +91,17 @@ src/renderer/src/
       QualityMenu.vue
       Anime4KMenu.vue
       SyncplayMenu.vue
-    settings/                  SettingsView shell + 8 tab components
+    settings/                  SettingsView shell + 9 tab components
       SettingsShell.vue
       GeneralTab.vue
       StorageTab.vue
-      ConnectorsTab.vue
-      ShikimoriPendingDialog.vue  Keep/Discard prompt for unsynced Shikimori changes (#588)
+      ConnectorsTab.vue         The Anime 365 API token
+      TrackersTab.vue           One TrackerAccountCard per tracker; scrolls to the card a deep link names (#700)
+      TrackerAccountCard.vue    A tracker's account: identity, Connected / Session expired / Needs setup chip,
+                                Disconnect, kept changes; the connect body is the tracker's own component
+                                (`tracker-connect-form.ts` has the contract)
+      ShikimoriConnectForm.vue  Shikimori's code paste, on `shikimori:get-auth-url` / `shikimori:exchange-code`
+      TrackerPendingDialog.vue  Keep/Discard prompt for a tracker's unsynced changes (#588), labelled per tracker
       PrepareOfflinePanel.vue   Prepare for offline (#592): a row per step, Cancel, the summary; details
                                 with a title link to its page; the library-sync row's Review (N) opens
                                 #585's review sheet, which stacks above it (`components/overlay-layers.ts`).
@@ -205,6 +210,7 @@ Global reactive logic that doesn't belong on a Pinia store goes into `src/render
 ### Settings
 
 - **`useSettingsAutosave`** (`use-settings-autosave.ts`) — module-level singleton holding `savedVisible` + `showSaved` + `autoSave(key, value)`. Every tab calls `autoSave(...)` in its watchers; `SettingsShell` renders the toast. (Phase 5 slice 5a)
+- **`usePrimaryTrackerLabel()`** (`use-primary-tracker-label.ts`) — the primary tracker's name from `TRACKER_LABELS` (`src/shared/trackers/labels.ts`), Shikimori's while there is no primary, for the copy about where a change goes first: the Work offline note (General), the cleanup-prompt group (Storage) and `CleanupModal` (#700).
 
 ## Design system (Refined Dark)
 
@@ -224,4 +230,4 @@ Shared CSS (`assets/player-menus.css`, `assets/settings-tabs.css`) is imported s
 
 ## Settings (Refined Dark)
 
-`components/settings/SettingsShell.vue` renders the **208px left tab rail** (`.settings-layout` grid → `.settings-nav` of icon `.settings-tab`s, active = `--accent-soft`, collapses to one column < 920px) + a `.settings-panel` that `keep-alive`-swaps the eight tabs (General / Storage / Player / Connectors / Merging / Shortcuts / Watch Together / Debug). Each tab is built from three reusable primitives — **`SettingsGroup.vue`** (`.set-group` card + head), **`SettingsRow.vue`** (`.set-row` label/desc + control slot; `stack` for full-width controls), and **`SettingsSwitch.vue`** (the `v-model` toggle `.switch`) — plus shared classes in `assets/settings-tabs.css` (all on tokens): `.btn`/`.chip`, `.field-input`, `.path-field`, `.set-range`, `.set-seg`, `.disk-bar`/`.disk-legend`, `.conn-card`, `.kbd`, `.set-progress`, `.result-box`, `.status-line`. The singleton "Saved" toast is driven by `use-settings-autosave`. (Restyle of #168; behavior, IPC, and settings keys unchanged.)
+`components/settings/SettingsShell.vue` renders the **208px left tab rail** (`.settings-layout` grid → `.settings-nav` of icon `.settings-tab`s, active = `--accent-soft`, collapses to one column < 920px) + a `.settings-panel` that `keep-alive`-swaps the nine tabs (General / Storage / Player / Connectors / Trackers / Merging / Shortcuts / Watch Together / Debug). A deep link (`libraryStore.navigateToSettingsTab(tab, trackerId?)`) parks the tab in `pendingSettingsTab`, which the shell consumes, and the tracker in its own `pendingSettingsTrackerId`, which only `TrackersTab` consumes: on setup and in a watcher, since the `keep-alive` means a link raised while Trackers is cached creates no new tab. Each tab is built from three reusable primitives — **`SettingsGroup.vue`** (`.set-group` card + head), **`SettingsRow.vue`** (`.set-row` label/desc + control slot; `stack` for full-width controls), and **`SettingsSwitch.vue`** (the `v-model` toggle `.switch`) — plus shared classes in `assets/settings-tabs.css` (all on tokens): `.btn`/`.chip`, `.field-input`, `.path-field`, `.set-range`, `.set-seg`, `.disk-bar`/`.disk-legend`, `.conn-card`, `.kbd`, `.set-progress`, `.result-box`, `.status-line`. The singleton "Saved" toast is driven by `use-settings-autosave`. (Restyle of #168; behavior, IPC, and settings keys unchanged.)

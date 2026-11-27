@@ -94,7 +94,7 @@ export class ShikiAuthError extends ShikiApiError {
 }
 
 export const SESSION_EXPIRED_MESSAGE =
-  'Shikimori session expired — sign in again in Settings → Connectors'
+  'Shikimori session expired — sign in again in Settings → Trackers'
 
 /**
  * The other reason there are no credentials: the account was never connected,
@@ -102,7 +102,7 @@ export const SESSION_EXPIRED_MESSAGE =
  * so the offline-queue predicate in `SHIKIMORI_UPDATE_RATE` is unaffected —
  * only the wording the UI shows verbatim via `String(err)` differs.
  */
-export const NOT_CONNECTED_MESSAGE = 'Not connected to Shikimori — connect in Settings → Connectors'
+export const NOT_CONNECTED_MESSAGE = 'Not connected to Shikimori — connect in Settings → Trackers'
 
 // Keys whose values must never reach a log line or the renderer. A Doorkeeper
 // error body carries none of these (token material rides the 200, which never

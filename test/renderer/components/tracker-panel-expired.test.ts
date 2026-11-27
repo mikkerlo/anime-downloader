@@ -123,15 +123,21 @@ describe('TrackerPanel — expired session banner', () => {
     expect(wrapper.find('.shiki-offline').exists()).toBe(false)
   })
 
-  it('"Sign in again" deep-links to Settings → Connectors', async () => {
-    const wrapper = await mountPanel(true)
-    const library = useLibraryStore()
+  // The account card lives in Settings → Trackers (#700): the link names the
+  // panel's tracker, the primary, so the tab scrolls to that card.
+  it.each(['shikimori', 'anilist'] as const)(
+    '"Sign in again" deep-links to the %s card in Settings → Trackers',
+    async (primary) => {
+      const wrapper = await mountPanel(true, 0, '', primary)
+      const library = useLibraryStore()
 
-    await wrapper.find('.shiki-expired-btn').trigger('click')
+      await wrapper.find('.shiki-expired-btn').trigger('click')
 
-    expect(library.currentView).toBe('settings')
-    expect(library.pendingSettingsTab).toBe('connectors')
-  })
+      expect(library.currentView).toBe('settings')
+      expect(library.pendingSettingsTab).toBe('trackers')
+      expect(library.pendingSettingsTrackerId).toBe(primary)
+    }
+  )
 
   // The Shikimori-only golden: today's header, link and banner copy, byte for byte.
   it('a Shikimori primary keeps the Shikimori header, link and banner copy', async () => {

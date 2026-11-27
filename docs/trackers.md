@@ -712,11 +712,12 @@ instances' `onNeedsSetupChanged` and call it from their expiry handling.
 ## The renderer store
 
 #697 (T4a) adds `useTrackersStore` (`src/renderer/src/stores/trackers.ts`),
-the one place in the renderer that reads the `tracker:*` surface. No component
-subscribes to a `tracker:*` broadcast; [Renderer](./renderer.md) lists the
-store's state. `useShikimoriStore` stays as a facade for the views not moved
-yet: it takes rates, the queue length and the sync status from the `tracker:*`
-twins filtered to `trackerId: 'shikimori'`, never also from the `shikimori:*`
+the one place in the renderer that holds the `tracker:*` state. The one
+component that calls the surface itself is the Settings → Trackers card
+(below); [Renderer](./renderer.md) lists the store's state.
+`useShikimoriStore` stays as a facade for the views not moved yet: it takes
+rates, the queue length and the sync status from the `tracker:*` twins
+filtered to `trackerId: 'shikimori'`, never also from the `shikimori:*`
 events, so a double-emitted change is applied once.
 
 - **Connected** means the account's `user` is set. An expired session keeps
@@ -768,6 +769,40 @@ branch of a drain has no cache row to reconcile, so it emits no
 `tracker:rate-updated`, only the queue change. `rateFor` goes from the queued
 values to `null` and stays there until the next `tracker:rates-refreshed`
 carries the row. Nothing in the drain triggers one; this is accepted for now.
+
+## Settings → Trackers
+
+#700 (T5a) moves the Shikimori account out of Settings → Connectors (which
+keeps the Anime 365 token) into a Trackers tab right after it
+(`TrackersTab.vue`), as a generic `TrackerAccountCard` keyed by `trackerId`.
+T6 and T7 add the MyAnimeList and AniList cards, and T5b the multi-account
+controls; a Shikimori-only user sees the one card.
+
+- **States** come from `useTrackersStore` for the card's tracker: the
+  account's `user` (Connected, or not connected), and from its
+  `aggregateSyncState` row or the account, Session expired and Needs setup.
+  The expired card's pending count is the row's `queueLength`.
+- **Channels.** Logout (`{ pending }`) and the kept-changes rows use
+  `tracker:logout`, `tracker:get-parked-queues` and
+  `tracker:discard-parked-queue` with the card's `trackerId`; a bucket's
+  `ownerId` is a string, so the card compares `String(user.id)`. The rows
+  reload on `tracker:offline-queue-changed` for that tracker, the card's one
+  subscription (Shikimori's legacy twin is never also subscribed).
+- **The connect body** is the tracker's own component, passed to the card
+  (`tracker-connect-form.ts`: the card's `complete(signIn)` reads the previous
+  account before the sign-in, for the switch prompt). Shikimori's,
+  `ShikimoriConnectForm.vue`, stays on `shikimori:get-auth-url` /
+  `shikimori:exchange-code` for good: `tracker:begin-auth` refuses while
+  offline, and the code paste must behave as in 6.x.
+- **The facade's `user`.** Nothing derives `useShikimoriStore().user` from the
+  accounts broadcast, so the Shikimori card calls `refreshUser()` after a
+  connect, after every logout and on mount when it is unset.
+- **Copy.** `TRACKER_LABELS` (`src/shared/trackers/labels.ts`) names a
+  tracker in UI copy: the card and `TrackerPendingDialog` take the card's
+  tracker, and the Work offline note and the cleanup prompt take the primary
+  (`usePrimaryTrackerLabel`, Shikimori's while there is none). Main's
+  `SESSION_EXPIRED_MESSAGE` and `NOT_CONNECTED_MESSAGE` point at
+  Settings → Trackers.
 
 ## Boot, the online edge and Prepare
 

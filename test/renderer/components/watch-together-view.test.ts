@@ -27,6 +27,26 @@ const MPV_PEER: SyncplayRoomUser = {
   isReady: false
 }
 
+// `tracker:list-accounts` with the given trackers connected (#699).
+function accountsState(
+  connected: Partial<Record<TrackerId, string>>,
+  primary: TrackerId | null
+): TrackerAccountsState {
+  return {
+    accounts: (['shikimori', 'anilist', 'mal'] as TrackerId[]).map((trackerId) => ({
+      trackerId,
+      user: connected[trackerId] ? { id: 1, nickname: connected[trackerId], avatar: null } : null,
+      hasCredentials: !!connected[trackerId],
+      sessionExpired: false,
+      needsSetup: false,
+      credentialState: connected[trackerId] ? 'ok' : 'none'
+    })),
+    primary,
+    mirror: {},
+    featureSources: {}
+  }
+}
+
 function stubApi(opts: {
   status?: SyncplayStatus
   users?: SyncplayRoomUser[]
@@ -39,7 +59,8 @@ function stubApi(opts: {
     syncplayDisconnect: vi.fn().mockResolvedValue(undefined),
     getSetting: vi.fn().mockResolvedValue({ lastRoom: 'movie-night', username: 'me' }),
     setSetting: vi.fn().mockResolvedValue(undefined),
-    shikimoriGetUser: vi.fn().mockResolvedValue(null),
+    // Explicit: the Proxy's fallback would resolve the accounts read to a function.
+    trackerListAccounts: vi.fn().mockResolvedValue(accountsState({}, null)),
     getAnime: vi.fn().mockRejectedValue(new Error('not stubbed')),
     onSyncplayConnectionStatus: vi.fn(() => () => {}),
     onSyncplayRoomUsers: vi.fn(() => () => {})
@@ -222,5 +243,49 @@ describe('WatchTogetherView — offline (#568)', () => {
     offline.emit('online')
     await flushPromises()
     expect(join().attributes('disabled')).toBeUndefined()
+  })
+})
+
+// #699 — the default nickname is the primary tracker's, read at connect.
+describe('WatchTogetherView — the default nickname (#699)', () => {
+  async function clickJoin(): Promise<ReturnType<typeof mount>> {
+    const wrapper = mount(WatchTogetherView)
+    await flushPromises()
+    await wrapper.find('[data-testid="wt-connect"]').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('without Shikimori: an empty username connects with and persists the AniList nickname', async () => {
+    const api = stubApi({ status: { state: 'idle' } })
+    api.getSetting.mockResolvedValue({ lastRoom: 'movie-night' })
+    api.trackerListAccounts.mockResolvedValue(accountsState({ anilist: 'ani-fan' }, 'anilist'))
+    await clickJoin()
+    expect(api.syncplayConnect).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'ani-fan' })
+    )
+    expect(api.setSetting).toHaveBeenCalledWith('syncplay', {
+      lastRoom: 'movie-night',
+      username: 'ani-fan'
+    })
+  })
+
+  it('a set username is never overwritten', async () => {
+    const api = stubApi({ status: { state: 'idle' } })
+    api.trackerListAccounts.mockResolvedValue(accountsState({ anilist: 'ani-fan' }, 'anilist'))
+    await clickJoin()
+    expect(api.syncplayConnect).toHaveBeenCalledWith(expect.objectContaining({ username: 'me' }))
+    expect(api.trackerListAccounts).not.toHaveBeenCalled()
+    expect(api.setSetting).not.toHaveBeenCalled()
+  })
+
+  it('with no account, the "Set a username" error stays', async () => {
+    const api = stubApi({ status: { state: 'idle' } })
+    api.getSetting.mockResolvedValue({ lastRoom: 'movie-night' })
+    const wrapper = await clickJoin()
+    expect(api.trackerListAccounts).toHaveBeenCalledTimes(1)
+    expect(api.syncplayConnect).not.toHaveBeenCalled()
+    expect(api.setSetting).not.toHaveBeenCalled()
+    expect(wrapper.find('.wt-error').text()).toBe('Set a username in Settings → Watch Together')
   })
 })

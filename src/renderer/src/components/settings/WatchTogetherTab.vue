@@ -1,13 +1,25 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue';
-import { useShikimoriStore } from '../../stores/shikimori';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
+import { storeToRefs } from 'pinia';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
+import { useTrackersStore } from '../../stores/trackers';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 import SettingsSwitch from './SettingsSwitch.vue';
 
-const shikimoriStore = useShikimoriStore();
+const { accounts, primary } = storeToRefs(useTrackersStore());
 const { showSaved } = useSettingsAutosave();
+
+// The default nickname is the primary tracker's (#699).
+const primaryNickname = computed(
+  () => accounts.value.find((a) => a.trackerId === primary.value)?.user?.nickname ?? ''
+);
+const usernameDesc = computed(() =>
+  primary.value
+    ? `Shown to other room members. Defaults to your ${TRACKER_LABELS[primary.value]} nickname if signed in.`
+    : 'Shown to other room members. Defaults to your tracker nickname if signed in.'
+);
 
 const loaded = ref(false);
 
@@ -140,8 +152,8 @@ onMounted(async () => {
     syncplayUsername.value = sp.username || '';
     syncplayAutoReconnect.value = sp.autoReconnect ?? true;
   }
-  if (!syncplayUsername.value && shikimoriStore.user) {
-    syncplayUsername.value = shikimoriStore.user.nickname;
+  if (!syncplayUsername.value && primaryNickname.value) {
+    syncplayUsername.value = primaryNickname.value;
   }
   syncplayPasswordSaved.value = await window.api.syncplayHasPassword();
   loaded.value = true;
@@ -216,10 +228,7 @@ watch(syncplayPassword, () => {
           placeholder="my-anime-room"
         />
       </SettingsRow>
-      <SettingsRow
-        label="Username"
-        desc="Shown to other room members. Defaults to your Shikimori nickname if signed in."
-      >
+      <SettingsRow label="Username" :desc="usernameDesc">
         <input
           id="sp-user"
           v-model="syncplayUsername"

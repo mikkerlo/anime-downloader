@@ -9,6 +9,10 @@
 // `saveProgress`, `maybeMarkWatched`, `resetEpisodeTracking`,
 // `resumeFromSavedPosition`) and run over fakes, with `window.api`'s watch
 // progress calls going to the real main router on an in-memory store.
+//
+// Since #699 both marks go to `trackerMarkEpisodeWatched`, which main fans out
+// to the primary and its mirrors. `markEpisodeWatched` (the mark-previous
+// path) is lifted out too, so a revert of its call site has a case that reds.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
@@ -42,7 +46,9 @@ const local = (at: number): SyncClock => ({ at, origin: INSTALL })
 interface Rig {
   store: InMemoryStorage
   video: { currentTime: number; duration: number }
+  markTracker: Mock
   markShikimori: Mock
+  markEpisodeWatched: (episodeInt: string) => Promise<void>
   /** Makes the next `n` completing (`watched: true`) saves reject, as an IPC failure would. */
   failSaves: (n: number) => void
   row: () => WatchProgressEntry
@@ -59,6 +65,7 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
   )
   const call = (channel: string, ...args: unknown[]): Promise<unknown> =>
     Promise.resolve(handlers.get(channel)!({}, ...args))
+  const markTracker = vi.fn(async () => null)
   const markShikimori = vi.fn(async () => null)
   let failing = 0
   ;(globalThis as { window?: unknown }).window = {
@@ -68,6 +75,7 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
           ? Promise.reject(new Error('ipc down'))
           : call(CHANNELS.WATCH_PROGRESS_SAVE, ...args),
       watchProgressGet: (...args: unknown[]) => call(CHANNELS.WATCH_PROGRESS_GET, ...args),
+      trackerMarkEpisodeWatched: markTracker,
       shikimoriMarkEpisodeWatched: markShikimori
     },
     dispatchEvent: () => true
@@ -77,13 +85,16 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
     'const WATCH_THRESHOLD_RATIO',
     'async function persistSelectedTranslation('
   )
+  const markPrev = slice('async function markEpisodeWatched(', 'async function maybeMarkWatched(')
   const mark = slice('async function maybeMarkWatched(', 'function resetEpisodeTracking(')
   const reset = slice('function resetEpisodeTracking(', 'async function tryPrefetch(')
   const resume = slice(
     'async function resumeFromSavedPosition(',
     'function maybeMarkPendingPrevWatched('
   )
-  const js = transformSync(`${tracking}\n${mark}\n${reset}\n${resume}`, { loader: 'ts' }).code
+  const js = transformSync(`${tracking}\n${markPrev}\n${mark}\n${reset}\n${resume}`, {
+    loader: 'ts'
+  }).code
   const video = { currentTime: 0, duration: DURATION }
   const ctx = {
     props: { animeId: 5, malId: 42 },
@@ -110,14 +121,16 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
      let autoAdvancePauseArmed = false, mkvSpawnFromRoom = false, openedIntoRoom = false;
      let episodeOpenedAt = 0;
      ${js}
-     return { trackProgressDelta, saveProgress, maybeMarkWatched, resetEpisodeTracking,
-              resumeFromSavedPosition };`
+     return { trackProgressDelta, saveProgress, markEpisodeWatched, maybeMarkWatched,
+              resetEpisodeTracking, resumeFromSavedPosition };`
   )(ctx)
 
   return {
     store,
     video,
+    markTracker,
     markShikimori,
+    markEpisodeWatched: (episodeInt) => fns.markEpisodeWatched(episodeInt),
     failSaves: (n) => {
       failing = n
     },
@@ -179,7 +192,7 @@ describe('PlayerView × watch-progress router — the watched clock', () => {
   })
 
   // 30 more ticks after the threshold: six more 5 s saves of the same open.
-  it('crossing the threshold again stamps the re-watch once, with no second Shikimori mark', async () => {
+  it('crossing the threshold again stamps the re-watch once, with no second tracker mark', async () => {
     const rig = makeRig({ '5:3': watchedRow() })
     await rig.open()
 
@@ -191,10 +204,11 @@ describe('PlayerView × watch-progress router — the watched clock', () => {
     expect(rig.row().updatedAt).toBeGreaterThan(completedAt)
     expect(rig.row()).toMatchObject({ watched: true, watchedAt: T0 })
     expect(rig.row().sync?.watched).toEqual(local(completedAt))
+    expect(rig.markTracker).not.toHaveBeenCalled()
     expect(rig.markShikimori).not.toHaveBeenCalled()
   })
 
-  it('a first completion marks Shikimori once and stamps sync.watched at the completion, not the last save', async () => {
+  it('a first completion marks the trackers once and stamps sync.watched at the completion, not the last save', async () => {
     const rig = makeRig({})
     await rig.open()
 
@@ -202,8 +216,9 @@ describe('PlayerView × watch-progress router — the watched clock', () => {
     const completedAt = Date.now()
     for (let i = 0; i < 30; i++) await rig.tick()
 
-    expect(rig.markShikimori).toHaveBeenCalledTimes(1)
-    expect(rig.markShikimori).toHaveBeenCalledWith(42, 3)
+    expect(rig.markTracker).toHaveBeenCalledTimes(1)
+    expect(rig.markTracker).toHaveBeenCalledWith(42, 3)
+    expect(rig.markShikimori).not.toHaveBeenCalled()
     expect(rig.row().updatedAt).toBeGreaterThan(completedAt)
     expect(rig.row()).toMatchObject({ watched: true, watchedAt: completedAt })
     expect(rig.row().sync?.watched).toEqual(local(completedAt))
@@ -251,5 +266,18 @@ describe('PlayerView × watch-progress router — the watched clock', () => {
     for (let i = 0; i < 10; i++) await rig.tick()
 
     expect(rig.row().sync?.watched).toEqual(stamped)
+  })
+
+  // `PlayerView.vue`'s first call site, reached only from
+  // `maybeMarkPendingPrevWatched` (the previous episode, marked after Next).
+  it('marking the previous episode watched marks the trackers once, never the Shikimori alias', async () => {
+    const rig = makeRig({})
+
+    await rig.markEpisodeWatched('3')
+
+    expect(rig.markTracker).toHaveBeenCalledTimes(1)
+    expect(rig.markTracker).toHaveBeenCalledWith(42, 3)
+    expect(rig.markShikimori).not.toHaveBeenCalled()
+    expect(rig.row()).toMatchObject({ watched: true })
   })
 })

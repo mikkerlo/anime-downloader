@@ -16,6 +16,7 @@ import type { RateValues } from '../../lib/shikimori-rate'
 import type { AnimeSearchResult } from '../../smotret-api'
 import type { StorageService } from '../../store/types'
 import type { CredentialVault, VaultBlob } from '../credential-vault'
+import { DETAILS_STALE_MS } from '../details-freshness'
 import { TrackerApiError } from '../errors'
 import {
   anilistQuantize,
@@ -138,8 +139,6 @@ export const ANILIST_REPEAT_SHIFT = 0
 
 /** How long the list cache and a details entry answer `getAiringInfo` (#706). */
 export const AIRING_FRESH_MS = 6 * 60 * 60 * 1000
-/** A details entry older than this is fetched again by the prefetch. */
-export const DETAILS_STALE_MS = 7 * 24 * 60 * 60 * 1000
 
 export const TOKEN_NOT_ACCEPTED = "That token wasn't accepted"
 

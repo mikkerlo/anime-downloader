@@ -19,8 +19,10 @@ import {
   type TrackerRateEntry,
   type TrackerRateEntryPayload,
   type TrackerRateField,
+  type TrackerRef,
   type TrackerSyncProvider
 } from '../types'
+import { DETAILS_STALE_MS } from '../details-freshness'
 import { fetchMalUser, type MalAuth } from './auth'
 import { classifyMalError } from './classify'
 import type { MalClient, MalFormValue } from './client'
@@ -79,7 +81,21 @@ export interface MalRelatedRead {
   }[]
 }
 
-export type MalProvider = TrackerSyncProvider<MalSession, MalListRow, MalListStatus, MalCachedRow>
+/** An entry read with the title's total (#744): `num_episodes`, null when MAL has none (0). */
+export interface MalEntryRead {
+  entry: TrackerEntry<MalListStatus> | null
+  numEpisodes: number | null
+}
+
+export interface MalProvider extends TrackerSyncProvider<
+  MalSession,
+  MalListRow,
+  MalListStatus,
+  MalCachedRow
+> {
+  /** `getEntry`'s request, with the total it already asks for (`num_episodes`) kept. */
+  readEntry(session: MalSession, ref: TrackerRef): Promise<MalEntryRead>
+}
 
 /**
  * How many rewatches MAL's `num_times_rewatched` is behind the app's count on
@@ -395,18 +411,28 @@ export function createMalProvider(deps: MalProviderDeps): MalProviderWithDetails
     },
 
     async getEntry(session, ref) {
+      return (await provider.readEntry(session, ref)).entry
+    },
+
+    async readEntry(session, ref) {
       const url = `${base()}/anime/${ref.malId}?fields=${encodeURIComponent(ENTRY_FIELDS)}&nsfw=true`
       const anime = (await userRequest(session, async (headers) => {
         return (await client.request({ url, headers })).body
-      })) as { my_list_status?: MalListStatus }
+      })) as { my_list_status?: MalListStatus; num_episodes?: number }
+      const n = anime.num_episodes
+      // 0 is MAL's "unknown".
+      const numEpisodes = typeof n === 'number' && n > 0 ? n : null
       const ls = anime.my_list_status
-      if (!ls) return null
+      if (!ls) return { entry: null, numEpisodes }
       return {
-        trackerId: 'mal',
-        malId: ref.malId,
-        remoteId: ref.malId,
-        values: malValues(ls),
-        native: ls
+        entry: {
+          trackerId: 'mal',
+          malId: ref.malId,
+          remoteId: ref.malId,
+          values: malValues(ls),
+          native: ls
+        },
+        numEpisodes
       }
     },
 
@@ -478,6 +504,16 @@ export function createMalProvider(deps: MalProviderDeps): MalProviderWithDetails
       const cache = store.get('myanimelistAnimeDetails') as Record<string, MalCachedDetails> | null
       const entry = cache?.[String(malId)]
       return entry ? malTrackerDetailsOf(entry.details) : null
+    },
+
+    // A miss isn't stale: `tracker:get-details` already fetches on one. An
+    // entry with no `fetchedAt` is, as `capDetails` reads it as 0.
+    detailsStale(malId) {
+      const cache = store.get('myanimelistAnimeDetails') as Record<string, MalCachedDetails> | null
+      const entry = cache?.[String(malId)]
+      if (!entry) return false
+      if (typeof entry.fetchedAt !== 'number') return true
+      return Date.now() - entry.fetchedAt >= DETAILS_STALE_MS
     },
 
     requestPrefetch(malId) {

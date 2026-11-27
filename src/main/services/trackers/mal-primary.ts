@@ -40,7 +40,7 @@ export interface MalPrimaryDeps {
   >
   provider: Pick<
     MalProvider,
-    'auth' | 'getEntry' | 'upsertEntry' | 'classifyError' | 'isSessionGone'
+    'auth' | 'getEntry' | 'readEntry' | 'upsertEntry' | 'classifyError' | 'isSessionGone'
   >
   maybeBroadcastCleanupPrompt: (
     smotretAnime: unknown,
@@ -57,6 +57,24 @@ export type MalPrimaryResult = RateValues
 
 export interface MalPrimary {
   write(malId: number, change: RateChange): Promise<PrimaryWrite<MalPrimaryResult> | null>
+}
+
+/**
+ * The episode a mark of `epNum` records on MAL (#744), or null for none. MAL
+ * stores at most the title's total, so a mark past a known total marks the
+ * total; on a `completed` title that is a no-op, since `nextWatchedRate`
+ * would start a rewatch. With no total (none cached, or MAL's 0, which
+ * `readEntry` and `totalOf` both read as null) `epNum` stands.
+ */
+function markTarget(before: RateValues, epNum: number, total: number | null): number | null {
+  if (total === null || epNum <= total) return epNum
+  return before.status === 'completed' ? null : total
+}
+
+/** A cached row's total: positive only, as `num_episodes: 0` is MAL's "unknown". */
+function totalOf(row: MalCachedRow | undefined): number | null {
+  const n = row?.node?.num_episodes
+  return typeof n === 'number' && n > 0 ? n : null
 }
 
 export function createMalPrimary(deps: MalPrimaryDeps): MalPrimary {
@@ -196,20 +214,29 @@ export function createMalPrimary(deps: MalPrimaryDeps): MalPrimary {
 
     let session: MalSession
     let existing: TrackerEntry<MalListStatus> | null
+    let total: number | null
     try {
       session = await provider.auth()
-      existing = await provider.getEntry(session, { malId, remoteId: malId })
+      ;({ entry: existing, numEpisodes: total } = await provider.readEntry(session, {
+        malId,
+        remoteId: malId
+      }))
     } catch (err) {
       if (!queueable(err)) throw err
-      const basis = basisOf(ownersRow(user, malId, atStart))
-      const next = nextWatchedRate(basis.before, epNum)
+      const row = ownersRow(user, malId, atStart)
+      const basis = basisOf(row)
+      // Offline the only total is the cached row's; with no row, nothing is clamped.
+      const target = markTarget(basis.before, epNum, totalOf(row))
+      const next = target === null ? null : nextWatchedRate(basis.before, target)
       return next
         ? { result: queue(user, malId, basis, next, err), basis: basis.before, after: next }
         : null
     }
 
     const before = existing ? existing.values : { ...NO_RATE_BEFORE }
-    const next = nextWatchedRate(before, epNum)
+    const target = markTarget(before, epNum, total)
+    if (target === null) return null
+    const next = nextWatchedRate(before, target)
     if (!next) return null
     try {
       const result = await send(session, user, malId, existing, next)

@@ -145,6 +145,30 @@ describe('the expiry warning', () => {
     expect(card.text()).toContain('Connected')
   })
 
+  it('a card left open crosses the threshold, then the end date, without a new payload', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    const expiresAt = NOW + EXPIRY_WARNING_MS + 30_000
+    vi.setSystemTime(NOW)
+    fake.main.user = ALICE
+    fake.main.sessionExpiresAt = expiresAt
+    const wrapper = mount(TrackersTab)
+    await flushPromises()
+    const card = anilistCard(wrapper)
+    expect(card.find('.expiry-chip').exists()).toBe(false)
+    vi.advanceTimersByTime(60_000)
+    await flushPromises()
+    expect(card.find('.expiry-chip').text()).toMatch(/^Expires /)
+    expect(card.find('.expiry-warning').text()).toMatch(/sign-in expires on/)
+    vi.setSystemTime(expiresAt)
+    vi.advanceTimersByTime(60_000)
+    await flushPromises()
+    expect(card.find('.expiry-chip').text()).toMatch(/^Expired /)
+    expect(card.find('.expiry-warning').text()).toMatch(
+      /^Your AniList sign-in expired on .+\. Sign in again to keep syncing\.$/
+    )
+    expect(fake.api.trackerListAccounts).toHaveBeenCalledTimes(1)
+  })
+
   it('Sign in again runs the same flow and shows the paste field', async () => {
     fake.api.trackerBeginAuth.mockImplementation(() => new Promise(() => {}))
     const card = await cardAt(NOW + 1000)

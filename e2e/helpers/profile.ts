@@ -212,6 +212,7 @@ async function firstMainEvaluate<T>(
     } catch (err) {
       const transient = /Execution context was destroyed/.test(String(err))
       if (!transient || attempt >= 10 || app.process().exitCode !== null) throw err
+      console.warn(`[e2e] main-process evaluate retried (attempt ${attempt}): ${String(err)}`)
       await new Promise((r) => setTimeout(r, 200))
     }
   }

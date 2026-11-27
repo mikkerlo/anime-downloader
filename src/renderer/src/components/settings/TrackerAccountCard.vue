@@ -37,11 +37,17 @@ const sessionExpired = computed(() =>
 const needsSetup = computed(() => Boolean(syncRow.value?.needsSetup || account.value?.needsSetup));
 const queueLength = computed(() => syncRow.value?.queueLength ?? 0);
 // A tracker whose token ends on a known date (AniList, #703): warned from two
-// weeks before it, while the session still works.
+// weeks before it, while the session still works. `now` ticks once a minute,
+// so a window left open crosses the threshold, and the end date, by itself.
+const now = ref(Date.now());
+const nowTimer = setInterval(() => (now.value = Date.now()), 60_000);
+onUnmounted(() => clearInterval(nowTimer));
 const expiresAt = computed(() => account.value?.sessionExpiresAt);
 const expiringSoon = computed(
-  () => !sessionExpired.value && isExpiringSoon(expiresAt.value, Date.now())
+  () => !sessionExpired.value && isExpiringSoon(expiresAt.value, now.value)
 );
+// Past `exp` but before the first 401 says so: "expired", not "expires".
+const expired = computed(() => typeof expiresAt.value === 'number' && now.value >= expiresAt.value);
 const expiryDate = computed(() =>
   typeof expiresAt.value === 'number' ? formatExpiry(expiresAt.value) : ''
 );
@@ -202,7 +208,7 @@ onMounted(async () => {
             >
             <span v-else class="chip green"><span class="dot"></span>Connected</span>
             <span v-if="expiringSoon" class="chip orange expiry-chip"
-              ><span class="dot"></span>Expires {{ expiryDate }}</span
+              ><span class="dot"></span>{{ expired ? 'Expired' : 'Expires' }} {{ expiryDate }}</span
             >
           </div>
           <div v-if="sessionExpired" class="ci-meta">
@@ -213,7 +219,8 @@ onMounted(async () => {
             </template>
           </div>
           <div v-else-if="expiringSoon" class="ci-meta expiry-warning">
-            Your {{ label }} sign-in expires on {{ expiryDate }}. Sign in again to keep syncing.
+            Your {{ label }} sign-in {{ expired ? 'expired' : 'expires' }} on {{ expiryDate }}. Sign
+            in again to keep syncing.
           </div>
           <div v-else class="ci-meta">{{ label }} account</div>
         </div>

@@ -112,7 +112,19 @@ export function createMalClient(deps: MalClientDeps = {}): MalClient {
       const response = await once(req)
       if (response.ok) {
         const text = await response.text()
-        return { status: response.status, body: text ? (JSON.parse(text) as unknown) : null }
+        if (!text) return { status: response.status, body: null }
+        try {
+          return { status: response.status, body: JSON.parse(text) as unknown }
+        } catch {
+          // An edge page on a 2xx: the server's fault, never the item's, so a
+          // 502 (`server`: kept, dropped only after 24 h), not a bare SyntaxError (`item`).
+          throw new TrackerApiError(
+            `MyAnimeList API error: ${response.status} (unreadable body)`,
+            'mal',
+            502,
+            scrubErrorBody(text).slice(0, ERROR_BODY_KEEP_CHARS)
+          )
+        }
       }
       const raw = await response.text().catch(() => '')
       if (isTransient(response.status, raw)) {

@@ -118,6 +118,31 @@ const DETAILS_FIELDS = [
   'rating',
   'studios'
 ].join(',')
+/**
+ * How many titles `myanimelistAnimeDetails` keeps. Every write rewrites the
+ * whole store file, so the cache is capped; the oldest fetches go first.
+ */
+export const MAL_DETAILS_CACHE_MAX = 300
+
+/** One `myanimelistAnimeDetails` entry. */
+export interface MalCachedDetails {
+  details: unknown
+  fetchedAt: number
+}
+
+/** `cache` with only its `max` most recently fetched entries. */
+export function capDetails(
+  cache: Record<string, MalCachedDetails>,
+  max: number
+): Record<string, MalCachedDetails> {
+  const ids = Object.keys(cache)
+  if (ids.length <= max) return cache
+  const keep = ids
+    .sort((a, b) => (cache[b].fetchedAt ?? 0) - (cache[a].fetchedAt ?? 0))
+    .slice(0, max)
+  return Object.fromEntries(keep.map((id) => [id, cache[id]]))
+}
+
 /** The list endpoint's maximum page. */
 export const MAL_LIST_PAGE = 1000
 
@@ -386,13 +411,18 @@ export function createMalProvider(deps: MalProviderDeps): MalProvider {
       return out
     },
 
-    // On demand only, cached in `myanimelistAnimeDetails` by MAL id.
+    // On demand only, cached in `myanimelistAnimeDetails` by MAL id as
+    // `{ details, fetchedAt }` (`shikimoriAnimeDetails`' shape), capped.
     async getDetails(malId) {
       const details = await publicRead(
         `/anime/${malId}?fields=${encodeURIComponent(DETAILS_FIELDS)}&nsfw=true`
       )
-      const cache = (store.get('myanimelistAnimeDetails') as Record<string, unknown> | null) ?? {}
-      store.set('myanimelistAnimeDetails', { ...cache, [String(malId)]: details })
+      const id = String(malId)
+      const { [id]: _previous, ...others } =
+        (store.get('myanimelistAnimeDetails') as Record<string, MalCachedDetails> | null) ?? {}
+      // The new entry always stays: the others make room for it.
+      const kept = capDetails(others, MAL_DETAILS_CACHE_MAX - 1)
+      store.set('myanimelistAnimeDetails', { ...kept, [id]: { details, fetchedAt: Date.now() } })
       return details
     }
   }

@@ -109,6 +109,23 @@ describe('the MAL drain and its error classes', () => {
     ])
     expect(r.queue()).toHaveLength(0)
   })
+
+  // #733 review: an edge page on a 2xx is MAL's fault, never the item's.
+  it('an HTML 200 keeps the item as a server error instead of dropping it', async () => {
+    serveItemsOk()
+    fake.on('GET', '/v2/anime/102', {
+      status: 200,
+      text: '<html><body>Please wait while we check your browser</body></html>'
+    })
+    const r = await rigWithQueue()
+    await r.mal.sync.syncQueue()
+    expect(r.settled.map((e) => [e.malId, e.outcome])).toEqual([
+      [101, 'applied'],
+      [103, 'applied']
+    ])
+    expect(r.queue().map((q) => q.malId)).toEqual([102])
+    expect(r.mal.sync.getSyncStatus().lastSyncError).toBe('MyAnimeList server error — will retry')
+  })
 })
 
 describe('no drain while "Needs setup"', () => {

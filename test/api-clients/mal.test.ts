@@ -10,6 +10,7 @@ import { createCredentialVault } from '../../src/main/trackers/credential-vault'
 import { createMalClient } from '../../src/main/trackers/mal/client'
 import { createMalAuth, type MalCredentials } from '../../src/main/trackers/mal/auth'
 import {
+  MAL_DETAILS_CACHE_MAX,
   MAL_REWATCH_SHIFT,
   createMalProvider,
   malRateCache,
@@ -18,6 +19,7 @@ import {
 } from '../../src/main/trackers/mal/provider'
 import { nextWatchedRate, type RateValues } from '../../src/main/lib/shikimori-rate'
 import { TrackerApiError } from '../../src/main/trackers/errors'
+import { classifyMalError } from '../../src/main/trackers/mal/classify'
 
 const USER = { id: 1234567, nickname: 'fake_mal_user', avatar: null }
 const TOKEN = 'fake-access-token-mal-1'
@@ -409,7 +411,35 @@ describe('the capability reads (public, by id)', () => {
     expect(fields).toEqual(expect.arrayContaining(['synopsis', 'genres']))
     expect(fake.calls[0].url.searchParams.get('nsfw')).toBe('true')
     expect(details).toEqual(malFixture('details.json'))
-    expect(r.store.get('myanimelistAnimeDetails')).toEqual({ '5114': malFixture('details.json') })
+    expect(r.store.get('myanimelistAnimeDetails')).toEqual({
+      '5114': { details: malFixture('details.json'), fetchedAt: expect.any(Number) }
+    })
+  })
+
+  // #733 review: every write rewrites the store file, so the cache is capped.
+  it(`myanimelistAnimeDetails keeps the ${MAL_DETAILS_CACHE_MAX} most recently fetched titles`, async () => {
+    fake.on('GET', /\/v2\/anime\/\d+$/, { json: malFixture('details.json') })
+    const r = rig()
+    // Full, oldest first by fetch time: ids 1..MAX, fetched at 1..MAX.
+    const full = Object.fromEntries(
+      Array.from({ length: MAL_DETAILS_CACHE_MAX }, (_, i) => [
+        String(i + 1),
+        { details: { id: i + 1 }, fetchedAt: i + 1 }
+      ])
+    )
+    r.store.set('myanimelistAnimeDetails', full)
+    await r.provider.getDetails!(5114)
+    const cache = r.store.get('myanimelistAnimeDetails') as Record<string, unknown>
+    expect(Object.keys(cache)).toHaveLength(MAL_DETAILS_CACHE_MAX)
+    expect(cache).not.toHaveProperty('1')
+    expect(cache).toHaveProperty('2')
+    expect(cache).toHaveProperty('5114')
+    // A refetch of a cached title replaces it and evicts nothing.
+    await r.provider.getDetails!(2)
+    const again = r.store.get('myanimelistAnimeDetails') as Record<string, { fetchedAt: number }>
+    expect(Object.keys(again)).toHaveLength(MAL_DETAILS_CACHE_MAX)
+    expect(again).toHaveProperty('3')
+    expect(again['2'].fetchedAt).toBeGreaterThan(MAL_DETAILS_CACHE_MAX)
   })
 
   it('declares exactly the three capabilities it implements', () => {
@@ -505,5 +535,15 @@ describe('the client', () => {
       TrackerApiError
     )
     expect(fake.calls).toHaveLength(1)
+  })
+
+  // #733 review: a non-JSON 2xx used to throw a bare SyntaxError (`item`: dropped).
+  it('a 2xx whose body isn’t JSON is a server-class TrackerApiError with the scrubbed body', async () => {
+    fake.on('GET', api('/anime/1'), { status: 200, text: '<html>Akamai interstitial</html>' })
+    const client = createMalClient({ spacingMs: 0, sleep: async () => {} })
+    const err = await client.request({ url: 'http://mal.test/v2/anime/1' }).catch((e) => e)
+    expect(err).toBeInstanceOf(TrackerApiError)
+    expect(classifyMalError(err)).toBe('server')
+    expect((err as TrackerApiError).body).toContain('Akamai interstitial')
   })
 })

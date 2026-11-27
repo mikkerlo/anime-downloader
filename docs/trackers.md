@@ -1087,7 +1087,10 @@ the translation the identity.
 `start_date` beside its raw `related_anime` (T11c's walk calls it per node);
 `getRecommendations(seeds)` reads each seed's `recommendations`;
 `getDetails(malId)` reads synopsis, genres and the rest on demand and writes
-the response into `myanimelistAnimeDetails[malId]`. Their consumers are T11a,
+`myanimelistAnimeDetails[malId] = { details, fetchedAt }` (the shape of
+`shikimoriAnimeDetails`), keeping the 300 most recently fetched titles
+(`MAL_DETAILS_CACHE_MAX`): every write rewrites the store file, so the cache
+is capped, and the oldest fetch is evicted first. Their consumers are T11a,
 T11c and T11d, which wire the details emit and the feature-source
 construction. No `getAiringInfo` or `getCalendar` (MAL has a total and a
 status only, so it is never the `airing` source and MAL-only users get no

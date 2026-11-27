@@ -159,6 +159,15 @@ interface TrackerAccountsState {
   // build, false in a packaged one until the flag lifts. Main always sends it;
   // a payload without it reads as false.
   newTrackerCardsEnabled?: boolean
+  // Connecting a second tracker (#701): true in an unpackaged build, false in
+  // a packaged one until #708 removes the flag. While false, a card for a
+  // tracker that isn't connected hides its Connect action when another
+  // tracker is. Main always sends it; a payload without it reads as false.
+  secondTrackerEnabled?: boolean
+  // The trackers main has a primary write path for (the fan-out's registered
+  // writers), in `TrackerId` order: the only ones the primary picker offers.
+  // Main always sends it; a payload without it reads as none.
+  primaryCapable?: TrackerId[]
 }
 
 // What `tracker:begin-auth` and `tracker:complete-auth` resolve to.

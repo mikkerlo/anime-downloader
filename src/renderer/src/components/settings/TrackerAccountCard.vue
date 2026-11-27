@@ -4,8 +4,10 @@ import { storeToRefs } from 'pinia';
 import { TRACKER_LABELS } from '@shared/trackers/labels';
 import { useTrackersStore } from '../../stores/trackers';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
+import SettingsSwitch from './SettingsSwitch.vue';
 import TrackerPendingDialog from './TrackerPendingDialog.vue';
 import type { TrackerConnectFormHandle } from './tracker-connect-form';
 import { formatExpiry, isExpiringSoon } from './session-expiry';
@@ -20,8 +22,24 @@ const props = defineProps<{
   connectForm: Component;
 }>();
 
-const { accounts, aggregateSyncState } = storeToRefs(useTrackersStore());
+const emit = defineEmits<{
+  /** A logout of the primary resolved and left 2+ trackers: `TrackersTab` asks which is primary. */
+  'needs-primary-choice': [candidates: TrackerId[]];
+}>();
+
+const trackersStore = useTrackersStore();
+const {
+  accounts,
+  aggregateSyncState,
+  connected,
+  primary,
+  primaryCapable,
+  multiAccount,
+  secondTrackerEnabled,
+  openReconcile
+} = storeToRefs(trackersStore);
 const shikimoriStore = useShikimoriStore();
+const { showSaved } = useSettingsAutosave();
 
 const label = computed(() => TRACKER_LABELS[props.trackerId]);
 const account = computed(() => accounts.value.find((a) => a.trackerId === props.trackerId) ?? null);
@@ -55,6 +73,84 @@ const expiryDate = computed(() =>
 const connectFormRef = ref<TrackerConnectFormHandle | null>(null);
 const connectActive = computed(() => connectFormRef.value?.active ?? false);
 
+// ---- Multi-account controls (#701): only with 2+ connected accounts --------
+const isPrimary = computed(() => primary.value === props.trackerId);
+const primaryLabel = computed(() => (primary.value ? TRACKER_LABELS[primary.value] : ''));
+// Only a tracker main has a primary write path for can be picked (#692).
+const canBePrimary = computed(() => primaryCapable.value.includes(props.trackerId));
+const showControls = computed(() => multiAccount.value && user.value !== null);
+const mirrorOn = computed(() => trackersStore.mirrorOn(props.trackerId));
+// The second-tracker flag (#701): no Connect while another tracker is connected.
+const connectBlocked = computed(
+  () =>
+    !user.value &&
+    !secondTrackerEnabled.value &&
+    connected.value.some((id) => id !== props.trackerId)
+);
+// What the last mirror-off confirm actually removed (its `discarded`).
+const discardedNote = ref(0);
+// Switching the mirror back on offers a review, shown only once #708 sets `openReconcile`.
+const reconcileOffered = ref(false);
+const choiceError = ref('');
+
+async function choosePrimary(): Promise<void> {
+  choiceError.value = '';
+  try {
+    await trackersStore.setPrimary(props.trackerId);
+    showSaved();
+  } catch (err) {
+    // The store didn't move, so the DOM goes back to it. The radios share one
+    // group across the cards: the click also unchecked the primary's radio in
+    // another card, and Vue won't re-patch it, since its `checked` binding
+    // never changed.
+    for (const radio of document.querySelectorAll<HTMLInputElement>(
+      'input[name="tracker-primary"]'
+    )) {
+      radio.checked = radio.value === primary.value;
+    }
+    choiceError.value = String(err);
+  }
+}
+
+async function onMirrorToggle(enabled: boolean): Promise<void> {
+  choiceError.value = '';
+  discardedNote.value = 0;
+  reconcileOffered.value = false;
+  try {
+    const result = await trackersStore.setMirror(props.trackerId, enabled);
+    if (enabled) {
+      if (result.applied) showSaved();
+      reconcileOffered.value = result.offerReconcile === true;
+      return;
+    }
+    // Off asks first, even with nothing queued.
+    pendingDialog.value = {
+      mode: 'mirror-off',
+      count: result.pendingMirrorChanges ?? 0,
+      nickname: null
+    };
+  } catch (err) {
+    choiceError.value = String(err);
+  }
+}
+
+async function onMirrorConfirm(): Promise<void> {
+  pendingDialog.value = null;
+  try {
+    const result = await trackersStore.setMirror(props.trackerId, false, { confirm: true });
+    showSaved();
+    // What main removed at the confirm, never the dialog's count.
+    discardedNote.value = result.discarded ?? 0;
+  } catch (err) {
+    choiceError.value = String(err);
+  }
+}
+
+function reviewDifferences(): void {
+  reconcileOffered.value = false;
+  openReconcile.value?.(props.trackerId);
+}
+
 // `useShikimoriStore().user` isn't derived from the accounts broadcast (#697),
 // so every sign-in and logout here refreshes it, or the facade's readers would
 // stay signed in until a restart. A failed read isn't the caller's failure.
@@ -78,7 +174,8 @@ const keptQueues = computed(() => {
 type PendingDialog =
   | { mode: 'disconnect'; count: number; nickname: string }
   | { mode: 'switch'; count: number; nickname: string; ownerId: string; newNickname: string }
-  | { mode: 'discard'; count: number; nickname: string | null; ownerId: string | null };
+  | { mode: 'discard'; count: number; nickname: string | null; ownerId: string | null }
+  | { mode: 'mirror-off'; count: number; nickname: null };
 const pendingDialog = ref<PendingDialog | null>(null);
 const pendingError = ref('');
 
@@ -115,10 +212,15 @@ function reconnect(): void {
 }
 
 async function logout(opts?: TrackerLogoutOptions): Promise<void> {
-  await window.api.trackerLogout(props.trackerId, opts);
+  const result = await window.api.trackerLogout(props.trackerId, opts);
+  discardedNote.value = 0;
+  reconcileOffered.value = false;
   await syncFacadeUser();
   connectFormRef.value?.reset();
   await loadParkedQueues();
+  // Only a logout that resolved asks; a rejected one never gets here.
+  const choice = result?.needsPrimaryChoice;
+  if (choice) emit('needs-primary-choice', choice.candidates);
 }
 
 async function disconnect(): Promise<void> {
@@ -158,7 +260,7 @@ async function onPendingDiscard(): Promise<void> {
   const dialog = pendingDialog.value;
   pendingDialog.value = null;
   pendingError.value = '';
-  if (!dialog) return;
+  if (!dialog || dialog.mode === 'mirror-off') return;
   try {
     if (dialog.mode === 'disconnect') {
       await logout({ pending: 'discard' });
@@ -210,6 +312,7 @@ onMounted(async () => {
             <span v-if="expiringSoon" class="chip orange expiry-chip"
               ><span class="dot"></span>{{ expired ? 'Expired' : 'Expires' }} {{ expiryDate }}</span
             >
+            <span v-if="showControls && isPrimary" class="chip neutral primary-badge">Primary</span>
           </div>
           <div v-if="sessionExpired" class="ci-meta">
             {{ label }} rejected the saved sign-in.
@@ -253,12 +356,73 @@ onMounted(async () => {
 
       <!-- Kept mounted (v-show): Reconnect starts the body's sign-in, and the
          body is shown once it has one in progress, or the reason it couldn't start.
-         "Needs setup" shows it too: the setup to fix is the body's (MAL, #702). -->
+         "Needs setup" shows it too: the setup to fix is the body's (MAL, #702).
+         The second-tracker flag (#701) hides it for a tracker that isn't connected. -->
       <SettingsRow
-        v-show="!user || needsSetup || ((sessionExpired || expiringSoon) && connectActive)"
+        v-show="
+          (!user && !connectBlocked) ||
+          (user && needsSetup) ||
+          ((sessionExpired || expiringSoon) && connectActive)
+        "
         stack
       >
         <component :is="connectForm" ref="connectFormRef" :complete="complete" />
+      </SettingsRow>
+      <SettingsRow v-if="connectBlocked" class="second-tracker-row">
+        <template #text>
+          <div class="sr-desc">Connecting a second tracker isn't available yet.</div>
+        </template>
+      </SettingsRow>
+
+      <!-- Primary and mirror controls (#701), with 2+ connected accounts only. -->
+      <SettingsRow
+        v-if="showControls && canBePrimary"
+        class="primary-row"
+        label="Primary tracker"
+        desc="The source of truth for your lists, next episodes and auto-download."
+      >
+        <input
+          type="radio"
+          name="tracker-primary"
+          :value="trackerId"
+          :checked="isPrimary"
+          :aria-label="`Make ${label} the primary tracker`"
+          @change="choosePrimary"
+        />
+      </SettingsRow>
+      <SettingsRow
+        v-if="showControls && !isPrimary"
+        class="mirror-row"
+        label="Mirror changes to this tracker"
+        :desc="`Changes you make in ${primaryLabel} are sent to ${label} too.`"
+      >
+        <SettingsSwitch :model-value="mirrorOn" @update:model-value="onMirrorToggle" />
+      </SettingsRow>
+      <SettingsRow v-if="discardedNote > 0" stack>
+        <div class="inline-result mirror-discarded">
+          {{ discardedNote }} change{{ discardedNote === 1 ? '' : 's' }} discarded
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        v-if="showControls && reconcileOffered && openReconcile"
+        class="reconcile-offer-row"
+      >
+        <template #text>
+          <div class="sr-desc">Review differences with {{ primaryLabel }}?</div>
+        </template>
+        <button class="btn btn-sm btn-primary" data-action="review" @click="reviewDifferences">
+          Review
+        </button>
+        <button
+          class="btn btn-sm btn-outline"
+          data-action="not-now"
+          @click="reconcileOffered = false"
+        >
+          Not now
+        </button>
+      </SettingsRow>
+      <SettingsRow v-if="choiceError" stack>
+        <div class="inline-result bad choice-error">{{ choiceError }}</div>
       </SettingsRow>
 
       <SettingsRow
@@ -292,8 +456,10 @@ onMounted(async () => {
       :count="pendingDialog.count"
       :nickname="pendingDialog.nickname"
       :new-nickname="pendingDialog.mode === 'switch' ? pendingDialog.newNickname : undefined"
+      :primary-label="primaryLabel"
       @keep="onPendingKeep"
       @discard="onPendingDiscard"
+      @confirm="onMirrorConfirm"
       @cancel="pendingDialog = null"
     />
   </div>

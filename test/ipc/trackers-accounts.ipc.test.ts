@@ -150,7 +150,9 @@ function rig(
     vault,
     trackerRates,
     cancelAttempt: (id) => auth.cancel(id),
-    newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true
+    newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true,
+    // Connecting a second tracker (#701); its refusals are trackers-second-tracker-flag.test.ts.
+    secondTrackerEnabled: true
   })
   const auth = createTrackerAuthSessions({
     lifecycle,
@@ -174,6 +176,7 @@ function rig(
     trackerLifecycle: lifecycle,
     trackerAuth: auth,
     newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true,
+    secondTrackerEnabled: true,
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => {}),
     runAutoDownloadTick: vi.fn(async () => ({})),

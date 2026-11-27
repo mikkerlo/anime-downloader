@@ -114,6 +114,13 @@ export const useTrackersStore = defineStore('trackers', () => {
   const detailsByTracker = ref<PerTracker<Record<number, TrackerDetails>>>({})
   // The AniList and MyAnimeList cards (#703/#702): false until a payload says true.
   const newTrackerCardsEnabled = ref(false)
+  // Connecting a second tracker (#701): false until a payload says true.
+  const secondTrackerEnabled = ref(false)
+  // The trackers main has a primary write path for: the primary picker's options.
+  const primaryCapable = ref<TrackerId[]>([])
+  // The mirror-on "Review differences" action. #708 (T10) sets it; until then
+  // it is null and the offer stays hidden.
+  const openReconcile = ref<((trackerId: TrackerId) => void) | null>(null)
   const ratesByTracker = ref<PerTracker<TrackerRateEntry[]>>({})
   const queuedAfterByTracker = ref<PerTracker<Record<number, TrackerRateValues>>>({})
   const syncByTracker = ref<PerTracker<TrackerSyncStatus>>({})
@@ -143,6 +150,47 @@ export const useTrackersStore = defineStore('trackers', () => {
       primary: primary.value,
       overrides: featureSources.value
     })
+  }
+
+  // What `feature` resolves to with no override: the "Default (‹tracker›)"
+  // option. The same resolver call with that feature's override left out.
+  function defaultFeatureSource(feature: FeatureKey): TrackerId | null {
+    const overrides = { ...featureSources.value }
+    delete overrides[feature]
+    return resolveFeatureSource(feature, {
+      connected: connected.value,
+      primary: primary.value,
+      overrides
+    })
+  }
+
+  // ---- Multi-account controls (#701) ----------------------------------------
+  // Shown only with two or more connected accounts, an expired one included.
+  const multiAccount = computed(() => connected.value.length >= 2)
+
+  // A missing entry means on (`trackerMirror`).
+  const mirrorOn = (id: TrackerId): boolean => mirror.value[id] !== false
+
+  // The setters write through main (#696), never `set-setting`, which refuses
+  // these keys. The state follows the `tracker:accounts-changed` they emit.
+  async function setPrimary(id: TrackerId): Promise<void> {
+    await window.api.trackerSetPrimary(id)
+  }
+
+  /** Off without `confirm` only counts (`pendingMirrorChanges`); with it, main discards. */
+  function setMirror(
+    id: TrackerId,
+    enabled: boolean,
+    opts?: TrackerSetMirrorOptions
+  ): Promise<TrackerSetMirrorResult> {
+    return opts
+      ? window.api.trackerSetMirror(id, enabled, opts)
+      : window.api.trackerSetMirror(id, enabled)
+  }
+
+  /** `null` clears the override (the Default option). */
+  async function setFeatureSource(feature: FeatureKey, id: TrackerId | null): Promise<void> {
+    await window.api.trackerSetFeatureSource(feature, id)
   }
 
   // The account half of the Auto-download gate: the `airing` source resolves,
@@ -363,6 +411,8 @@ export const useTrackersStore = defineStore('trackers', () => {
     mirror.value = next.mirror
     featureSources.value = next.featureSources
     newTrackerCardsEnabled.value = next.newTrackerCardsEnabled === true
+    secondTrackerEnabled.value = next.secondTrackerEnabled === true
+    primaryCapable.value = next.primaryCapable ?? []
     accountsLoaded.value = true
   }
 
@@ -459,6 +509,15 @@ export const useTrackersStore = defineStore('trackers', () => {
     featureSources,
     detailsByTracker,
     newTrackerCardsEnabled,
+    secondTrackerEnabled,
+    primaryCapable,
+    openReconcile,
+    multiAccount,
+    mirrorOn,
+    setPrimary,
+    setMirror,
+    setFeatureSource,
+    defaultFeatureSource,
     ratesByTracker,
     queuedAfterByTracker,
     syncByTracker,

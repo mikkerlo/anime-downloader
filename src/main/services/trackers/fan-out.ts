@@ -116,6 +116,8 @@ export interface TrackerFanOut {
     trackerId: K,
     writer: PrimaryWriter<PrimaryResults[K]>
   ): void
+  /** Whether a primary writer is set for the tracker: `applyChange` throws for a primary without one. */
+  hasPrimaryWriter(trackerId: TrackerId): boolean
   /** The primary (#696 § 0): `deps.primary`, else `resolvePrimary` over the store. */
   primary(): TrackerId | null
   /**
@@ -381,6 +383,7 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
   return {
     applyChange,
     setPrimaryWriter: (id, writer) => void writers.set(id, writer as PrimaryWriter),
+    hasPrimaryWriter: (id) => writers.has(id),
     primary,
     discardQueue,
     mirrorQueueCount: (id) => liveQueue(byId(id)).filter((q) => q.via === 'mirror').length,

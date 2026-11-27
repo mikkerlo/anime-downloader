@@ -139,6 +139,13 @@ export interface AppDeps {
    * `tracker:complete-auth` refuse both trackers.
    */
   newTrackerCardsEnabled: boolean
+  /**
+   * Connecting a second tracker (`trackers/flags.ts`, #701), computed once
+   * from `app.isPackaged`; the lifecycle gets the same value. While false,
+   * `tracker:begin-auth` and `shikimori:get-auth-url` refuse a tracker when
+   * another one has a user, so no browser opens and no port is bound.
+   */
+  secondTrackerEnabled: boolean
   /** The MAL card's redirect URL and client-ID Test (#702). */
   malSetup?: MalSetup
   /** AniList's calendar, `tracker:get-calendar`'s AniList branch (#709). */

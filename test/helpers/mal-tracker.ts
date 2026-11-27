@@ -69,7 +69,9 @@ export async function malTrackerRig(
     },
     broadcast,
     accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED,
-    newTrackerCardsEnabled: true
+    newTrackerCardsEnabled: true,
+    // As `index.ts` wires it (#701): the accounts state's `primaryCapable`.
+    hasPrimaryWriter: (id) => fan.hasPrimaryWriter(id)
   })
   const notify = vi.spyOn(lifecycle, 'notifyAccountsChanged')
   const mal = createMalTracker({

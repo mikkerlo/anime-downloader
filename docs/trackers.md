@@ -330,6 +330,9 @@ row behind) or null (mark-watched).
   (`setPrimaryWriter`). It throws or returns null on a refusal, exactly as
   before; otherwise it returns its result, the rate the change was made against
   (the live rate when sent, the cached entry when queued) and the rate it wrote.
+  AniList's is `services/trackers/anilist-primary.ts` (#703), queue-first
+  ([below](#the-primary-branch)). A primary with no writer throws `<Tracker>
+  has no primary write path`.
 - **Mirrors fan out only after the primary wrote**, live or queued (parked
   included). On a throw or a null no mirror gets an entry and no mirror clock
   is stamped. The fan-out then reads each other connected tracker's mirror
@@ -1077,13 +1080,17 @@ drain sends it, where Shikimori's branch sends live. AniList allows 30 requests
 a minute, and a live send would spend two on every edit (the `MediaList` read
 and the write); the drain sends only the changed fields through the limiter.
 The entry is field-scoped (`fields`, no `via`): the fields that differ from
-AniList's projection, or all four with no row (the create rule). So the
-drain's drift check keeps a progress the server has moved past, and a
-mark-watched never lowers it. It stamps `anilist:<userId>:<malId>`, calls
-`maybeBroadcastCleanupPrompt` with the AniList row's own `smotretAnime`, and
-returns `{ result: after, basis, after }`, which feeds the mirrors as
-Shikimori's does. A set for a title not on AniList throws; a mark-watched for
-one is null.
+AniList's projection. So the drain's drift check keeps a progress the server
+has moved past, and a mark-watched never lowers it. With no row, cached or
+queued, the branch reads the live entry once (a cold cache can't tell a title
+off the list from a list not loaded yet, and a create-rule entry against a
+row the server has would drain as drift and send nothing); with no live entry
+either, or offline, it takes the create rule, all four fields. A switch
+during that read parks the change for the account it was made on. It stamps
+`anilist:<userId>:<malId>`, calls `maybeBroadcastCleanupPrompt` with the
+AniList row's own `smotretAnime`, and returns its `basis` and `after` (the
+values are its `result`), which feed the mirrors as Shikimori's do. A set for
+a title not on AniList throws; a mark-watched for one is null.
 
 ### Capabilities
 

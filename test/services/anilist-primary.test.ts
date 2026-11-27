@@ -166,6 +166,77 @@ describe('AniList as the primary', () => {
     ])
   })
 
+  it('a cold cache (the list not loaded yet) reads the live entry once and queues against it', async () => {
+    const r = await primaryRig()
+    const out = await r.fan.applyChange(
+      1,
+      { kind: 'mark-watched', episode: 8 },
+      { target: 'anilist', cause: 'user' }
+    )
+    expect(out).toEqual({ kind: 'primary', result: v(8, 9), after: v(8, 9) })
+    expect(r.world.server.of('MediaList')).toHaveLength(1)
+    expect(queue(r.t)).toEqual([
+      expect.objectContaining({
+        rateId: 9001,
+        before: v(7, 9),
+        after: v(8, 9),
+        fields: ['episodes']
+      })
+    ])
+    await r.sync.drainNow()
+    expect(r.world.saves()).toEqual([{ mediaId: 101, progress: 8 }])
+    expect(r.world.entries.get(101)).toMatchObject({ progress: 8, score: 90 })
+  })
+
+  it('offline with a cold cache: the create rule, queued without a read', async () => {
+    const r = await primaryRig()
+    r.world.inject('IdMap', { throws: new TypeError('fetch failed') })
+    await r.fan.applyChange(
+      1,
+      { kind: 'mark-watched', episode: 8 },
+      { target: 'anilist', cause: 'user' }
+    )
+    expect(queue(r.t)).toEqual([
+      expect.objectContaining({
+        rateId: null,
+        fields: ['episodes', 'status', 'score', 'rewatches']
+      })
+    ])
+  })
+
+  it('a switch during the cold read parks the change for the account it was made on', async () => {
+    const r = await primaryRig()
+    r.world.inject('MediaList', {
+      body: {
+        data: {
+          MediaList: {
+            id: 9001,
+            status: 'CURRENT',
+            score: 90,
+            progress: 7,
+            repeat: 0,
+            updatedAt: 1
+          }
+        }
+      }
+    })
+    const pending = r.fan.applyChange(
+      1,
+      { kind: 'mark-watched', episode: 8 },
+      { target: 'anilist', cause: 'user' }
+    )
+    r.t.store.set('anilistUser', { ...ALICE, id: 6002, nickname: 'bob' })
+    await pending
+    expect(queue(r.t)).toEqual([])
+    const parked = r.t.store.get('anilistParkedQueues') as Record<
+      string,
+      { entries: QueuedTrackerUpdate[] }
+    >
+    expect(parked[String(ALICE.id)].entries).toEqual([
+      expect.objectContaining({ malId: 1, after: v(8, 9), fields: ['episodes'] })
+    ])
+  })
+
   it('a set with nothing to change queues nothing and still returns the values', async () => {
     const r = await primaryRig()
     await r.sync.refreshRates({ keepQueued: false })

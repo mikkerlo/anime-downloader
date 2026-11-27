@@ -14,12 +14,25 @@ const libraryStore = useLibraryStore();
 const { newTrackerCardsEnabled } = storeToRefs(useTrackersStore());
 const root = ref<HTMLElement | null>(null);
 
+// A card behind the flag (AniList, #703) renders only once the accounts
+// payload says so, which can land after this tab mounted: a link to it waits
+// for that payload, then scrolls.
+let waitingFor: TrackerId | null = null;
+watch(newTrackerCardsEnabled, (enabled) => {
+  const trackerId = waitingFor;
+  waitingFor = null;
+  if (enabled && trackerId) void scrollToCard(trackerId);
+});
+
 async function scrollToCard(trackerId: TrackerId | null): Promise<void> {
   if (!trackerId) return;
   await nextTick();
-  root.value
-    ?.querySelector(`[data-tracker-id="${trackerId}"]`)
-    ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  const card = root.value?.querySelector(`[data-tracker-id="${trackerId}"]`);
+  if (!card) {
+    if (!newTrackerCardsEnabled.value) waitingFor = trackerId;
+    return;
+  }
+  card.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 // A deep link ("Session expired", "Sign in again") names the card to show. The
@@ -50,3 +63,10 @@ watch(
     />
   </div>
 </template>
+
+<style scoped>
+/* Each card is its own group: space them as `.set-group + .set-group` does. */
+.tracker-account-card + .tracker-account-card {
+  margin-top: 18px;
+}
+</style>

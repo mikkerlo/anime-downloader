@@ -9,6 +9,7 @@ import TrackersTab from '../../../src/renderer/src/components/settings/TrackersT
 import AniListConnectForm from '../../../src/renderer/src/components/settings/AniListConnectForm.vue'
 import { EXPIRY_WARNING_MS } from '../../../src/renderer/src/components/settings/session-expiry'
 import { createTrackerCardApi } from '../../helpers/tracker-card-api'
+import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 
 const ALICE = { id: 5001, nickname: 'alice', avatar: null }
 const NOW = Date.UTC(2026, 10, 27, 12, 0, 0)
@@ -151,6 +152,46 @@ describe('the expiry warning', () => {
     await flushPromises()
     expect(fake.api.trackerBeginAuth).toHaveBeenCalledWith('anilist')
     expect(card.find('.anilist-token').isVisible()).toBe(true)
+  })
+})
+
+describe('the sidebar’s deep link (T4c: navigateToSettingsTab(trackers, anilist))', () => {
+  const scrolled = () =>
+    (HTMLElement.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.contexts.map(
+      (el) => (el as HTMLElement).dataset.trackerId
+    )
+
+  it('first mount: the AniList card is the target, once the accounts payload shows it', async () => {
+    fake.main.user = ALICE
+    fake.main.sessionExpired = true
+    // The accounts read lands after the tab mounted, as an IPC round trip does.
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const read = fake.api.trackerListAccounts.getMockImplementation()!
+    fake.api.trackerListAccounts.mockImplementation(async () => {
+      await gate
+      return read()
+    })
+    const library = useLibraryStore()
+    library.navigateToSettingsTab('trackers', 'anilist')
+    library.consumePendingSettingsTab()
+    mount(TrackersTab)
+    await flushPromises()
+    expect(scrolled()).toEqual([])
+    release()
+    await flushPromises()
+    expect(scrolled()).toEqual(['anilist'])
+    expect(library.pendingSettingsTrackerId).toBeNull()
+  })
+
+  it('already alive: a second deep link scrolls the AniList card again', async () => {
+    const library = useLibraryStore()
+    mount(TrackersTab)
+    await flushPromises()
+    library.navigateToSettingsTab('trackers', 'anilist')
+    library.consumePendingSettingsTab()
+    await flushPromises()
+    expect(scrolled()).toEqual(['anilist'])
   })
 })
 

@@ -130,6 +130,8 @@ export interface TrackerAuthAttempt {
   authorizeUrl: string
   state?: string
   verifier?: string
+  /** The `redirect_uri` the authorize URL carries, which the code exchange repeats (MAL). */
+  redirectUri?: string
 }
 
 /**
@@ -145,13 +147,18 @@ export interface TrackerAuthFlow {
   readonly paste: 'url' | 'token' | 'code'
   /** True when the flow can't start yet (MAL with no client ID saved). */
   needsSetup?(): boolean
-  /** A new attempt: its authorize URL and, for a `'url'` flow, its `state`. */
-  begin(): TrackerAuthAttempt
+  /**
+   * A new attempt: its authorize URL and, for a `'url'` flow, its `state`.
+   * A loopback flow's is built after the bind, with the port it got (`bound`;
+   * the requested port when the bind failed).
+   */
+  begin(bound?: { port: number }): TrackerAuthAttempt
   /**
    * The loopback to bind on `127.0.0.1` and `::1` before the browser opens
-   * (MAL); null for a paste-only attempt.
+   * (MAL); null for a paste-only attempt. `timeoutMs` drops an attempt still
+   * waiting for the browser after that long.
    */
-  loopback?(): { port: number; path: string } | null
+  loopback?(): { port: number; path: string; timeoutMs?: number } | null
   /**
    * The exchange and the user read. Resolves only once the account is known
    * and writes nothing. `input` is the code (a `'url'` flow's, taken from the

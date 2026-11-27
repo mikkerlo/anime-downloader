@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "node": {
+        "id": 52991,
+        "title": "Sousou no Frieren",
+        "main_picture": {
+          "medium": "https://cdn.myanimelist.net/images/anime/1015/138006.jpg",
+          "large": "https://cdn.myanimelist.net/images/anime/1015/138006l.jpg"
+        },
+        "num_episodes": 28,
+        "status": "finished_airing",
+        "media_type": "tv"
+      },
+      "list_status": {
+        "status": "plan_to_watch",
+        "score": 0,
+        "num_episodes_watched": 0,
+        "is_rewatching": false,
+        "updated_at": "2026-10-02T12:00:00+00:00"
+      }
+    }
+  ],
+  "paging": {}
+}

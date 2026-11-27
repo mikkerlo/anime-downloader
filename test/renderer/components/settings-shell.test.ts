@@ -35,7 +35,8 @@ const NO_TRACKER_ACCOUNTS: TrackerAccountsState = {
   accounts: [],
   primary: null,
   mirror: {},
-  featureSources: {}
+  featureSources: {},
+  newTrackerCardsEnabled: false
 }
 
 function railButton(wrapper: VueWrapper, label: string) {

@@ -94,6 +94,8 @@ import { createAniListPrimary } from './services/trackers/anilist-primary'
 import { newTrackerCardsEnabled } from './trackers/flags'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
+import { malLoopbackPort } from './trackers/mal/auth'
+import { createMalTracker } from './trackers/mal'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
@@ -409,6 +411,30 @@ shikimori.setOnSessionExpired(() => {
   shikimoriSyncService.broadcastSyncStatus()
   trackerLifecycle.notifyAccountsChanged()
 })
+// MyAnimeList (#702): its client, sign-in, provider, sync instance and card
+// setup (`trackers/mal/index.ts`). The lifecycle and `trackerRates` are
+// declared below; every getter here runs at call or emit time, never while
+// this module is set up.
+const mal = createMalTracker({
+  store,
+  vault: credentialVault,
+  broadcast: broadcastToAll,
+  channels: {
+    rateUpdated: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
+    ratesRefreshed: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
+    syncStatus: EVENT_CHANNELS.TRACKER_SYNC_STATUS,
+    offlineQueueChanged: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
+  },
+  isOffline,
+  generation: () => trackerLifecycle.generation('mal'),
+  notifyAccountsChanged: () => trackerLifecycle.notifyAccountsChanged(),
+  queuedAfter: () => trackerRates.queuedAfter('mal'),
+  port: malLoopbackPort(process.env, app.isPackaged),
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  // The details read (#706): a miss fetches the title on demand, and each
+  // write is broadcast on this channel. No airing tick: MAL has no airing source.
+  detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
+})
 // AniList (#703): its provider, on the module-level host limiter, and its sync
 // instance, which emits `tracker:*` only through its own bridge. A token
 // AniList refuses clears the credential (session expired) and is an
@@ -467,7 +493,8 @@ const anilistPrimary = createAniListPrimary({
   maybeBroadcastCleanupPrompt
 })
 // The fan-out writer (#692): one entry per tracker whose sync service has
-// landed. The Shikimori router sets its primary branch; AniList's is set here.
+// landed. The Shikimori router sets its primary branch; AniList's is set here
+// and MAL's below.
 // Its primary is the lifecycle's (#696 § 0), read at call time: the lifecycle
 // is declared below, and nothing writes a rate while this module is set up.
 const trackerFanOut = createTrackerFanOut({
@@ -477,10 +504,13 @@ const trackerFanOut = createTrackerFanOut({
     {
       sync: anilistSync as unknown as TrackerSyncService<unknown, unknown>,
       writePrimary: (malId, change) => anilistPrimary.write(malId, change)
-    }
+    },
+    { sync: mal.sync as TrackerSyncService<unknown, unknown> }
   ],
   primary: () => trackerLifecycle.primary()
 })
+// MyAnimeList as the primary (#702): sent live, queued when the queue would survive the failure.
+mal.registerPrimary(trackerFanOut, maybeBroadcastCleanupPrompt)
 // The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
 const trackerRates = createTrackerRates({ store, trackers: trackerFanOut, isOffline })
 // The account lifecycle per tracker and the sign-in attempts (#695). Each
@@ -512,16 +542,17 @@ trackerLifecycle.setSteps('anilist', {
   broadcastStatus: () => anilistSync.broadcastSyncStatus(),
   broadcastQueue: () => anilistSync.broadcastQueueChanged()
 })
-// MyAnimeList (#702) adds its provider here: the sign-in flows, and the
-// `airing` source's `getAiringInfo` (#706), which MyAnimeList doesn't have.
-// Its sync construction passes `detailsUpdatedChannel` too, but no
-// `onRatesRefreshed` tick: MyAnimeList can't be the `airing` source.
+// The sign-in flows, the capabilities `tracker:set-feature-source` checks
+// (#696), and the feature sources' reads (#706). MyAnimeList (#702) has no
+// `getAiringInfo`, so its sync construction passes `detailsUpdatedChannel` but
+// no `onRatesRefreshed` tick: it can't be the `airing` source.
 const trackerProviders = {
   shikimori: createShikimoriProvider({
     store,
     refreshDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId)
   }),
-  anilist: anilistProvider
+  anilist: anilistProvider,
+  mal: mal.provider
 }
 const trackerAuth = createTrackerAuthSessions({
   lifecycle: trackerLifecycle,
@@ -971,6 +1002,7 @@ function registerIpcHandlers(): void {
     trackerAuth,
     trackerChoices,
     newTrackerCardsEnabled: newTrackerCards,
+    malSetup: mal.setup,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

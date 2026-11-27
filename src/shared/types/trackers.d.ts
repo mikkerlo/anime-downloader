@@ -175,7 +175,16 @@ type TrackerAuthResult =
 interface TrackerClientConfig {
   clientId: string | null
   hasSecret: boolean
+  // The one redirect URL the user registers, with main's loopback port (#702).
+  redirectUri?: string
 }
+
+// `tracker:test-client-config` (MAL only, #702): the saved client ID against
+// `GET /anime/1`. `kind` is the failure's class (`config` for a rejected ID,
+// `network` when MyAnimeList can't be reached).
+type TrackerTestClientConfigResult =
+  | { ok: true }
+  | { ok: false; kind: TrackerErrorClass; message: string }
 
 // `secret`: a string stores one, null clears it, and leaving it out keeps it.
 interface TrackerClientConfigInput {

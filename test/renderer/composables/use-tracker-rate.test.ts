@@ -44,7 +44,8 @@ function accountsState(connected: TrackerId[], primary: TrackerId | null = conne
     accounts: ids.map((id, i) => account(id, connected.includes(id) ? i + 1 : null)),
     primary,
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   } satisfies TrackerAccountsState
 }
 

@@ -6,15 +6,16 @@ import { useTrackersStore } from '../../stores/trackers';
 import TrackerAccountCard from './TrackerAccountCard.vue';
 import ShikimoriConnectForm from './ShikimoriConnectForm.vue';
 import AniListConnectForm from './AniListConnectForm.vue';
+import MalConnectForm from './MalConnectForm.vue';
 
-// Settings → Trackers (#700): one account card per tracker. T6 adds the
-// MyAnimeList card and T5b the multi-account controls. The AniList card (#703)
-// shows only while main reports the new-tracker-cards flag on (#703 § 8).
+// Settings → Trackers (#700): one account card per tracker, in `TrackerId`
+// order. The AniList (#703) and MyAnimeList (#702) cards show only while main
+// reports the new-tracker-cards flag on; T5b adds the multi-account controls.
 const libraryStore = useLibraryStore();
 const { newTrackerCardsEnabled } = storeToRefs(useTrackersStore());
 const root = ref<HTMLElement | null>(null);
 
-// A card behind the flag (AniList, #703) renders only once the accounts
+// A card behind the flag (AniList, MyAnimeList) renders only once the accounts
 // payload says so, which can land after this tab mounted: a link to it waits
 // for that payload, then scrolls.
 let waitingFor: TrackerId | null = null;
@@ -60,6 +61,12 @@ watch(
       tracker-id="anilist"
       desc="Connect AniList to sync your list there."
       :connect-form="AniListConnectForm"
+    />
+    <TrackerAccountCard
+      v-if="newTrackerCardsEnabled"
+      tracker-id="mal"
+      desc="Connect your MyAnimeList account through your own MyAnimeList app."
+      :connect-form="MalConnectForm"
     />
   </div>
 </template>

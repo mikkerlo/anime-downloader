@@ -15,7 +15,7 @@ export interface FakeTrackerMain {
   queueLength: number
   /** The `shikimori:get-sync-status` queue length, which the card must not read. */
   legacyQueueLength: number
-  /** The AniList / MAL cards' flag (#703), as main reports it. */
+  /** The AniList / MAL cards' flag (#703, #702), as main reports it. */
   newTrackerCardsEnabled?: boolean
   /** The account's `sessionExpiresAt` (AniList's token `exp`, #703). */
   sessionExpiresAt?: number
@@ -131,7 +131,26 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
       throw new Error('no exchange stubbed')
     }),
     trackerBeginAuth: vi.fn(async (): Promise<TrackerAuthResult> => ({ status: 'cancelled' })),
-    trackerCompleteAuth: vi.fn(async (): Promise<TrackerAuthResult> => ({ status: 'cancelled' }))
+    trackerCompleteAuth: vi.fn(async (): Promise<TrackerAuthResult> => ({ status: 'cancelled' })),
+    trackerCancelAuth: vi.fn(async () => undefined),
+    // MyAnimeList's connect body (#702).
+    trackerGetClientConfig: vi.fn(
+      async (): Promise<TrackerClientConfig> => ({
+        clientId: null,
+        hasSecret: false,
+        redirectUri: 'http://localhost:41753/callback'
+      })
+    ),
+    trackerSetClientConfig: vi.fn(
+      async (_id: TrackerId, input: TrackerClientConfigInput): Promise<TrackerClientConfig> => ({
+        clientId: input.clientId,
+        hasSecret: typeof input.secret === 'string',
+        redirectUri: 'http://localhost:41753/callback'
+      })
+    ),
+    trackerTestClientConfig: vi.fn(
+      async (): Promise<TrackerTestClientConfigResult> => ({ ok: true })
+    )
   }
 
   /** The next sign-in resolves `user`, after announcing it as main does. */

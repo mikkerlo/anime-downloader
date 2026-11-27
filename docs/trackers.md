@@ -1319,8 +1319,11 @@ has the leg; this is what it takes from a tracker.
 - **Errors** from the list read, and from anything that throws past it, go
   through the provider's `classifyError`: `auth`, `network`, `config` ("Needs
   setup", MAL) and `api` for the rest.
-- **Scores** stay the app's 0–10 on both sides, so AniList's `scoreFormat`
-  rounding is never a merge change or a conflict.
+- **Scores** stay the app's 0–10 on both sides, so a stored score that still
+  reads as the app's is never a merge change or a conflict. A lossy
+  `scoreFormat` (`POINT_5`, `POINT_3`) is a change once: the list's read-back
+  (an app 7 stored as 80, read as 8) wins, is applied here and reaches the
+  drive, and then every side agrees.
 
 ### Downgrade to 6.x
 

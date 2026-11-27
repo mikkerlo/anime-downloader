@@ -46,19 +46,51 @@ export interface ProjectDeps {
   ): EpisodeFileIdentity | null
   /** The MAL id of a title; defaults to the rate cache's and `malIdMap`'s mapping. */
   malIdOf?(animeId: string): number | null
-  /** S9 (#584)'s pending overlay: Shikimori-bound merge results not yet sent. */
+  /** S9 (#584)'s pending overlay: tracker-bound merge results not yet sent. */
   pendingRates?(
     ownerId: number,
     malId: number
   ): Partial<Record<SyncRateField, SyncRateFieldClock>> | undefined
+  /**
+   * The owner tracker the rate is read from (#715): its user, cache, queue,
+   * clock key and origin. Absent (or Shikimori's) reads Shikimori, as before.
+   */
+  tracker?: RateTracker
+}
+
+/**
+ * A non-Shikimori tracker as the projection reads it (#715): its store keys,
+ * and its rate cache through the codec's `entryOf` (#694), which reads a row
+ * and writes nothing.
+ */
+export interface RateTracker {
+  id: TrackerId
+  keys: { user: string; userRates: string; updateQueue: string }
+  entryOf(row: unknown): {
+    malId: number
+    remoteId: number | null
+    values: { episodes: number; status: string; score: number; rewatches: number }
+    updatedAt: number | null
+    smotretAnime: { id?: number } | null
+    anime?: { title?: string }
+  }
 }
 
 type Rates = { episodes: number; status: string; score: number; rewatches: number }
 
 const UNKNOWN_CLOCK = { at: 0, origin: LEGACY_ORIGIN }
 
-/** The MAL id the rate cache, or failing that `malIdMap`, gives a smotret `animeId`. */
-export function defaultMalIdOf(store: StorageService): (animeId: string) => number | null {
+/**
+ * The MAL id of a smotret `animeId` (#715): `malIdMap`, then each tracker's
+ * rate cache, Shikimori's first; a later entry wins. Every cache maps by MAL
+ * id, so the order matters only for an id two caches map differently. A
+ * Shikimori-owned library on an AniList-primary PC keeps a title only the
+ * Shikimori cache maps.
+ */
+export function defaultMalIdOf(
+  store: StorageService,
+  trackers: readonly RateTracker[] = []
+): (animeId: string) => number | null {
   const byAnime = new Map<string, number>()
   const malIdMap = store.get<Record<string, { id?: number }> | undefined>('malIdMap') ?? {}
   for (const [malId, anime] of Object.entries(malIdMap)) {
@@ -69,7 +101,65 @@ export function defaultMalIdOf(store: StorageService): (animeId: string) => numb
     const id = (entry.smotretAnime as { id?: number } | null)?.id
     if (id !== undefined) byAnime.set(String(id), entry.rate.target_id)
   }
+  for (const t of trackers) {
+    if (t.id === 'shikimori') continue
+    for (const row of store.get<unknown[] | undefined>(t.keys.userRates) ?? []) {
+      const e = t.entryOf(row)
+      const id = e.smotretAnime?.id
+      if (id !== undefined && Number.isFinite(e.malId)) byAnime.set(String(id), e.malId)
+    }
+  }
   return (animeId) => byAnime.get(animeId) ?? null
+}
+
+/**
+ * `projectRate` for a non-Shikimori owner tracker (#715): the same rule over
+ * its user, its cache's normalized row, its queue's latest entry, its clock key
+ * `<provider>:<userId>:<malId>` and its origin.
+ */
+function projectTrackerRate(
+  store: StorageService,
+  tracker: RateTracker,
+  malId: number,
+  deps: Pick<ProjectDeps, 'pendingRates'>
+): SyncRateState | undefined {
+  const owner = store.get<{ id: number } | null | undefined>(tracker.keys.user)?.id
+  if (owner === undefined || owner === null) return undefined
+  const cached = (store.get<unknown[] | undefined>(tracker.keys.userRates) ?? [])
+    .map((row) => tracker.entryOf(row))
+    .find((e) => e.malId === malId)
+  let values: Rates | undefined = cached ? { ...cached.values } : undefined
+  const queued = (
+    store.get<{ malId: number; after: Rates }[] | undefined>(tracker.keys.updateQueue) ?? []
+  )
+    .filter((e) => e.malId === malId)
+    .at(-1)
+  if (queued) values = { ...queued.after }
+  const pending = deps.pendingRates?.(owner, malId) ?? {}
+  if (!values) {
+    if (RATE_FIELDS.some((f) => pending[f] === undefined)) return undefined
+    values = { episodes: 0, status: '', score: 0, rewatches: 0 }
+  }
+  const stamps =
+    store.get<SyncMeta | undefined>('syncMeta')?.rates?.[rateClockKey(tracker.id, owner, malId)] ??
+    {}
+  const serverAt = cached?.updatedAt ?? null
+  const trackerClock = { at: serverAt ?? 0, origin: tracker.id }
+  const field = <K extends SyncRateField>(f: K): SyncField<Rates[K]> => {
+    const over = pending[f]
+    if (over) return { value: over.value as Rates[K], at: over.at, origin: over.origin }
+    const value = values![f]
+    const stamp = stamps[f]
+    const clock = stamp && sameValue(stamp.value, value) ? stamp : trackerClock
+    return { value, at: clock.at, origin: clock.origin }
+  }
+  return {
+    malId,
+    episodes: field('episodes'),
+    status: field('status'),
+    score: field('score'),
+    rewatches: field('rewatches')
+  }
 }
 
 /**
@@ -86,8 +176,11 @@ export function defaultMalIdOf(store: StorageService): (animeId: string) => numb
 export function projectRate(
   store: StorageService,
   malId: number,
-  deps: Pick<ProjectDeps, 'pendingRates'> = {}
+  deps: Pick<ProjectDeps, 'pendingRates' | 'tracker'> = {}
 ): SyncRateState | undefined {
+  if (deps.tracker && deps.tracker.id !== 'shikimori') {
+    return projectTrackerRate(store, deps.tracker, malId, deps)
+  }
   const owner = store.get<{ id: number } | null | undefined>('shikimoriUser')?.id
   if (owner === undefined) return undefined
   const cached = (store.get<CachedRateEntry[] | undefined>('shikimoriUserRates') ?? []).find(

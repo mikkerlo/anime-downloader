@@ -9,8 +9,9 @@ import {
   suggestedChoice
 } from './format';
 
-// One held conflict (#585): Before / This PC / Shared Library / Shikimori, a
-// column greyed when that party wasn't involved, and the row's choices.
+// One held conflict (#585): Before / This PC / Shared Library / the record's
+// tracker (Shikimori, AniList or MyAnimeList, #715), a column greyed when that
+// party wasn't involved, and the row's choices.
 const props = defineProps<{ item: SyncConflictItem; selected: SyncConflictChoice | null }>();
 const emit = defineEmits<{ select: [choice: SyncConflictChoice] }>();
 
@@ -40,7 +41,9 @@ const libraryCells = computed(() => {
 const libraryAgrees = computed(
   () => libraryCells.value.length === 0 && props.item.libraries.length > 0
 );
-const shikimoriInvolved = computed(() => 'shikimori' in props.item.parties);
+// The tracker's party key: the record's file's tracker, Shikimori without one.
+const trackerParty = computed(() => props.item.tracker ?? 'shikimori');
+const trackerInvolved = computed(() => trackerParty.value in props.item.parties);
 const suggestion = computed(() => suggestedChoice(props.item));
 const isSelected = (c: SyncConflictChoice): boolean =>
   !!props.selected && choiceKey(props.selected) === choiceKey(c);
@@ -84,12 +87,13 @@ const isSelected = (c: SyncConflictChoice): boolean =>
       </div>
       <div
         class="col"
-        :class="{ uninvolved: !shikimoriInvolved }"
+        :class="{ uninvolved: !trackerInvolved }"
         data-testid="col-shikimori"
-        :data-involved="shikimoriInvolved"
+        :data-tracker="trackerParty"
+        :data-involved="trackerInvolved"
       >
-        <span class="col-head">Shikimori</span>
-        <span class="col-value">{{ shikimoriInvolved ? fmt(item.parties.shikimori) : '—' }}</span>
+        <span class="col-head">{{ partyLabel(trackerParty, item) }}</span>
+        <span class="col-value">{{ trackerInvolved ? fmt(item.parties[trackerParty]) : '—' }}</span>
       </div>
     </div>
     <p v-if="item.rewatchQuestion" class="question" data-testid="rewatch-question">

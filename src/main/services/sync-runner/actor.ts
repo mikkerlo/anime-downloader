@@ -23,7 +23,7 @@ export function buildActor(
   // leftover claim next to any `<provider>User` counts for nothing.
   if (accounts.length === 0 && rec) {
     if (rec.trackerOwner) {
-      // A v2 claim (#714): the writer refuses it until #715.
+      // A v2 claim (#714), matched on `(provider, userId)` (#715).
       if (rec.trackerClaim)
         claim = { libraryId, provider: rec.trackerClaim.provider, userId: rec.trackerClaim.userId }
     } else if (rec.claim && rec.owner) {

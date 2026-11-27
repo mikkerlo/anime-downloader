@@ -2,7 +2,13 @@
 // source, rate clocks, and the round trip.
 import { describe, it, expect, vi } from 'vitest'
 import { InMemoryStorage } from '../../helpers/in-memory-storage'
-import { projectSyncDoc, type ProjectDeps } from '../../../src/main/lib/sync-state/project'
+import {
+  defaultMalIdOf,
+  projectRate,
+  projectSyncDoc,
+  type ProjectDeps,
+  type RateTracker
+} from '../../../src/main/lib/sync-state/project'
 import {
   applySyncDoc,
   rewritePrioritySlots,
@@ -668,5 +674,93 @@ describe('round trip: project → apply on an empty store → project', () => {
 
     expect(doc.tombstones['505'].starred).toEqual({ deleted: true, at: NOW - 1000, origin: 'pc-a' })
     expect({ ...again, installId: 'x' }).toEqual({ ...doc, installId: 'x' })
+  })
+})
+
+describe('the owner tracker’s projection (#715)', () => {
+  const AT = Date.parse('2026-05-01T00:00:00.000Z')
+  type Row = {
+    malId: number
+    values: Record<string, unknown>
+    updatedAt: number
+    smotretId: number
+  }
+  const anilist: RateTracker = {
+    id: 'anilist',
+    keys: { user: 'anilistUser', userRates: 'anilistUserRates', updateQueue: 'anilistUpdateQueue' },
+    entryOf: (row) => {
+      const r = row as Row
+      return {
+        malId: r.malId,
+        remoteId: 1,
+        values: r.values as never,
+        updatedAt: r.updatedAt,
+        smotretAnime: { id: r.smotretId }
+      }
+    }
+  }
+  const values = { episodes: 4, status: 'watching', score: 8, rewatches: 0 }
+  function trackerStore(over: Record<string, unknown> = {}): InMemoryStorage {
+    return new InMemoryStorage({
+      installId: 'pc-a',
+      shikimoriUser: { id: 5, nickname: 'sh' },
+      shikimoriUserRates: [],
+      shikimoriUpdateQueue: [],
+      anilistUser: { id: 5, nickname: 'al' },
+      anilistUserRates: [{ malId: 42, values, updatedAt: AT, smotretId: Number(A) }],
+      anilistUpdateQueue: [],
+      ...over
+    })
+  }
+
+  it('reads its user, cache and origin; the clock is its updatedAt', () => {
+    const rate = projectRate(trackerStore(), 42, { tracker: anilist })!
+    expect(rate.episodes).toEqual({ value: 4, at: AT, origin: 'anilist' })
+    expect(rate.score).toEqual({ value: 8, at: AT, origin: 'anilist' })
+    // Shikimori's projection (the default) has no row for it.
+    expect(projectRate(trackerStore(), 42)).toBeUndefined()
+  })
+
+  it('its stamps are under <provider>:<userId>:<malId>; a Shikimori-form key of the same user is not its', () => {
+    const stamp = { value: 4, at: 900, origin: 'pc-a' }
+    const own = trackerStore({
+      syncMeta: { titles: {}, rates: { 'anilist:5:42': { episodes: stamp } } }
+    })
+    expect(projectRate(own, 42, { tracker: anilist })!.episodes).toEqual(stamp)
+    const shikiForm = trackerStore({
+      syncMeta: { titles: {}, rates: { '5:42': { episodes: stamp } } }
+    })
+    expect(projectRate(shikiForm, 42, { tracker: anilist })!.episodes.origin).toBe('anilist')
+  })
+
+  it('its queue’s latest entry lays over the cache; no user, no rate', () => {
+    const queued = trackerStore({
+      anilistUpdateQueue: [{ malId: 42, after: { ...values, episodes: 6 } }]
+    })
+    expect(projectRate(queued, 42, { tracker: anilist })!.episodes.value).toBe(6)
+    expect(
+      projectRate(trackerStore({ anilistUser: null }), 42, { tracker: anilist })
+    ).toBeUndefined()
+  })
+
+  it('defaultMalIdOf is the union: malIdMap, then Shikimori’s cache, then each tracker’s; a later entry wins', () => {
+    const s = trackerStore({
+      malIdMap: { 7: { id: 700 }, 8: { id: 800 } },
+      shikimoriUserRates: [
+        { rate: { target_id: 9, id: 1 }, shikiAnime: { id: 9 }, smotretAnime: { id: 900 } }
+      ],
+      anilistUserRates: [
+        { malId: 42, values, updatedAt: AT, smotretId: Number(A) },
+        { malId: 88, values, updatedAt: AT, smotretId: 800 }
+      ]
+    })
+    const shikiOnly = defaultMalIdOf(s)
+    expect(shikiOnly(A)).toBeNull()
+    expect(shikiOnly('900')).toBe(9)
+    const union = defaultMalIdOf(s, [anilist])
+    expect(union(A)).toBe(42)
+    expect(union('900')).toBe(9)
+    expect(union('700')).toBe(7)
+    expect(union('800')).toBe(88)
   })
 })

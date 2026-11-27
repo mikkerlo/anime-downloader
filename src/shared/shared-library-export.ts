@@ -117,7 +117,7 @@ export function preflightForSelection(
 // With metadata (S6e #586): the dialog's texts, and main's refusals, in one place.
 /** A new With metadata library's default name. */
 export const metadataLibraryName = (nickname: string): string => `Anime Library (${nickname})`
-export const LOG_IN_FOR_METADATA = 'Log in to Shikimori to include watch state'
+export const LOG_IN_FOR_METADATA = 'Connect a tracker in Settings → Trackers to include watch state'
 export const METADATA_HELP =
   'Includes watch progress, Shikimori status, stars and priority for these titles only. Never includes passwords or tokens.'
 export const CLAIMED_TARGET =

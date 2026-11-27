@@ -40,7 +40,7 @@ import {
   type RecordNode,
   type SchemaNode
 } from './format'
-import { isOwnedBy, isTrackerOwner, sameOwner, shikimoriOwnerId } from './owner'
+import { isOwnedBy, isTrackerOwner, sameOwner, sameOwnerKey, shikimoriOwnerId } from './owner'
 import {
   LIBRARY_DIR,
   MANIFEST,
@@ -365,21 +365,28 @@ async function reread(
 }
 
 /**
- * Only a v1 claim matches, and only a v1 owner: a v2 owner has no Shikimori
- * id, and a v2 claim (#714) is refused until #715 runs v2 legs.
+ * The owner, or a claim of it (#715): a v1 claim matches a v1 owner on
+ * `ownerId`, a v2 claim a v2 owner on `(provider, userId)` through the owner
+ * key. A Shikimori actor also owns a hand-written v2 `provider: 'shikimori'`
+ * library of its account.
  */
 function ownsOrClaims(m: SharedLibraryManifest, actor: SharedLibraryActor): boolean {
   if (m.mode !== 'metadata' || m.owner === null) return false
   if (isOwnedBy(m.owner, actor)) return true
-  const ownerId = shikimoriOwnerId(m.owner)
+  if (
+    isTrackerOwner(m.owner) &&
+    actor.shikimoriUserId !== null &&
+    sameOwnerKey(m.owner, { provider: 'shikimori', userId: String(actor.shikimoriUserId) })
+  ) {
+    return true
+  }
   const claim = actor.claim
-  return (
-    ownerId !== null &&
-    claim !== null &&
-    'ownerId' in claim &&
-    claim.libraryId === m.libraryId &&
-    claim.ownerId === ownerId
-  )
+  if (claim === null || claim.libraryId !== m.libraryId) return false
+  if ('ownerId' in claim) {
+    const ownerId = shikimoriOwnerId(m.owner)
+    return ownerId !== null && claim.ownerId === ownerId
+  }
+  return isTrackerOwner(m.owner) && sameOwnerKey(claim, m.owner)
 }
 
 /** The writer never creates a v2 owner with `provider: 'shikimori'`: a Shikimori owner it creates is v1. */
@@ -488,7 +495,13 @@ export async function writeManifest(
   actor: SharedLibraryActor,
   expectedGeneration: number,
   options: { takeover?: boolean } = {}
-): Promise<{ generation: number; stateGeneration: number | null }> {
+): Promise<{
+  generation: number
+  stateGeneration: number | null
+  /** What this write stamped (#715): a takeover can change the major, and the minor with it. */
+  layoutVersion: LayoutMajor
+  layoutMinor: number
+}> {
   const insp = await reread(root, next.libraryId)
   const m = insp.manifest.value
   if (expectedGeneration !== m.generation) {
@@ -522,10 +535,11 @@ export async function writeManifest(
     }
   }
   const generation = m.generation + 1
+  const layoutMinor = layoutMinorFor(major, m)
   const { text } = serialize(
     MANIFEST_SCHEMAS[major],
     manifestFields(next, {
-      layoutMinor: layoutMinorFor(major, m),
+      layoutMinor,
       generation,
       stateGeneration,
       lastWriter: writerOf(actor)
@@ -535,7 +549,7 @@ export async function writeManifest(
   )
   if (insp.result.status === 'ok' && insp.result.torn) await repairTornPair(insp)
   await atomicWrite(insp.dir, MANIFEST, MANIFEST_PREV, text)
-  return { generation, stateGeneration }
+  return { generation, stateGeneration, layoutVersion: major, layoutMinor }
 }
 
 /**

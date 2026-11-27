@@ -54,10 +54,45 @@ export function shikimoriOwnerId(owner: AnyOwner): number | null {
   return owner == null || isTrackerOwner(owner) ? null : owner.shikimoriId
 }
 
+/**
+ * A Shikimori `userId` that names one numeric account (#715): a v2
+ * `provider: 'shikimori'` owner with `'05'` or `'abc'` would give one owner two
+ * ids on a claim PC (`shikimori:05` beside `sync-pending/5.json`).
+ */
+const CANONICAL_SHIKIMORI_ID = /^[1-9]\d*$/
+
+/**
+ * The owner key (#715): `'<provider>:<userId>'` across majors, so a v1 owner
+ * and a hand-written v2 `provider: 'shikimori'` owner of the same account
+ * share one. Null for no owner, and for a v2 Shikimori owner whose `userId`
+ * isn't canonical decimal: that owner is foreign on every PC.
+ */
+export function ownerKey(owner: AnyOwner | NormalizedOwner): string | null {
+  const o = ownerOf(owner as AnyOwner)
+  if (o === null) return null
+  if (o.provider === 'shikimori' && !CANONICAL_SHIKIMORI_ID.test(o.userId)) return null
+  return `${o.provider}:${o.userId}`
+}
+
+/**
+ * The same owner by owner key, whatever the layout (#715): what the merge
+ * runner, the claims and the writer compare. Never true for an owner with no
+ * key. `sameOwner` above stays the identity check a `writeManifest` needs,
+ * where a v1 → v2 change of the same account is still an owner change.
+ */
+export function sameOwnerKey(
+  a: AnyOwner | NormalizedOwner,
+  b: AnyOwner | NormalizedOwner
+): boolean {
+  const x = ownerKey(a)
+  return x !== null && x === ownerKey(b)
+}
+
 /** Whether `who` is `owner`: the Shikimori user for a v1 owner, a tracker account for a v2 one. */
 export function isOwnedBy(owner: AnyOwner, who: OwnerAccounts): boolean {
   if (owner == null) return false
   if (isTrackerOwner(owner)) {
+    if (ownerKey(owner) === null) return false
     return who.trackerAccounts.some(
       (a) => a.provider === owner.provider && a.userId === owner.userId
     )

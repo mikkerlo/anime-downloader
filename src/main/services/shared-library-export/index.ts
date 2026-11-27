@@ -134,8 +134,8 @@ export interface SharedLibraryExportDeps {
   overflow?: typeof absoluteOverflow
   platform?: NodeJS.Platform
   /**
-   * The trackers the owner picker offers (#714): Shikimori only until #715
-   * lifts the gate. A test seam: production passes nothing.
+   * The trackers the owner picker offers (#714): every tracker by default
+   * (#715). A test seam: production passes nothing.
    */
   ownerProviders?: readonly TrackerId[]
   checkpointEvery?: number
@@ -210,8 +210,8 @@ export function createSharedLibraryExportService(
   const pathExists = async (p: string): Promise<boolean> => (await fileSize(p)) !== null
   // With metadata needs an account the picker offers (S6e #586, #714):
   // `<provider>User`, which an expired session keeps and only logout clears.
-  // Shikimori only until #715.
-  const offered: readonly TrackerId[] = deps.ownerProviders ?? ['shikimori']
+  // Any tracker's account since #715.
+  const offered: readonly TrackerId[] = deps.ownerProviders ?? ['shikimori', 'anilist', 'mal']
   const owners = (): ConnectedAccount[] =>
     connectedAccounts(deps.store).filter((a) => offered.includes(a.provider))
   /** The primary when it is offered, else the first offered account. */

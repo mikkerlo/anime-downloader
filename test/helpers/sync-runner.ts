@@ -17,11 +17,20 @@ import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
 import { createShikimoriEventBridge } from '../../src/main/trackers/events'
 import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from './in-memory-storage'
+import { ANILIST_MEDIA_IDS, createFakeTracker, type FakeTracker } from './fake-tracker'
+import { createGenericTracker, datedCodec } from './generic-tracker'
 import { tempRoot } from './shared-library'
 import { T0, iso, server, vals, type Vals } from './fake-shikimori'
 
 export const OWNER = { id: 4242, nickname: 'owner', avatar: '' }
 export const OTHER = { id: 777, nickname: 'other', avatar: '' }
+/** An AniList account (#715); its id is the plan's colliding "user 5". */
+export const ANILIST_USER = { id: 5, nickname: 'al', avatar: null as string | null }
+/** The v2 owner an AniList-owned library names. */
+export const ANILIST_5 = { provider: 'anilist', userId: String(ANILIST_USER.id) }
+/** A MyAnimeList account (#715), also user 5. */
+export const MAL_USER = { id: 5, nickname: 'ml', avatar: null as string | null }
+export const MAL_5 = { provider: 'mal', userId: String(MAL_USER.id) }
 export const ANIME = 101
 export const MAL = 9001
 export { T0, server, vals, type Vals } from './fake-shikimori'
@@ -105,11 +114,25 @@ export async function makeLibrary(
 }
 
 /** Rewrites the drive's state as the owner's other PC would. */
-export async function writeDrive(root: string, doc: SyncDoc): Promise<void> {
+export async function writeDrive(
+  root: string,
+  doc: SyncDoc,
+  actor: SharedLibraryActor = ownerActor('pc-other')
+): Promise<void> {
   const r = await readLibrary(root)
   if (r.status !== 'ok') throw new Error('unreadable')
-  await writeState(root, doc as SharedSyncDoc, ownerActor('pc-other'), r.manifest.stateGeneration)
+  await writeState(root, doc as SharedSyncDoc, actor, r.manifest.stateGeneration)
 }
+
+/** The owner's other PC of a v2 library: an actor holding that tracker account (#715). */
+export const trackerActor = (
+  tracker: { provider: string; userId: string },
+  installId = 'pc-other'
+): SharedLibraryActor => ({
+  ...ownerActor(installId),
+  shikimoriUserId: null,
+  trackerAccounts: [tracker]
+})
 
 export async function driveDoc(root: string): Promise<SharedSyncDoc | null> {
   const r = await readLibrary(root)
@@ -131,6 +154,9 @@ export interface Pc {
   offline: { value: boolean }
   clock: { t: number }
   bases: ReturnType<typeof createSyncBaseStore>
+  /** The AniList leg (#715), with `makePc({ anilist })`: the fake server and its sync instance. */
+  anilist?: { fake: FakeTracker<'anilist'>; sync: TrackerSyncService<unknown, unknown> }
+  mal?: { fake: FakeTracker<'mal'>; sync: TrackerSyncService<unknown, unknown> }
   attach(
     root: string,
     opts?: { claim?: boolean; access?: 'read-write' | 'read-only' }
@@ -150,6 +176,16 @@ export function makePc(
      * broadcast through the bridge. `broadcast` then records both events.
      */
     bridge?: boolean
+    /**
+     * Wire AniList as an owner tracker's leg (#715): a fake AniList server behind
+     * the generic sync instance, signed in as `user` (null: signed out). Its
+     * cache is `datedCodec` rows; MAL ids without an AniList media id aren't on it.
+     */
+    anilist?: { user?: typeof ANILIST_USER | null }
+    /** The same for MyAnimeList (#715 after #702): every MAL id is on MAL. */
+    mal?: { user?: typeof MAL_USER | null }
+    /** Runner deps built on this PC's store before the runner is (a real provider's leg). */
+    wire?: (store: InMemoryStorage) => Partial<SyncRunnerDeps>
   } = {}
 ): Pc {
   const user = opts.user === undefined ? OWNER : opts.user
@@ -173,6 +209,26 @@ export function makePc(
     skipDetections: {},
     syncMeta: { titles: {}, rates: {} },
     attachedLibraries: {},
+    ...(opts.anilist
+      ? {
+          anilistUser: opts.anilist.user === undefined ? ANILIST_USER : opts.anilist.user,
+          anilistCredentials:
+            opts.anilist.user === null ? null : { v: 1, enc: 'plain', data: 'token' },
+          anilistUpdateQueue: [],
+          anilistParkedQueues: {},
+          anilistUserRates: []
+        }
+      : {}),
+    ...(opts.mal
+      ? {
+          myanimelistUser: opts.mal.user === undefined ? MAL_USER : opts.mal.user,
+          myanimelistCredentials:
+            opts.mal.user === null ? null : { v: 1, enc: 'plain', data: 'token' },
+          myanimelistUpdateQueue: [],
+          myanimelistParkedQueues: {},
+          myanimelistUserRates: []
+        }
+      : {}),
     ...opts.store
   })
   const broadcast = vi.fn()
@@ -219,6 +275,30 @@ export function makePc(
         }),
     isOffline: () => offline.value
   })
+  let anilist: Pc['anilist']
+  if (opts.anilist) {
+    const fake = createFakeTracker('anilist')
+    const user = opts.anilist.user === undefined ? ANILIST_USER : opts.anilist.user
+    if (user) fake.user.id = user.id
+    anilist = createGenericTracker('anilist', store as never, {
+      isOffline: () => offline.value,
+      fake,
+      codec: datedCodec('anilist', () => clock.t) as never,
+      provider: { hasTitle: (malId: number) => ANILIST_MEDIA_IDS[malId] !== undefined }
+    }) as NonNullable<Pc['anilist']>
+  }
+  let mal: Pc['mal']
+  if (opts.mal) {
+    const fake = createFakeTracker('mal')
+    const user = opts.mal.user === undefined ? MAL_USER : opts.mal.user
+    if (user) fake.user.id = user.id
+    mal = createGenericTracker('mal', store as never, {
+      isOffline: () => offline.value,
+      fake,
+      codec: datedCodec('mal', () => clock.t) as never
+    }) as NonNullable<Pc['mal']>
+  }
+  const extra = [anilist, mal].filter((t): t is NonNullable<typeof t> => !!t)
   const runner = createSyncRunner({
     store: store as never,
     userDataDir: userData,
@@ -227,9 +307,19 @@ export function makePc(
     isOffline: () => offline.value,
     broadcast: emit,
     ...(opts.bridge ? { trackers: [sync.tracker as TrackerSyncService<unknown, unknown>] } : {}),
+    ...(extra.length > 0
+      ? {
+          trackers: [
+            sync.tracker as TrackerSyncService<unknown, unknown>,
+            ...extra.map((t) => t.sync)
+          ],
+          legs: extra.map((t) => ({ sync: t.sync, provider: t.fake.provider as never }))
+        }
+      : {}),
     appVersion: '5.0.39',
     now: () => clock.t,
     log: quiet,
+    ...opts.wire?.(store),
     ...opts.runner
   })
   // The settle listener and the forget hook; triggers are driven by hand in tests.
@@ -244,6 +334,8 @@ export function makePc(
     offline,
     clock,
     bases,
+    ...(anilist ? { anilist } : {}),
+    ...(mal ? { mal } : {}),
     async attach(root, a = {}) {
       const r = await readLibrary(root)
       if (r.status === 'none' || !r.manifest) throw new Error('no library')
@@ -260,6 +352,9 @@ export function makePc(
         ...(v2 ? { trackerOwner: { provider: v2.provider, userId: v2.userId } } : {}),
         access: a.access ?? 'read-write',
         ...(a.claim && v1 ? { claim: { ownerId: v1.shikimoriId, at: 1 } } : {}),
+        ...(a.claim && v2
+          ? { trackerClaim: { provider: v2.provider, userId: v2.userId, at: 1 } }
+          : {}),
         lastSeenAt: 0,
         lastSyncAt: null
       }

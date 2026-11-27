@@ -33,13 +33,16 @@ export function hasOrder(doc: SharedSyncDoc | SyncDoc | null | undefined): boole
 }
 
 /**
- * The Shikimori leg with no base (§1): the base *is* the Shikimori side. The
- * cache mirrors the server and the drain has run, so the only local
+ * A tracker leg with no base (§1, #715): the base *is* the owner tracker's
+ * side. The cache mirrors the server and the drain has run, so the only local
  * differences are this PC's real pending results, and they are pushed.
  */
-export function shikimoriNoBase(shikimori: SyncDoc): SyncDoc {
-  return structuredClone(shikimori)
+export function trackerNoBase(tracker: SyncDoc): SyncDoc {
+  return structuredClone(tracker)
 }
+
+/** The Shikimori leg's name for `trackerNoBase`. */
+export const shikimoriNoBase = trackerNoBase
 
 /** A rates-only doc: the Shikimori leg merges `titles[id].rate` and nothing else. */
 export function ratesOnly(doc: SyncDoc, ids: Iterable<string>): SyncDoc {

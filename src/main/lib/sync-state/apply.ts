@@ -15,7 +15,7 @@ import {
 } from './project'
 import { restoreSkipEpisode } from './skip'
 
-export interface ApplyDeps extends Pick<ProjectDeps, 'pendingRates'> {
+export interface ApplyDeps extends Pick<ProjectDeps, 'pendingRates' | 'tracker'> {
   now(): number
   /**
    * The Shared Library's `meta/<animeId>.json` `searchResult` (S5 #573): the

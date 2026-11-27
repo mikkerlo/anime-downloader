@@ -36,6 +36,8 @@ export function conflictValue(
 export function partyLabel(party: string, item: Pick<SyncConflictItem, 'libraries'>): string {
   if (party === 'local') return 'This PC'
   if (party === 'shikimori') return 'Shikimori'
+  if (party === 'anilist') return 'AniList'
+  if (party === 'mal') return 'MyAnimeList'
   const id = party.startsWith('library:') ? party.slice(8) : party
   return item.libraries.find((l) => l.libraryId === id)?.name ?? 'Shared Library'
 }

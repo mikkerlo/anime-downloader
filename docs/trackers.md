@@ -1294,6 +1294,49 @@ conservative default named in each:
   rejecting to the renderer instead of answering from the cache; `getEntry`'s
   rethrow fixes that (#740).
 
+## The Shared Library merge leg
+
+#715 (T13c) binds a With metadata library's merge leg to its **owner's
+tracker**: an AniList-owned library merges with AniList, a Shikimori-owned one
+with Shikimori exactly as before. [Shared Library › Merge](shared-library.md#merge-584)
+has the leg; this is what it takes from a tracker.
+
+- **The runner's deps.** `SyncRunnerDeps.legs` lists each non-Shikimori
+  tracker's sync instance and provider (`index.ts` passes AniList's and
+  MyAnimeList's). The leg drains that instance, reads the list once through
+  `provider.listEntries` (its session from `auth()`), reads the cache through
+  the codec's `entryOf`, patches it through `patchCachedRate`, queues through
+  `mergeQueues` into `<provider>UpdateQueue` (never `applyChange`), and listens
+  to the instance's `onItemSettled` for path C and the drop counter. Both
+  AniList's and MAL's codecs move a row's only time on a local patch, so a
+  pending field counts as replaced by a refresh when the cache shows another
+  value. A tracker with no instance passed (only in tests now) can't be an
+  owner PC's leg: its library is skipped as foreign, while a claim PC still
+  merges its drive.
+- **Owners** are `(provider, userId)`, compared through the owner key. A
+  settle event's numeric user id becomes `{ provider, userId: String(id) }`
+  before any lookup.
+- **Errors** from the list read, and from anything that throws past it, go
+  through the provider's `classifyError`: `auth`, `network`, `config` ("Needs
+  setup", MAL) and `api` for the rest.
+- **Scores** stay the app's 0–10 on both sides, so a stored score that still
+  reads as the app's is never a merge change or a conflict. A lossy
+  `scoreFormat` (`POINT_5`, `POINT_3`) is a change once: the list's read-back
+  (an app 7 stored as 80, read as 8) wins, is applied here and reaches the
+  drive, and then every side agrees.
+
+### Downgrade to 6.x
+
+- AniList caches get re-serialized on 6.x persists: 6.x carries the unknown
+  top-level keys (`anilistUserRates`, `anilistUpdateQueue`, …) through `conf`,
+  untouched.
+- 6.x history shows "sent to Shikimori" for a `to` it doesn't know
+  (`'anilist'`, `'mal'`), and skips a `tracker-rejected` record.
+- 6.x never lists `sync-pending/<provider>-<id>.json` (its pending regex is
+  `^(\d{1,15})\.json$`), never reads `sync-state/conflicts-<provider>.json`, and
+  refuses the `anilist-<id>` / `mal-<id>` base parties, so it never deletes or
+  rewrites any of them. A v2 library is "made by a newer version" there.
+
 ## Statuses and scores
 
 **The canonical vocabulary is Shikimori's six statuses**: `RateValues.status`

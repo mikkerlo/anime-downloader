@@ -347,7 +347,9 @@ describe('repairing a torn pair', () => {
       }
       await expect(writeManifest(root, m, OWNER, 7)).resolves.toEqual({
         generation: 8,
-        stateGeneration: 4
+        stateGeneration: 4,
+        layoutVersion: 1,
+        layoutMinor: LAYOUT_MINORS[1]
       })
     })
 
@@ -665,7 +667,9 @@ describe('writeManifest', () => {
     await refuses(root, () => writeManifest(root, m, LOGGED_OUT, 7), NotOwnerError)
     await expect(writeManifest(root, m, CLAIMANT, 7)).resolves.toEqual({
       generation: 8,
-      stateGeneration: 4
+      stateGeneration: 4,
+      layoutVersion: 1,
+      layoutMinor: LAYOUT_MINORS[1]
     })
   })
 })
@@ -834,19 +838,29 @@ describe('layout v2 (#713)', () => {
     ).rejects.toBeInstanceOf(NotOwnerError)
   })
 
-  // #714: a v2 claim names the v2 owner by `(provider, userId)`, and the
-  // writer refuses it until #715 runs v2 legs; a v1 claim still writes v1.
-  it('a v2 claim is refused by writeState and writeManifest; a v1 claim still writes a v1 library', async () => {
-    const v2Claim: SharedLibraryActor = {
+  // #714: a v2 claim names the v2 owner by `(provider, userId)`; since #715
+  // the writer matches it through the owner key, so a claim PC's library leg
+  // writes an AniList-owned library. A v1 claim still writes v1.
+  it('a v2 claim of the owner writes; another provider or userId is refused; a v1 claim still writes a v1 library', async () => {
+    const claimOf = (provider: string, userId: string): SharedLibraryActor => ({
       ...LOGGED_OUT,
-      claim: { libraryId: LIB, ...ANILIST_ACTOR.trackerAccounts[0] },
+      claim: { libraryId: LIB, provider, userId },
       trackerAccounts: []
+    })
+    const v2Claim = claimOf('anilist', V2_USER_ID)
+    expect(v2Claim.claim).toEqual({ libraryId: LIB, ...ANILIST_ACTOR.trackerAccounts[0] })
+    for (const other of [claimOf('mal', V2_USER_ID), claimOf('anilist', '6')]) {
+      const root = fixtureV2('golden-metadata')
+      const m = (await ok(root)).manifest
+      await refuses(root, () => writeState(root, EMPTY_DOC, other, 1), NotOwnerError)
+      await refuses(root, () => writeManifest(root, m, other, 3), NotOwnerError)
     }
-    expect(v2Claim.claim).toEqual({ libraryId: LIB, provider: 'anilist', userId: V2_USER_ID })
     const root = fixtureV2('golden-metadata')
-    const m = (await ok(root)).manifest
-    await refuses(root, () => writeState(root, EMPTY_DOC, v2Claim, 1), NotOwnerError)
-    await refuses(root, () => writeManifest(root, m, v2Claim, 3), NotOwnerError)
+    await writeState(root, EMPTY_DOC, v2Claim, 1)
+    const r = await ok(root)
+    expect(r.manifest.layoutVersion).toBe(2)
+    await writeManifest(root, r.manifest, v2Claim, r.manifest.generation)
+    expect(JSON.parse(JSON.stringify((await ok(root)).manifest.owner))).toEqual(ANILIST_OWNER)
 
     const v1 = fixture('golden-metadata')
     await writeState(v1, EMPTY_DOC, CLAIMANT, 4)
@@ -914,9 +928,29 @@ describe('layout v2 (#713)', () => {
       await writeManifest(root, r.manifest, HOLDER, r.manifest.generation)
       expect(readJson(root, 'manifest.json').layoutVersion).toBe(2)
       expect(ownerBytes()).toBe(before)
-      // In this slice it is foreign like any v2 owner: the Shikimori user 5 can't write it.
-      await refuses(root, () => writeState(root, EMPTY_DOC, SHIKIMORI_5, 5), NotOwnerError)
+      // #715: its Shikimori owner (`shikimoriUserId: 5`, no tracker accounts) writes it,
+      // and it stays v2 with the same owner bytes.
+      await writeState(root, EMPTY_DOC, SHIKIMORI_5, 5)
+      expect(readJson(root, 'manifest.json').layoutVersion).toBe(2)
+      expect(ownerBytes()).toBe(before)
     })
+
+    it.each(['05', 'abc'])(
+      'a non-canonical userId %s has no owner key: neither its Shikimori user nor a holder of that string writes it',
+      async (userId) => {
+        const root = tree({
+          'manifest.json': manifestV2(7, 4, { owner: { provider: 'shikimori', userId } }),
+          'state.json': state(4, 7)
+        })
+        const holder: SharedLibraryActor = {
+          ...ANILIST_ACTOR,
+          trackerAccounts: [{ provider: 'shikimori', userId }]
+        }
+        for (const actor of [SHIKIMORI_5, holder]) {
+          await refuses(root, () => writeState(root, EMPTY_DOC, actor, 4), NotOwnerError)
+        }
+      }
+    )
   })
 
   describe('the takeover: the only write that changes major', () => {
@@ -924,7 +958,7 @@ describe('layout v2 (#713)', () => {
       const root = fixture('golden-videos')
       const v = (await ok(root)).manifest
       expect(v).toMatchObject({ layoutVersion: 1, layoutMinor: 1 })
-      await writeManifest(
+      const w = await writeManifest(
         root,
         { ...v, mode: 'metadata', owner: ANILIST_OWNER },
         ANILIST_ACTOR,
@@ -933,6 +967,9 @@ describe('layout v2 (#713)', () => {
           takeover: true
         }
       )
+      // #715 (the #721 review): the result names what was stamped, so the export
+      // job's in-memory base takes the v2 minor, never the v1 file's.
+      expect(w).toMatchObject({ layoutVersion: 2, layoutMinor: LAYOUT_MINORS[2] })
       const r = await ok(root)
       expect(r.manifest).toMatchObject({
         layoutVersion: 2,

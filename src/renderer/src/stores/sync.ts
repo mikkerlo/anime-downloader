@@ -7,7 +7,7 @@
 
 import { defineStore } from 'pinia'
 import { computed, onScopeDispose, ref, watch } from 'vue'
-import { useSharedLibrariesStore } from './shared-libraries'
+import { syncLegOf, useSharedLibrariesStore } from './shared-libraries'
 
 export const TOAST_MS = 8000
 
@@ -79,7 +79,7 @@ export const useSyncStore = defineStore('sync', () => {
   async function onRunFinished(result: SyncRunResult): Promise<void> {
     if (!result || !Array.isArray(result.libraries)) return
     lastRuns.value = [result, ...lastRuns.value].slice(0, 10)
-    const synced = result.libraries.filter((l) => l.drive === 'ok' || l.shikimori === 'ok')
+    const synced = result.libraries.filter((l) => l.drive === 'ok' || syncLegOf(l).status === 'ok')
     const applied = result.libraries.reduce((n, l) => n + l.counts.applied, 0)
     const found = result.libraries.some((l) => l.counts.conflicts > 0)
     await loadConflicts().catch(() => {})

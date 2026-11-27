@@ -163,13 +163,41 @@ interface SyncLibraryResult {
     | 'write-failed-read-only'
     | 'io'
     | 'unreadable'
+  // A non-Shikimori owner's library has `shikimori: 'skipped'` with no reason,
+  // and its leg in `tracker` (#715).
   shikimori: 'ok' | 'skipped' | 'error'
   shikimoriReason?: 'offline' | 'logged-out' | 'claim' | 'foreign' | 'auth' | 'network' | 'api'
+  /** The owner tracker's leg of a library a non-Shikimori account owns (#715). */
+  tracker?: { id: TrackerId; status: SyncLegStatus; reason?: SyncLegReason }
   counts: { applied: number; conflicts: number; clamped: number }
   // §2 step 2: skipped while user edits are queued.
   waitingMalIds: number[]
   // Path F entries written in this run.
   rewatchesSuperseded: number
+  /**
+   * The derived leg the renderer reads (#715): from `shikimori*` on a Shikimori
+   * leg, from `tracker` otherwise. The runner adds it to what it hands out
+   * (the run-finished broadcast, a run's result, `status`); never logged.
+   */
+  leg?: SyncLeg
+}
+
+type SyncLegStatus = 'ok' | 'skipped' | 'error'
+/** `config`: the tracker needs setup (MyAnimeList's client ID, #702). */
+type SyncLegReason =
+  | 'offline'
+  | 'logged-out'
+  | 'claim'
+  | 'foreign'
+  | 'auth'
+  | 'network'
+  | 'api'
+  | 'config'
+
+interface SyncLeg {
+  tracker: TrackerId
+  status: SyncLegStatus
+  reason?: SyncLegReason
 }
 
 interface SyncRunResult {
@@ -198,10 +226,15 @@ type SyncConflictFieldPath =
   | 'rate.score'
   | 'rate.rewatches'
 
-/** One held conflict in `userData/sync-state/conflicts.json`, keyed by (ownerScope, animeId, fieldPath). */
+/**
+ * One held conflict, keyed by (ownerScope, animeId, fieldPath): in
+ * `userData/sync-state/conflicts.json` for a Shikimori owner, in
+ * `conflicts-<provider>.json` for another tracker's (#715).
+ */
 interface SyncConflictRecord {
   id: string
-  ownerScope: number
+  // A Shikimori owner's numeric id; another tracker's string `userId` (#715).
+  ownerScope: number | string
   animeId: string
   fieldPath: SyncConflictFieldPath
   // `local`, `library:<id>`, `shikimori`.
@@ -244,6 +277,8 @@ interface SyncConflictLibrary {
 
 /** `sync:list-conflicts`: a held conflict and what the review sheet shows for it. */
 interface SyncConflictItem extends SyncConflictRecord {
+  /** The tracker whose file holds the record, and its party key; absent for Shikimori (#715). */
+  tracker?: TrackerId
   title: { name: string; poster: string | null; episodes: number | null }
   libraries: SyncConflictLibrary[]
   options: SyncConflictOption[]
@@ -267,7 +302,7 @@ interface SyncHistoryRequest {
 
 interface SyncHistoryEntry {
   key: string
-  kind: 'run' | 'resolution' | 'rewatch-superseded' | 'shikimori-rejected'
+  kind: 'run' | 'resolution' | 'rewatch-superseded' | 'shikimori-rejected' | 'tracker-rejected'
   at: number
   trigger?: SyncTrigger
   libraries: { libraryId: string; name: string }[]

@@ -9,6 +9,7 @@ import {
   type FieldRule
 } from '../../../src/main/lib/sync-state/field-table'
 import { F, doc, rate, watch } from '../../helpers/sync-merge'
+import { anilistScoreUnchanged, appScoreFromAnilistRaw } from '../../../src/main/trackers/scores'
 
 const NOW = 10_000_000
 const run = (
@@ -438,6 +439,37 @@ describe('rule 12: skip', () => {
     expect(Object.keys(m.result.titles['1'].skip!.perEpisode).sort()).toEqual(['1', '2'])
     expect(Object.keys(m.remote.titles['1'].skip!.perEpisode).sort()).toEqual(['1', '2', '3'])
     expect(m.conflicts).toEqual([])
+  })
+})
+
+describe('scores in the app scale: a score that still reads the same is never a change; a lossy read-back is one, once (#715)', () => {
+  // The tracker leg's side is AniList's list read, its raw POINT_100 score
+  // read as the nearest app score. A stored 85 is an app 9, so a base and a
+  // PC at 9 see no change, and nothing is pushed. On a POINT_5 list the app's
+  // 7 is stored at the step (80) and reads back 8: the list's value wins once,
+  // and with every side at 8 the next merge has nothing to do.
+  const anilistSide = (raw: number) =>
+    t({ rate: rate({ score: appScoreFromAnilistRaw(raw) }, 500, 'anilist') })
+  it('a stored 85 against 9 on both other sides: no change, no conflict', () => {
+    const nine = t({ rate: rate({ score: 9 }, 100) })
+    const m = run(nine, nine, anilistSide(85))
+    expect(m.changesA).toEqual([])
+    expect(m.changesB).toEqual([])
+    expect(m.conflicts).toEqual([])
+  })
+  it('a lossy POINT_5 read-back (80 for a written 7) is the tracker’s 8: it applies here, nothing pushed back', () => {
+    const seven = t({ rate: rate({ score: 7 }, 100) })
+    const m = run(seven, seven, anilistSide(80))
+    expect(m.changesA).toEqual(['titles.1.rate.score'])
+    expect(m.changesB).toEqual([])
+    expect(m.conflicts).toEqual([])
+    // And had a 7 been pushed, the drain's write would not change the stored 80.
+    expect(anilistScoreUnchanged(7, 80, 'POINT_5')).toBe(true)
+    // It settles: with this PC and the base now at the list's 8, the next merge is a no-op.
+    const again = run(m.nextBase, m.result, anilistSide(80))
+    expect(again.changesA).toEqual([])
+    expect(again.changesB).toEqual([])
+    expect(again.conflicts).toEqual([])
   })
 })
 

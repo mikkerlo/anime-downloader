@@ -352,7 +352,7 @@ describe("the detail page's Sync now (#584)", () => {
     expect(syncNow).toHaveBeenCalledWith({ animeId: 1 })
   })
 
-  it('is not offered for a v2 owned or claimed library until #715 runs v2 legs (#714)', async () => {
+  it('is offered for a v2 owned or claimed library too (#715 lifts #714’s v1-only gate)', async () => {
     list = [
       lib('v2-own', {
         role: 'owner',
@@ -371,6 +371,6 @@ describe("the detail page's Sync now (#584)", () => {
     stubApi()
     const store = useSharedLibrariesStore()
     await store.refresh()
-    expect([1, 2, 3].map((id) => store.canSyncTitle(id))).toEqual([false, false, true])
+    expect([1, 2, 3].map((id) => store.canSyncTitle(id))).toEqual([true, true, true])
   })
 })

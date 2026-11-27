@@ -6,18 +6,18 @@ import type { AnimeCacheEntry } from '../services/anime-cache'
 import {
   buildContinueWatchingEntries,
   finalizeContinueWatchingEntries,
-  type CachedShikiRate,
   type WatchProgressEntry
 } from '../lib/continue-watching'
 
 const RESOLVE_CONCURRENCY = 4
 const RESOLVE_TIMEOUT_MS = 5000
 
-export function register({ store, smotretApi, rememberAnimeMeta }: AppDeps): void {
+export function register({ store, smotretApi, rememberAnimeMeta, primaryEntries }: AppDeps): void {
   ipcMain.handle(CHANNELS.HOME_GET_CONTINUE_WATCHING, async () => {
     const inputs = {
       watchProgress: store.get('watchProgress') as Record<string, WatchProgressEntry>,
-      rates: store.get('shikimoriUserRates') as CachedShikiRate[],
+      // The primary tracker's list (#698), whichever tracker it is.
+      rates: primaryEntries(),
       library: store.get('library') as Record<string, AnimeSearchResult>,
       downloaded: store.get('downloadedAnime') as Record<string, AnimeSearchResult>,
       recent: store.get('recentAnimeMeta') as Record<string, AnimeSearchResult>,

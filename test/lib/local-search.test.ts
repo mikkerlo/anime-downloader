@@ -9,8 +9,11 @@ import {
   searchLocal,
   type AttachedSnapshot,
   type LocalCorpusEntry,
+  type LocalSearchRate,
   type LocalSearchSnapshot
 } from '../../src/main/lib/local-search'
+import type { CachedRateEntry } from '../../src/main/lib/shikimori-rate-cache'
+import { shikimoriRateCache } from '../../src/main/trackers/shikimori.provider'
 
 function anime(
   id: number,
@@ -47,13 +50,27 @@ function detail(
   }
 }
 
-// The cached `shikimoriUserRates` row shape, `smotretAnime` included.
-function rate(malId: number, status: ShikiUserRateStatus, smotretAnime?: AnimeSearchResult): never {
-  return {
+// A cached `shikimoriUserRates` row, `smotretAnime` included, as the primary
+// reader hands it over: through the Shikimori codec (#698).
+function shikiRow(row: unknown): LocalSearchRate {
+  return shikimoriRateCache.entryOf(row as CachedRateEntry)
+}
+
+function rate(
+  malId: number,
+  status: ShikiUserRateStatus,
+  smotretAnime?: AnimeSearchResult
+): LocalSearchRate {
+  return shikiRow({
     rate: { id: malId, status, target_id: malId },
     shikiAnime: { id: malId, name: smotretAnime?.title ?? '' },
     smotretAnime: smotretAnime ?? null
-  } as never
+  })
+}
+
+// An AniList primary's entry: only `malId` and `values` are read.
+function anilist(malId: number, status: ShikiUserRateStatus): LocalSearchRate {
+  return { malId, values: { episodes: 0, status, score: 0, rewatches: 0 } }
 }
 
 const AOT = anime(1, 'Shingeki no Kyojin', {
@@ -82,11 +99,7 @@ function snapshot(overrides: Partial<LocalSearchSnapshot> = {}): LocalSearchSnap
       // A cache entry with no detail is not a corpus title by itself.
       9: {}
     },
-    shikimoriUserRates: [
-      rate(101, 'completed'),
-      rate(102, 'watching'),
-      rate(106, 'planned', LIST_ONLY)
-    ],
+    rates: [rate(101, 'completed'), rate(102, 'watching'), rate(106, 'planned', LIST_ONLY)],
     shikimoriAnimeDetails: { 101: { details: { status: 'released' } } },
     isRecentlyWatched: (id) => id === 5,
     ...overrides
@@ -199,7 +212,7 @@ describe('searchLocal: ranking', () => {
         32: anime(32, 'Gamma Saga')
       },
       animeCache: { 32: detail(anime(32, 'Gamma Saga'), [], 132) },
-      shikimoriUserRates: [rate(132, 'rewatching')],
+      rates: [rate(132, 'rewatching')],
       isRecentlyWatched: (id) => id === 31
     }
     expect(ids('saga', s)).toEqual([31, 32, 30])
@@ -219,6 +232,27 @@ describe('searchLocal: filters', () => {
     expect(ids('no', snapshot(), { status: 'completed' })).toEqual([1])
     expect(ids('no', snapshot(), { status: 'watching' })).toEqual([2])
     expect(ids('no', snapshot(), { status: 'planned' })).toEqual([])
+  })
+
+  it("an AniList primary: listStatus is the AniList entry's, joined by malId (#698)", () => {
+    const s = snapshot({ rates: [anilist(101, 'on_hold'), anilist(102, 'rewatching')] })
+    expect(ids('no', s, { status: 'on_hold' })).toEqual([1])
+    expect(ids('no', s, { status: 'rewatching' })).toEqual([2])
+    expect(ids('no', s, { status: 'completed' })).toEqual([])
+    // `airingStatus` still comes from Shikimori's details cache.
+    const [aot] = searchLocal(buildCorpus(s), 'shingeki')
+    expect(aot).toMatchObject({ listStatus: 'on_hold', airingStatus: 'released' })
+  })
+
+  it('a legacy Shikimori row joins by shikiAnime.id when target_id is missing or null', () => {
+    const s = snapshot({
+      rates: [
+        shikiRow({ rate: { id: 1, status: 'dropped' }, shikiAnime: { id: 101 } }),
+        shikiRow({ rate: { id: 2, status: 'on_hold', target_id: null }, shikiAnime: { id: 102 } })
+      ]
+    })
+    expect(ids('no', s, { status: 'dropped' })).toEqual([1])
+    expect(ids('no', s, { status: 'on_hold' })).toEqual([2])
   })
 })
 
@@ -402,7 +436,7 @@ describe('buildCorpus: attached Shared Libraries (#583)', () => {
           }
         ])
       ],
-      shikimoriUserRates: [rate(104, 'watching')],
+      rates: [rate(104, 'watching')],
       shikimoriAnimeDetails: { 104: { details: { status: 'ongoing' } } }
     })
     expect(searchLocal(corpus, 'frieren')).toEqual([

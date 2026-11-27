@@ -1,0 +1,1233 @@
+{
+  "now": 1795780800000,
+  "store": {
+    "shikimoriUser": {
+      "id": 4242,
+      "nickname": "golden",
+      "avatar": ""
+    },
+    "watchProgress": {
+      "101:3": {
+        "position": 300,
+        "duration": 1200,
+        "updatedAt": 1795777200000
+      },
+      "102:1": {
+        "position": 100,
+        "duration": 1200,
+        "updatedAt": 1795773600000
+      },
+      "103:2": {
+        "position": 200,
+        "duration": 1200,
+        "updatedAt": 1795770000000
+      },
+      "104:5": {
+        "position": 400,
+        "duration": 1200,
+        "updatedAt": 1795766400000
+      },
+      "109:4": {
+        "position": 500,
+        "duration": 1200,
+        "updatedAt": 1795762800000
+      },
+      "110:1": {
+        "position": 600,
+        "duration": 1200,
+        "updatedAt": 1795759200000
+      },
+      "112:7": {
+        "position": 700,
+        "duration": 1200,
+        "updatedAt": 1795755600000
+      },
+      "118:2": {
+        "position": 800,
+        "duration": 1200,
+        "updatedAt": 1795752000000
+      },
+      "101:1": {
+        "position": 1190,
+        "duration": 1200,
+        "updatedAt": 1795748400000
+      }
+    },
+    "library": {
+      "101": {
+        "id": 101,
+        "title": "Alpha Saga",
+        "titles": {
+          "ru": "Alpha Saga (ru)",
+          "romaji": "Alpha Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/101.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "102": {
+        "id": 102,
+        "title": "Beta Saga",
+        "titles": {
+          "ru": "Beta Saga (ru)",
+          "romaji": "Beta Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/102.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      }
+    },
+    "downloadedAnime": {
+      "103": {
+        "id": 103,
+        "title": "Gamma Saga",
+        "titles": {
+          "ru": "Gamma Saga (ru)",
+          "romaji": "Gamma Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/103.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      }
+    },
+    "recentAnimeMeta": {
+      "104": {
+        "id": 104,
+        "title": "Delta Saga",
+        "titles": {
+          "ru": "Delta Saga (ru)",
+          "romaji": "Delta Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/104.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "110": {
+        "id": 110,
+        "title": "Kappa Saga",
+        "titles": {
+          "ru": "Kappa Saga (ru)",
+          "romaji": "Kappa Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/110.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "112": {
+        "id": 112,
+        "title": "Mu Saga",
+        "titles": {
+          "ru": "Mu Saga (ru)",
+          "romaji": "Mu Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/112.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "118": {
+        "id": 118,
+        "title": "Sigma Saga",
+        "titles": {
+          "ru": "Sigma Saga (ru)",
+          "romaji": "Sigma Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/118.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      }
+    },
+    "malIdMap": {
+      "5105": {
+        "id": 105,
+        "title": "Epsilon Saga",
+        "titles": {
+          "ru": "Epsilon Saga (ru)",
+          "romaji": "Epsilon Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/105.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "5106": {
+        "id": 106,
+        "title": "Zeta Saga",
+        "titles": {
+          "ru": "Zeta Saga (ru)",
+          "romaji": "Zeta Saga"
+        },
+        "posterUrlSmall": "",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "5107": {
+        "id": 107,
+        "title": "Eta Saga",
+        "titles": {
+          "ru": "Eta Saga (ru)",
+          "romaji": "Eta Saga"
+        },
+        "posterUrlSmall": "",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "5111": {
+        "id": 111,
+        "title": "Lambda Saga",
+        "titles": {
+          "ru": "Lambda Saga (ru)",
+          "romaji": "Lambda Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/111.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      },
+      "5112": {
+        "id": 112,
+        "title": "Mu Saga",
+        "titles": {
+          "ru": "Mu Saga (ru)",
+          "romaji": "Mu Saga"
+        },
+        "posterUrlSmall": "https://smotret.invalid/posters/112.jpg",
+        "numberOfEpisodes": 12,
+        "type": "tv",
+        "typeTitle": "TV",
+        "year": 2025,
+        "season": "fall"
+      }
+    },
+    "animeCache": {
+      "101": {
+        "animeDetail": {
+          "id": 101,
+          "title": "Alpha Saga",
+          "titles": {
+            "ru": "Alpha Saga (ru)",
+            "romaji": "Alpha Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/101.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "posterUrl": "https://smotret.invalid/posters/101-full.jpg",
+          "myAnimeListId": 5101,
+          "descriptions": [],
+          "genres": [
+            {
+              "id": 1,
+              "title": "Drama"
+            }
+          ],
+          "episodes": [
+            {
+              "id": 10101,
+              "episodeInt": "1",
+              "episodeFull": "Alpha Saga — серия 1",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10102,
+              "episodeInt": "2",
+              "episodeFull": "Alpha Saga — серия 2",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10103,
+              "episodeInt": "3",
+              "episodeFull": "Alpha Saga — серия 3",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10104,
+              "episodeInt": "4",
+              "episodeFull": "Alpha Saga — серия 4",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10105,
+              "episodeInt": "5",
+              "episodeFull": "Alpha Saga — серия 5",
+              "episodeType": "tv",
+              "isActive": 1
+            }
+          ]
+        },
+        "episodes": {},
+        "cachedAt": 1
+      },
+      "102": {
+        "animeDetail": {
+          "id": 102,
+          "title": "Beta Saga",
+          "titles": {
+            "ru": "Beta Saga (ru)",
+            "romaji": "Beta Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/102.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "posterUrl": "https://smotret.invalid/posters/102-full.jpg",
+          "myAnimeListId": 5102,
+          "descriptions": [],
+          "genres": [
+            {
+              "id": 1,
+              "title": "Comedy"
+            }
+          ],
+          "episodes": [
+            {
+              "id": 10201,
+              "episodeInt": "1",
+              "episodeFull": "Beta Saga — серия 1",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10202,
+              "episodeInt": "2",
+              "episodeFull": "Beta Saga — серия 2",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10203,
+              "episodeInt": "3",
+              "episodeFull": "Beta Saga — серия 3",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10204,
+              "episodeInt": "4",
+              "episodeFull": "Beta Saga — серия 4",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10205,
+              "episodeInt": "5",
+              "episodeFull": "Beta Saga — серия 5",
+              "episodeType": "tv",
+              "isActive": 1
+            }
+          ]
+        },
+        "episodes": {},
+        "cachedAt": 1
+      },
+      "103": {
+        "animeDetail": {
+          "id": 103,
+          "title": "Gamma Saga",
+          "titles": {
+            "ru": "Gamma Saga (ru)",
+            "romaji": "Gamma Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/103.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "posterUrl": "https://smotret.invalid/posters/103-full.jpg",
+          "myAnimeListId": 5111,
+          "descriptions": [],
+          "genres": [
+            {
+              "id": 1,
+              "title": "Drama"
+            }
+          ],
+          "episodes": [
+            {
+              "id": 10301,
+              "episodeInt": "1",
+              "episodeFull": "Gamma Saga — серия 1",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10302,
+              "episodeInt": "2",
+              "episodeFull": "Gamma Saga — серия 2",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10303,
+              "episodeInt": "3",
+              "episodeFull": "Gamma Saga — серия 3",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10304,
+              "episodeInt": "4",
+              "episodeFull": "Gamma Saga — серия 4",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10305,
+              "episodeInt": "5",
+              "episodeFull": "Gamma Saga — серия 5",
+              "episodeType": "tv",
+              "isActive": 1
+            }
+          ]
+        },
+        "episodes": {},
+        "cachedAt": 1
+      },
+      "105": {
+        "animeDetail": {
+          "id": 105,
+          "title": "Epsilon Saga",
+          "titles": {
+            "ru": "Epsilon Saga (ru)",
+            "romaji": "Epsilon Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/105.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "posterUrl": "https://smotret.invalid/posters/105-full.jpg",
+          "myAnimeListId": 5105,
+          "descriptions": [],
+          "genres": [
+            {
+              "id": 1,
+              "title": "Drama"
+            }
+          ],
+          "episodes": [
+            {
+              "id": 10501,
+              "episodeInt": "1",
+              "episodeFull": "Epsilon Saga — серия 1",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10502,
+              "episodeInt": "2",
+              "episodeFull": "Epsilon Saga — серия 2",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10503,
+              "episodeInt": "3",
+              "episodeFull": "Epsilon Saga — серия 3",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10504,
+              "episodeInt": "4",
+              "episodeFull": "Epsilon Saga — серия 4",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10505,
+              "episodeInt": "5",
+              "episodeFull": "Epsilon Saga — серия 5",
+              "episodeType": "tv",
+              "isActive": 1
+            }
+          ]
+        },
+        "episodes": {},
+        "cachedAt": 1
+      },
+      "108": {
+        "animeDetail": {
+          "id": 108,
+          "title": "Iota Saga",
+          "titles": {
+            "ru": "Iota Saga (ru)",
+            "romaji": "Iota Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/108.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "posterUrl": "https://smotret.invalid/posters/108-full.jpg",
+          "myAnimeListId": 5108,
+          "descriptions": [],
+          "genres": [
+            {
+              "id": 1,
+              "title": "Comedy"
+            }
+          ],
+          "episodes": [
+            {
+              "id": 10801,
+              "episodeInt": "1",
+              "episodeFull": "Iota Saga — серия 1",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10802,
+              "episodeInt": "2",
+              "episodeFull": "Iota Saga — серия 2",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10803,
+              "episodeInt": "3",
+              "episodeFull": "Iota Saga — серия 3",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10804,
+              "episodeInt": "4",
+              "episodeFull": "Iota Saga — серия 4",
+              "episodeType": "tv",
+              "isActive": 1
+            },
+            {
+              "id": 10805,
+              "episodeInt": "5",
+              "episodeFull": "Iota Saga — серия 5",
+              "episodeType": "tv",
+              "isActive": 1
+            }
+          ]
+        },
+        "episodes": {},
+        "cachedAt": 1
+      }
+    },
+    "shikimoriAnimeDetails": {
+      "5101": {
+        "details": {
+          "status": "ongoing"
+        }
+      },
+      "5108": {
+        "details": {
+          "status": "released"
+        }
+      },
+      "5111": {
+        "details": {
+          "status": "anons"
+        }
+      }
+    },
+    "shikimoriUserRates": [
+      {
+        "rate": {
+          "id": 1,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5101,
+          "status": "watching",
+          "episodes": 2,
+          "updated_at": "2026-11-27T11:30:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5101,
+          "name": "Romaji 5101",
+          "russian": "Русский 5101",
+          "image": {
+            "original": "/system/animes/original/5101.jpg",
+            "preview": "/system/animes/preview/5101.jpg",
+            "x96": "/system/animes/x96/5101.jpg",
+            "x48": "/system/animes/x48/5101.jpg"
+          },
+          "url": "/animes/5101",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 101,
+          "title": "Alpha Saga",
+          "titles": {
+            "ru": "Alpha Saga (ru)",
+            "romaji": "Alpha Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/101.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 2,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5102,
+          "status": "completed",
+          "episodes": 12,
+          "updated_at": "2026-11-26T06:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5102,
+          "name": "Romaji 5102",
+          "russian": "Русский 5102",
+          "image": {
+            "original": "/system/animes/original/5102.jpg",
+            "preview": "/system/animes/preview/5102.jpg",
+            "x96": "/system/animes/x96/5102.jpg",
+            "x48": "/system/animes/x48/5102.jpg"
+          },
+          "url": "/animes/5102",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 102,
+          "title": "Beta Saga",
+          "titles": {
+            "ru": "Beta Saga (ru)",
+            "romaji": "Beta Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/102.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 3,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5105,
+          "status": "watching",
+          "episodes": 1,
+          "updated_at": "2026-11-27T02:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5105,
+          "name": "Romaji 5105",
+          "russian": "Русский 5105",
+          "image": {
+            "original": "/system/animes/original/5105.jpg",
+            "preview": "/system/animes/preview/5105.jpg",
+            "x96": "/system/animes/x96/5105.jpg",
+            "x48": "/system/animes/x48/5105.jpg"
+          },
+          "url": "/animes/5105",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 4,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5106,
+          "status": "rewatching",
+          "episodes": 0,
+          "updated_at": "2026-11-27T01:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5106,
+          "name": "Romaji 5106",
+          "russian": "Русский 5106",
+          "image": {
+            "original": "/system/animes/original/5106.jpg",
+            "preview": "/system/animes/preview/5106.jpg",
+            "x96": "/system/animes/x96/5106.jpg",
+            "x48": "/system/animes/x48/5106.jpg"
+          },
+          "url": "/animes/5106",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 5,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5107,
+          "status": "watching",
+          "episodes": 3,
+          "updated_at": "2026-11-27T00:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5107,
+          "name": "Romaji 5107",
+          "russian": "Русский 5107",
+          "image": {
+            "x96": "https://cdn.invalid/x96/5107.jpg",
+            "original": "/system/animes/original/5107.jpg"
+          },
+          "url": "/animes/5107",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 6,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5113,
+          "status": "watching",
+          "episodes": 5,
+          "updated_at": "2026-11-26T23:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5113,
+          "name": "Romaji 5113",
+          "russian": "Русский 5113",
+          "image": {
+            "original": "/system/animes/original/5113.jpg",
+            "preview": "/system/animes/preview/5113.jpg",
+            "x96": "/system/animes/x96/5113.jpg",
+            "x48": "/system/animes/x48/5113.jpg"
+          },
+          "url": "/animes/5113",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 5,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 113,
+          "title": "Nu Saga",
+          "titles": {
+            "ru": "Nu Saga (ru)",
+            "romaji": "Nu Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/113.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 7,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5114,
+          "status": "watching",
+          "episodes": 5,
+          "updated_at": "2026-11-26T22:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5114,
+          "name": "Romaji 5114",
+          "russian": "Русский 5114",
+          "image": {
+            "original": "/system/animes/original/5114.jpg"
+          },
+          "url": "/animes/5114",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 114,
+          "title": "Xi Saga",
+          "titles": {
+            "ru": "Xi Saga (ru)",
+            "romaji": "Xi Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/114.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 8,
+          "score": 0,
+          "rewatches": 0,
+          "status": "watching",
+          "episodes": 1,
+          "updated_at": "2026-11-26T21:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5111,
+          "name": "Romaji 5111",
+          "russian": "Русский 5111",
+          "image": {
+            "original": "/system/animes/original/5111.jpg",
+            "preview": "/system/animes/preview/5111.jpg",
+            "x96": "/system/animes/x96/5111.jpg",
+            "x48": "/system/animes/x48/5111.jpg"
+          },
+          "url": "/animes/5111",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 9,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": null,
+          "status": "watching",
+          "episodes": 2
+        },
+        "shikiAnime": {
+          "id": 5115,
+          "name": "Romaji 5115",
+          "russian": "",
+          "url": "/animes/5115",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 115,
+          "title": "Omicron Saga",
+          "titles": {
+            "ru": "Omicron Saga (ru)",
+            "romaji": "Omicron Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/115.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 10,
+          "score": 0,
+          "rewatches": 0,
+          "status": "completed",
+          "episodes": 12,
+          "updated_at": "2026-11-26T20:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5112,
+          "name": "Romaji 5112",
+          "russian": "Русский 5112",
+          "image": {
+            "original": "/system/animes/original/5112.jpg",
+            "preview": "/system/animes/preview/5112.jpg",
+            "x96": "/system/animes/x96/5112.jpg",
+            "x48": "/system/animes/x48/5112.jpg"
+          },
+          "url": "/animes/5112",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 11,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5116,
+          "status": "planned",
+          "episodes": 0,
+          "updated_at": "2026-11-26T19:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5116,
+          "name": "Romaji 5116",
+          "russian": "Русский 5116",
+          "image": {
+            "original": "/system/animes/original/5116.jpg",
+            "preview": "/system/animes/preview/5116.jpg",
+            "x96": "/system/animes/x96/5116.jpg",
+            "x48": "/system/animes/x48/5116.jpg"
+          },
+          "url": "/animes/5116",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 12,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5117,
+          "status": "watching",
+          "episodes": 1,
+          "updated_at": "not a date"
+        },
+        "shikiAnime": {
+          "id": 5117,
+          "name": "Romaji 5117",
+          "russian": "Русский 5117",
+          "image": {
+            "original": "/system/animes/original/5117.jpg",
+            "preview": "/system/animes/preview/5117.jpg",
+            "x96": "/system/animes/x96/5117.jpg",
+            "x48": "/system/animes/x48/5117.jpg"
+          },
+          "url": "/animes/5117",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 117,
+          "title": "Rho Saga",
+          "titles": {
+            "ru": "Rho Saga (ru)",
+            "romaji": "Rho Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/117.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 13,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5118,
+          "status": "watching",
+          "episodes": 1,
+          "updated_at": "1970-01-01T00:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5118,
+          "name": "Romaji 5118",
+          "russian": "Русский 5118",
+          "image": {
+            "original": "/system/animes/original/5118.jpg",
+            "preview": "/system/animes/preview/5118.jpg",
+            "x96": "/system/animes/x96/5118.jpg",
+            "x48": "/system/animes/x48/5118.jpg"
+          },
+          "url": "/animes/5118",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 118,
+          "title": "Sigma Saga",
+          "titles": {
+            "ru": "Sigma Saga (ru)",
+            "romaji": "Sigma Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/118.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 14,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5119,
+          "status": "watching",
+          "episodes": 1,
+          "updated_at": "1970-01-01T00:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5119,
+          "name": "Romaji 5119",
+          "russian": "Русский 5119",
+          "image": {
+            "original": "/system/animes/original/5119.jpg",
+            "preview": "/system/animes/preview/5119.jpg",
+            "x96": "/system/animes/x96/5119.jpg",
+            "x48": "/system/animes/x48/5119.jpg"
+          },
+          "url": "/animes/5119",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 119,
+          "title": "Tau Saga",
+          "titles": {
+            "ru": "Tau Saga (ru)",
+            "romaji": "Tau Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/119.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 15,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5110,
+          "status": "watching",
+          "episodes": 0
+        },
+        "shikiAnime": {
+          "id": 5110,
+          "name": "Romaji 5110",
+          "russian": "Русский 5110",
+          "image": {
+            "original": "/system/animes/original/5110.jpg",
+            "preview": "/system/animes/preview/5110.jpg",
+            "x96": "/system/animes/x96/5110.jpg",
+            "x48": "/system/animes/x48/5110.jpg"
+          },
+          "url": "/animes/5110",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": {
+          "id": 110,
+          "title": "Kappa Saga",
+          "titles": {
+            "ru": "Kappa Saga (ru)",
+            "romaji": "Kappa Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/110.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall"
+        }
+      },
+      {
+        "rate": {
+          "id": 16,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": null,
+          "status": "on_hold",
+          "episodes": 3,
+          "updated_at": "2026-11-26T18:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5108,
+          "name": "Romaji 5108",
+          "russian": "Русский 5108",
+          "image": {
+            "original": "/system/animes/original/5108.jpg",
+            "preview": "/system/animes/preview/5108.jpg",
+            "x96": "/system/animes/x96/5108.jpg",
+            "x48": "/system/animes/x48/5108.jpg"
+          },
+          "url": "/animes/5108",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      },
+      {
+        "rate": {
+          "id": 17,
+          "score": 0,
+          "rewatches": 0,
+          "target_id": 5120,
+          "status": "dropped",
+          "episodes": 1,
+          "updated_at": "2026-11-26T17:00:00.000Z"
+        },
+        "shikiAnime": {
+          "id": 5120,
+          "name": "Romaji 5120",
+          "russian": "Русский 5120",
+          "image": {
+            "original": "/system/animes/original/5120.jpg",
+            "preview": "/system/animes/preview/5120.jpg",
+            "x96": "/system/animes/x96/5120.jpg",
+            "x48": "/system/animes/x48/5120.jpg"
+          },
+          "url": "/animes/5120",
+          "kind": "tv",
+          "score": "8.0",
+          "status": "ongoing",
+          "episodes": 0,
+          "episodes_aired": 0,
+          "aired_on": "2025-10-01",
+          "released_on": null
+        },
+        "smotretAnime": null
+      }
+    ]
+  },
+  "attached": [
+    {
+      "libraryId": "lib-golden",
+      "name": "Golden drive",
+      "titles": [
+        {
+          "animeId": 120,
+          "name": "Omega Saga",
+          "meta": {
+            "animeId": 120,
+            "malId": 5116,
+            "genres": [
+              {
+                "id": 1,
+                "title": "Drama"
+              }
+            ]
+          }
+        },
+        {
+          "animeId": 101,
+          "name": "Alpha Saga",
+          "meta": {
+            "animeId": 101,
+            "malId": 5101
+          }
+        }
+      ]
+    }
+  ]
+}

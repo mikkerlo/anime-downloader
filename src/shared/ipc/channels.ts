@@ -173,6 +173,8 @@ export const CHANNELS = {
   TRACKER_CANCEL_AUTH: 'tracker:cancel-auth',
   TRACKER_COMPLETE_AUTH: 'tracker:complete-auth',
   TRACKER_DISCARD_PARKED_QUEUE: 'tracker:discard-parked-queue',
+  // The airing calendar from the resolved `calendar` source (#709).
+  TRACKER_GET_CALENDAR: 'tracker:get-calendar',
   TRACKER_GET_CLIENT_CONFIG: 'tracker:get-client-config',
   // AniList's or MyAnimeList's cached details (#706); never the network.
   TRACKER_GET_DETAILS: 'tracker:get-details',

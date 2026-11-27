@@ -137,11 +137,22 @@ const rateOf = (e: WorldEntry) => ({
   updatedAt: e.updatedAt
 })
 
+/** A media's calendar fields (#709): `Page.media(id_in)` answers it, keyed by AniList id. */
+export interface WorldAiring {
+  idMal?: number | null
+  isAdult?: boolean
+  format?: string
+  title?: { romaji: string | null; english: string | null }
+  nextAiringEpisode: { episode: number; airingAt: number } | null
+}
+
 export function createAniListWorld(
   opts: {
     entries?: WorldEntry[]
     media?: Record<number, number[]>
     scoreFormat?: AnilistScoreFormat
+    /** The `Calendar` operation's media, by AniList id; an id not here is omitted. */
+    airing?: Record<number, WorldAiring>
   } = {}
 ): AniListWorld {
   const entries = new Map<number, WorldEntry>()
@@ -255,6 +266,27 @@ export function createAniListWorld(
             }
           }
         }
+      }
+      case 'Calendar': {
+        // Out of order, as AniList answers; one row per media, matched on `id`.
+        const ids = (v.ids as number[]) ?? []
+        const out = ids.flatMap((id) => {
+          const a = opts.airing?.[id]
+          if (!a) return []
+          const idMal = a.idMal === undefined ? malOf(id) : a.idMal
+          return [
+            {
+              id,
+              idMal,
+              isAdult: a.isAdult ?? false,
+              format: a.format ?? 'TV',
+              title: a.title ?? { romaji: `#${idMal}`, english: null },
+              coverImage: { large: `https://s4.anilist.co/cover/${id}.jpg` },
+              nextAiringEpisode: a.nextAiringEpisode
+            }
+          ]
+        })
+        return { body: { data: { Page: { media: out.reverse() } } } }
       }
       case 'Viewer':
         return { body: anilistFixture('viewer') }

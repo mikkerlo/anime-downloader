@@ -288,7 +288,8 @@ one tracker: `createTrackerSyncService(provider, keys, deps)`.
   Shikimori's wrapper wires `onRateUpdated` to `invalidateCalendarCache()` and
   `onRatesRefreshed` to `invalidateCalendarCache()` then
   `invalidateRecommendations()`, 6.x's order and counts. #709 and #706 consume
-  the first two for AniList; #702 passes the third.
+  the first two for AniList (`anilistCalendarSyncHooks` invalidates AniList's
+  calendar on both, then runs #706's tick on a refresh); #702 passes the third.
 - **"Needs setup"** is in-memory, read through `needsSetup()`, and not part of
   `getSyncStatus()`, so Shikimori's status keeps its five fields. A `config`
   result sets it, at the item step or the token step. While it is set no drain
@@ -780,6 +781,13 @@ the renderer so the two can't disagree:
   account-less path (Shikimori's public franchise endpoint for chronology)
   falls back to it, not to "hide the feature".
 
+**The `calendar` source** (#709): `CalendarView` gates on
+`featureSource('calendar')` and reads `tracker:get-calendar`, which routes on
+`storedFeatureSource(store, 'calendar')` at call time: Shikimori's handler
+body, or AniList's calendar ([The calendar](#the-calendar-709)). MyAnimeList
+has no schedule, so a MyAnimeList-only account gets the empty shape and the
+view's not-available state.
+
 **The `airing` source and auto-download.** The auto-downloader's one `airing`
 dep is `createAiringDep({ store, providers })`: `source()` (the resolved
 `airing` source at call time), `hasCredentials(id)` (`<provider>Credentials`
@@ -1259,6 +1267,53 @@ a title not on AniList throws; a mark-watched for one is null.
   `Page.activities(isFollowing: true, type_in: [ANIME_LIST])`, adult media
   filtered. `getFriends` (`Page.following`) is T12's.
 
+### The calendar (#709)
+
+`tracker:get-calendar`'s AniList branch (`trackers/anilist/calendar.ts`,
+`createAniListCalendar`), built in `index.ts` next to the provider. The
+Shikimori branch is `shikimori:get-calendar`'s body
+(`services/shikimori-sync/calendar.ts`), so the two channels can't disagree.
+
+- **Tracked set:** AniList's own list, `anilistUserRates`: the rows whose
+  canonical status is `watching`, `rewatching` or `planned`, by their AniList
+  media id. An empty cache is filled first through the instance's
+  `fetchAndCacheRates` (it needs the token); a failed read logs
+  `[anilist] calendar: rate fetch failed:` and the calendar is empty.
+- **One request per 50 tracked titles:** the provider's `getCalendar`,
+  `Page(perPage: 50) { media(id_in: $ids, type: ANIME) { … nextAiringEpisode
+  { episode airingAt } } }`, at `interactive`, with no paging. It gives one
+  next airing per title, matched on `id`; `Page.airingSchedules` isn't used
+  because it returns every scheduled episode (500 for Detective Conan).
+- **Dropped:** a title with `nextAiringEpisode: null`, a media with no
+  `idMal`, and an `isAdult` one unless the `displayAdultContent` cached with
+  `anilistUser` is on (the pure mapping filters, as the provider does).
+- **Mapping** to `CalendarEntry`, no shape change: `malId` is `idMal`;
+  `animeId` and the poster come from `lookupByMalIds`, with
+  `coverImage.large` as the fallback; `name` is `titleOf` (English, else
+  romaji); `kind` is `format` lowercased (`TV_SHORT` → `tv_short`);
+  `episodeInt` is `String(nextAiringEpisode.episode)` and `nextEpisodeAt` the
+  ISO string of `airingAt * 1000`; `userStatus` is the rate's canonical
+  status.
+- **Token:** the calendar query is sent with no token, so the calendar keeps
+  working through an expired AniList session, as Shikimori's public
+  `/api/calendar` does. This follows the open verify task below (whether
+  unauthenticated `Page.media` hides adult titles), whose default is no
+  implicit filter; if the probe finds one, the query switches to the token
+  when one is present, retried once without it after a 401.
+- **Cache:** the shared `serveCalendar` rules (`trackers/display-snapshots.ts`):
+  a 5-minute TTL, the snapshot served stale offline and after a failed fetch,
+  `force` bypassing the TTL online. It is invalidated (marked, not dropped)
+  at every site that can change the tracked set, through the AniList
+  instance's hooks (`anilistCalendarSyncHooks`, spread into its construction
+  in `index.ts`): `onRateUpdated` (a live or queued edit's cache patch, the
+  drain's reconcile) and `onRatesRefreshed` (a list refresh, then T11a's
+  `tickIfAiringSource`). The Shikimori and AniList caches are independent,
+  so switching the source back serves the other's cache with no refetch.
+- **Snapshot:** `userData/anilist-snapshots.json`, per AniList user, created
+  only by a successful fetch and deleted on logout and switch
+  (`anilistSessionSteps`); see [Storage](./storage.md), *Per-provider display
+  snapshots*.
+
 ### Terms of use
 
 The background details prefetch never goes beyond the user's own list. Copy
@@ -1282,7 +1337,8 @@ conservative default named in each:
 - **Whether `Page.media` filters adult titles implicitly** for a viewer with
   `displayAdultContent: false` and unauthenticated. Default: no `isAdult`
   argument anywhere; if the probe finds a filter, the disabling argument goes
-  into `ID_MAP_LOOKUP`.
+  into `ID_MAP_LOOKUP`, and the calendar query sends the token when one is
+  present, with one token-less retry after a 401 (#709).
 
 ### Verify tasks settled
 

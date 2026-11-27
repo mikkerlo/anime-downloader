@@ -303,8 +303,16 @@ describe('the AniList construction in src/main/index.ts (source pin)', () => {
     )
     expect(construction).toContain('detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED')
     expect(construction).toContain('.requestPrefetch(malId)')
+    // Since #709 the tick is the refresh hook's second step, after the AniList
+    // calendar's invalidation (`anilistCalendarSyncHooks`).
     expect(construction).toContain(
-      "onRatesRefreshed: createTickIfAiringSource({\n    store,\n    runTick: () => runAutoDownloadTick('rates-refreshed')\n  })"
+      "...anilistCalendarSyncHooks(\n    anilistCalendar,\n    createTickIfAiringSource({\n      store,\n      runTick: () => runAutoDownloadTick('rates-refreshed')\n    })\n  )"
+    )
+    expect(construction).not.toMatch(/\n {2}onRatesRefreshed:/)
+    expect(construction).not.toMatch(/\n {2}onRateUpdated:/)
+    // The calendar's snapshot goes with AniList's logout and switch.
+    expect(src).toContain(
+      "trackerLifecycle.setSteps(\n  'anilist',\n  anilistSessionSteps({ provider: anilistProvider, sync: anilistSync, calendar: anilistCalendar })\n)"
     )
     // The Shikimori construction gets neither (its details and tick stay its own).
     const shiki = src.slice(

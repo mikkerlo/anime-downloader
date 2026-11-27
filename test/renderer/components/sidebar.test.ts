@@ -234,6 +234,28 @@ describe('Sidebar', () => {
       expect(w.find('img.user-avatar').exists()).toBe(false)
       expect(w.find('div.user-avatar').text()).toBe('A')
     })
+
+    // #731 review: a lone tracker in "Needs setup" (MAL with no client ID)
+    // gets the same Settings deep link the expired chip has.
+    it('a lone tracker in "Needs setup" is a button that deep-links to Settings', async () => {
+      stubApi(accountsState({ mal: { id: 3, nickname: 'mal-me', avatar: null } }, 'mal'), {
+        mal: status({ needsSetup: true })
+      })
+      const library = useLibraryStore()
+      library.navigate('home')
+      const w = await mountSidebar()
+
+      const chip = w.find('.user-meta .u-sync')
+      expect(chip.text()).toBe('Needs setup')
+      expect(chip.element.tagName).toBe('BUTTON')
+      expect(chip.classes()).toContain('offline')
+      expect(chip.attributes('title')).toBe('MyAnimeList needs setup — open Settings')
+
+      await chip.trigger('click')
+      expect(popover(w).exists()).toBe(false)
+      expect(library.currentView).toBe('settings')
+      expect(library.pendingSettingsTab).toBe('connectors')
+    })
   })
 
   describe('two trackers: the worst state, and a popover per tracker', () => {

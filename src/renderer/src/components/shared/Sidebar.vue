@@ -120,10 +120,10 @@ const sessionExpired = computed(() => aggregateSyncState.value.state === 'sessio
 const syncRows = computed(() => aggregateSyncState.value.trackers);
 // One tracker: the chip as it always was. Two or more: it opens the breakdown.
 const multiTracker = computed(() => syncRows.value.length >= 2);
-const expiredTitle = computed(() => {
-  const row = syncRows.value.find((r) => r.state === 'session-expired');
-  return `${TRACKER_LABELS[row?.trackerId ?? 'shikimori']} rejected the stored session — sign in again`;
-});
+// One tracker that needs the user in Settings: the chip is the deep link.
+const needsSettings = computed(
+  () => sessionExpired.value || aggregateSyncState.value.state === 'needs-setup'
+);
 
 function rowTitle(row: TrackerSyncBreakdownRow): string {
   const name = TRACKER_LABELS[row.trackerId];
@@ -308,10 +308,11 @@ onBeforeUnmount(unlisten);
               <span class="dot"></span>{{ syncLabel }}
             </button>
             <button
-              v-else-if="sessionExpired"
+              v-else-if="needsSettings && syncRows[0]"
               type="button"
-              class="u-sync expired"
-              :title="expiredTitle"
+              class="u-sync"
+              :class="sessionExpired ? 'expired' : 'offline'"
+              :title="rowTitle(syncRows[0])"
               @click="libraryStore.navigateToSettingsTab('connectors')"
             >
               <span class="dot"></span>{{ syncLabel }}

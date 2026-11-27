@@ -218,10 +218,19 @@ function onClick(entry: ContinueWatchingEntry): void {
 }
 
 // The primary's rates (broadcast-driven) re-fetch the continue-watching list,
-// since main builds it from the same list; a primary switch moves them too.
-// Debounced: `primaryRates` also carries the queued overlay, so a drain moves
-// it once per item, and each fetch can start smotret lookups in main.
-watch(primaryRates, () => debouncedRefresh());
+// since main builds it from the same list; a primary switch does too. Only the
+// primary's own slots are watched: the store reassigns both maps for any
+// tracker's event, and a mirror's refresh or drain isn't the rail's list.
+// Debounced: the queued overlay moves once per drained item, and each fetch
+// can start smotret lookups in main.
+watch(
+  [
+    primary,
+    () => (primary.value ? trackersStore.ratesByTracker[primary.value] : undefined),
+    () => (primary.value ? trackersStore.queuedAfterByTracker[primary.value] : undefined)
+  ],
+  () => debouncedRefresh()
+);
 
 onMounted(async () => {
   try {

@@ -18,6 +18,7 @@ export interface TrackersApi {
   }
   emitAccounts(state: TrackerAccountsState): void
   emitQueueChanged(e: TrackerOfflineQueueChangedEvent): void
+  emitRatesRefreshed(e: TrackerRatesRefreshedEvent): void
 }
 
 const IDS: TrackerId[] = ['shikimori', 'anilist', 'mal']
@@ -99,6 +100,7 @@ export function trackersApi(
 ): TrackersApi {
   const accounts = new Set<(s: TrackerAccountsState) => void>()
   const queue = new Set<(e: TrackerOfflineQueueChangedEvent) => void>()
+  const refreshed = new Set<(e: TrackerRatesRefreshedEvent) => void>()
   const subscribe =
     <T>(set: Set<(v: T) => void>) =>
     (cb: (v: T) => void): (() => void) => {
@@ -114,7 +116,7 @@ export function trackersApi(
       onTrackerAccountsChanged: subscribe(accounts),
       onTrackerOfflineQueueChanged: subscribe(queue),
       onTrackerRateUpdated: () => () => {},
-      onTrackerRatesRefreshed: () => () => {},
+      onTrackerRatesRefreshed: subscribe(refreshed),
       onTrackerSyncStatus: () => () => {}
     },
     emitAccounts: (s) => {
@@ -122,6 +124,9 @@ export function trackersApi(
     },
     emitQueueChanged: (e) => {
       for (const cb of [...queue]) cb(e)
+    },
+    emitRatesRefreshed: (e) => {
+      for (const cb of [...refreshed]) cb(e)
     }
   }
 }

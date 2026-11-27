@@ -371,6 +371,36 @@ describe('HomeView — the primary tracker (#698)', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before + 1)
   })
+
+  it("a mirror's events never refetch the rail; the primary's own still do", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const trackers = trackersApi({
+      accounts: accountsState(['shikimori', 'anilist'], 'shikimori'),
+      rates: { shikimori: SHIKI_RATES, anilist: AL_RATES }
+    })
+    const api = stubApi([], [], trackers)
+    mount(HomeView)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    const before = api.homeGetContinueWatching.mock.calls.length
+
+    // AniList is a mirror here: its refresh and its queue are not the rail's list.
+    trackers.emitRatesRefreshed({ trackerId: 'anilist', entries: AL_RATES.slice(1) })
+    trackers.emitQueueChanged({
+      trackerId: 'anilist',
+      length: 1,
+      queuedAfter: { 20: { episodes: 2, status: 'watching', score: 0, rewatches: 0 } }
+    })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before)
+
+    // The primary's own refresh still refetches.
+    trackers.emitRatesRefreshed({ trackerId: 'shikimori', entries: SHIKI_RATES.slice(1) })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before + 1)
+  })
 })
 
 // #570: continue-watching cards keep their poster offline from main's cache.

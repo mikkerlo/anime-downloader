@@ -1,0 +1,15 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 400,
+          "idMal": 40,
+          "episodes": null,
+          "status": "RELEASING",
+          "nextAiringEpisode": { "episode": 8 }
+        }
+      ]
+    }
+  }
+}

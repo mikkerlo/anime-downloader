@@ -14,10 +14,14 @@ export const LEGACY_SMOTRET_HOSTS: readonly string[] = [
 ]
 export const SMOTRET_API_BASE_ENV = 'ANIME_DL_SMOTRET_API_BASE'
 export const SHIKIMORI_ORIGIN_ENV = 'ANIME_DL_SHIKIMORI_ORIGIN'
+/** AniList's GraphQL endpoint (#703). Every query and mutation is a POST to it. */
+export const ANILIST_ORIGIN = 'https://graphql.anilist.co'
+export const ANILIST_ORIGIN_ENV = 'ANIME_DL_ANILIST_ORIGIN'
 
 let smotretBase = SMOTRET_API_BASE
 let smotretSiteOrigin = SMOTRET_ORIGIN
 let shikiOrigin = SHIKIMORI_ORIGIN
+let anilistGraphqlOrigin = ANILIST_ORIGIN
 
 /** The site root an API base was built from: `<root>/api` → `<root>`, else its origin. */
 function siteRootOf(apiBase: string): string {
@@ -37,6 +41,7 @@ export function applyApiBaseOverrides(env: NodeJS.ProcessEnv, isPackaged: boolea
   smotretBase = pick(SMOTRET_API_BASE_ENV, SMOTRET_API_BASE)
   smotretSiteOrigin = smotretBase === SMOTRET_API_BASE ? SMOTRET_ORIGIN : siteRootOf(smotretBase)
   shikiOrigin = pick(SHIKIMORI_ORIGIN_ENV, SHIKIMORI_ORIGIN)
+  anilistGraphqlOrigin = pick(ANILIST_ORIGIN_ENV, ANILIST_ORIGIN)
 }
 
 export function smotretApiBase(): string {
@@ -71,4 +76,8 @@ export function rewriteLegacySmotretUrl(url: string): string | null {
 
 export function shikimoriOrigin(): string {
   return shikiOrigin
+}
+
+export function anilistOrigin(): string {
+  return anilistGraphqlOrigin
 }

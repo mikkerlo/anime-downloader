@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "message": "The AniList API has been temporarily disabled due to severe stability issues.",
+      "status": 403
+    }
+  ],
+  "data": null
+}

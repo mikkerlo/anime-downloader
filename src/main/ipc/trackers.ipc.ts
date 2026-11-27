@@ -14,6 +14,8 @@ import { STATUS_ORDER } from '../lib/shikimori-rate'
 import { isTrackerId } from '../services/trackers/rates'
 import { isTrackerFeature } from '../services/trackers/choices'
 import type { ApplyOutcome } from '../services/trackers/fan-out'
+import { AniListUnmappedError } from '../trackers/anilist/errors'
+import { storedAnilistMediaId } from '../trackers/anilist/id-map'
 import { getClientConfig, setClientConfig } from '../trackers/client-config'
 import { TRACKER_LABELS } from '../trackers/types'
 import type { AppDeps } from './index'
@@ -108,8 +110,19 @@ export function register({
   trackerRates: rates,
   trackerLifecycle: lifecycle,
   trackerAuth: auth,
-  trackerChoices: choices
+  trackerChoices: choices,
+  newTrackerCardsEnabled
 }: AppDeps): void {
+  // The AniList and MyAnimeList cards are hidden in a packaged build until the
+  // flag lifts (#703 § 8), and main refuses their sign-in too.
+  const signInArg = (value: unknown): TrackerId => {
+    const id = trackerIdArg(value)
+    if (id !== 'shikimori' && !newTrackerCardsEnabled) {
+      throw new Error(`${TRACKER_LABELS[id]} sign-in isn't available in this build yet`)
+    }
+    return id
+  }
+
   // Accounts, auth and logout (#695). `docs/trackers.md` § Accounts and sign-in.
   ipcMain.handle(
     CHANNELS.TRACKER_LIST_ACCOUNTS,
@@ -118,13 +131,13 @@ export function register({
 
   ipcMain.handle(
     CHANNELS.TRACKER_BEGIN_AUTH,
-    (_event, trackerId: unknown): Promise<TrackerAuthResult> => auth.begin(trackerIdArg(trackerId))
+    (_event, trackerId: unknown): Promise<TrackerAuthResult> => auth.begin(signInArg(trackerId))
   )
 
   ipcMain.handle(
     CHANNELS.TRACKER_COMPLETE_AUTH,
     (_event, trackerId: unknown, urlOrToken: unknown): Promise<TrackerAuthResult> => {
-      const id = trackerIdArg(trackerId)
+      const id = signInArg(trackerId)
       if (typeof urlOrToken !== 'string') throw new Error('Invalid sign-in input')
       return auth.complete(id, urlOrToken)
     }
@@ -193,11 +206,23 @@ export function register({
     CHANNELS.TRACKER_GET_RATE,
     async (_event, trackerId: unknown, malId: unknown): Promise<TrackerRateResult | null> => {
       const id = trackerIdArg(trackerId)
-      const read = await rates.readRate(id, malIdArg(malId))
+      const mal = malIdArg(malId)
+      let read: Awaited<ReturnType<typeof rates.readRate>>
+      try {
+        read = await rates.readRate(id, mal)
+      } catch (err) {
+        // A title AniList doesn't have: no row, and no media id (T8b's "not on AniList").
+        if (err instanceof AniListUnmappedError) return { values: null, stale: false }
+        throw err
+      }
       const t = rates.instance(id)
       if (!read || !t) return null
-      if (!read.stale) return { values: read.entry ? read.entry.values : null, stale: false }
-      return { values: read.row ? t.rateCache.read(read.row).values : null, stale: true }
+      // AniList's own media id, from a positive id-map entry only (#703 § 5).
+      const mediaId = id === 'anilist' ? storedAnilistMediaId(store, mal) : null
+      const extra = mediaId !== null ? { mediaId } : {}
+      if (!read.stale)
+        return { values: read.entry ? read.entry.values : null, stale: false, ...extra }
+      return { values: read.row ? t.rateCache.read(read.row).values : null, stale: true, ...extra }
     }
   )
 

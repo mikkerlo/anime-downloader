@@ -1,0 +1,6 @@
+{
+  "errors": [
+    { "message": "Invalid token", "status": 400, "locations": [{ "line": 2, "column": 3 }] }
+  ],
+  "data": null
+}

@@ -1171,6 +1171,26 @@ later slice keeps green.
   `test/integration/tracker-drains.test.ts` (one tracker's expired session, 401
   or synchronous throw never stops another's drain at boot or on the online
   edge), the AniList case of `offline-kickoff.test.ts`, and the Prepare rows.
+- **AniList's fixture server** (`test/helpers/anilist-server.ts`, #703)
+  replaces `globalThis.fetch`, so AniList's real client, host limiter,
+  `fetchWithTimeout` and provider run end to end, and records every request's
+  operation name, variables and token. Every reply carries a rate-limit header
+  of 60000 a minute, so the limiter's spacing doesn't pace a real-timer test.
+  `createAniListServer(route)` answers from the JSON bodies under
+  `test/fixtures/anilist/` (the fixture-replay tests in
+  `test/api-clients/anilist.test.ts`); `createAniListWorld` is a stateful fake
+  account on top of it (the id map, the list, `MediaList`, `SaveMediaListEntry`
+  stored at the user's score-format step, `DeleteMediaListEntry`, and
+  per-operation error injection) for the drain, primary-branch, Prepare and
+  online-edge tests. `createTestAniList` builds the provider on its own
+  limiter with a real vault over the fake safeStorage.
+  The fixtures are built from AniList's documented shapes and the epic's live
+  probe of an expired token; none was captured from a real account, and the
+  revoked-token and truncated-paste shapes are still unverified
+  ([Trackers](trackers.md#verify-tasks-still-open)).
+- **`ANIME_DL_ANILIST_ORIGIN`** points AniList's GraphQL client at a stub
+  server in an unpackaged build, like `ANIME_DL_SHIKIMORI_ORIGIN`; packaged
+  builds ignore it (`lib/api-bases.ts`).
 
 ## Coverage thresholds
 

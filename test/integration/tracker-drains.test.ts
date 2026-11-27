@@ -264,7 +264,11 @@ describe('the wiring in src/main/index.ts (source pin)', () => {
       'utf-8'
     )
     expect(src).toContain('bootDrain(edgeTrackers(store, trackerFanOut.syncServices()))')
-    expect(src).toContain('kickoffTrackers(store, trackerFanOut.syncServices(), () =>')
+    expect(src).toContain(
+      'kickoffTrackers(\n        store,\n        trackerFanOut.syncServices(),\n        () => shikimoriSyncService.prefetchShikimoriDetails(),'
+    )
+    // AniList's details prefetch rides on its kick-off entry (#703).
+    expect(src).toContain('{ anilist: () => anilistProvider.prefetchDetails() }')
     expect(src).not.toContain('shikimoriSyncService.startSyncTimer()')
   })
 })

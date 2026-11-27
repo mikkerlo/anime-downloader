@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "message": "Validation error",
+      "status": 400,
+      "validation": { "scoreRaw": ["The score raw must be between 0 and 100."] }
+    }
+  ],
+  "data": { "SaveMediaListEntry": null }
+}

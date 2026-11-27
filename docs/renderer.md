@@ -106,6 +106,9 @@ src/renderer/src/
                                 Disconnect, kept changes; the connect body is the tracker's own component
                                 (`tracker-connect-form.ts` has the contract)
       ShikimoriConnectForm.vue  Shikimori's code paste, on `shikimori:get-auth-url` / `shikimori:exchange-code`
+      AniListConnectForm.vue    AniList's Open AniList + token paste, on `tracker:begin-auth` / `tracker:complete-auth`
+                                (#703); the card shows it only while `newTrackerCardsEnabled` is on
+      session-expiry.ts         The card's expiry warning: from `sessionExpiresAt − 14 days` (AniList's token)
       TrackerPendingDialog.vue  Keep/Discard prompt for a tracker's unsynced changes (#588), labelled per tracker
       PrepareOfflinePanel.vue   Prepare for offline (#592): a row per step, Cancel, the summary; details
                                 with a title link to its page; the library-sync row's Review (N) opens

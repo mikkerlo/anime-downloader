@@ -1,0 +1,11 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        { "id": 103, "idMal": 3 },
+        { "id": 101, "idMal": 1 },
+        { "id": 901, "idMal": 8, "isAdult": true }
+      ]
+    }
+  }
+}

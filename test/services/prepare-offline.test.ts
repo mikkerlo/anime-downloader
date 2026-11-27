@@ -1,7 +1,7 @@
 // Prepare for offline (#592): the runner over fake steps, step 6's
 // `SyncRunResult` mapping, the binaries step (repair, the busy gate) and the
 // Shikimori rates step (drain first, the `keepQueued` refresh).
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
 const ensureFreshToken = vi.fn()
@@ -45,6 +45,14 @@ import { createShikimoriSyncService } from '../../src/main/services/shikimori-sy
 import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import type { BinaryCheck } from '../../src/main/ffmpeg-binaries'
 import { createFfmpegStatus } from '../../src/main/lib/ffmpeg-status'
+import { trackerRatesDeps } from '../../src/main/services/prepare-offline/wiring'
+import { createAniListSyncService } from '../../src/main/trackers/anilist/sync'
+import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
+import {
+  createAniListServer,
+  createTestAniList,
+  type AniListServer
+} from '../helpers/anilist-server'
 
 const PROGRESS = 'prepare-offline:progress'
 
@@ -1140,5 +1148,115 @@ describe('the tracker rates step (#693)', () => {
     })
     expect(r.deps.drain).not.toHaveBeenCalled()
     expect(r.deps.refreshRates).not.toHaveBeenCalled()
+  })
+})
+
+describe('the anilist-rates step with AniList connected (#703)', () => {
+  let server: AniListServer | null = null
+  afterEach(() => {
+    server?.restore()
+    server = null
+  })
+
+  /** A 60-title list, so the details prefetch takes two batches of 50. */
+  const listEntries = Array.from({ length: 60 }, (_, i) => ({
+    id: 9000 + i,
+    mediaId: 100 + i,
+    status: 'CURRENT',
+    score: 0,
+    progress: 1,
+    repeat: 0,
+    updatedAt: 1,
+    media: { id: 100 + i, idMal: 1 + i, title: { romaji: `#${i}` }, coverImage: { large: null } }
+  }))
+
+  async function anilistStep(opts: { withPrefetch?: boolean; onDetails?: () => void } = {}) {
+    server = createAniListServer((call) => {
+      if (call.operation === 'MediaListCollection') {
+        return {
+          body: {
+            data: {
+              MediaListCollection: {
+                hasNextChunk: false,
+                lists: [{ isCustomList: false, entries: listEntries }]
+              }
+            }
+          }
+        }
+      }
+      if (call.operation === 'Details') {
+        opts.onDetails?.()
+        const ids = call.variables.ids as number[]
+        return {
+          body: {
+            data: {
+              Page: {
+                media: ids.map((mal) => ({
+                  id: 99 + mal,
+                  idMal: mal,
+                  description: 'd',
+                  genres: []
+                }))
+              }
+            }
+          }
+        }
+      }
+      return { status: 400, body: { errors: [{ message: 'unrouted', status: 400 }] } }
+    })
+    const t = await createTestAniList()
+    const sync = createAniListSyncService(t.provider, {
+      store: t.store as never,
+      broadcast: () => {},
+      syncStatusChannel: 's',
+      offlineQueueChangedChannel: 'q',
+      rateUpdatedChannel: 'r',
+      ratesRefreshedChannel: 'rr'
+    }) as unknown as TrackerSyncService<unknown, unknown>
+    const deps = trackerRatesDeps('anilist', {
+      store: t.store,
+      trackers: () => [sync],
+      ...(opts.withPrefetch === false
+        ? {}
+        : {
+            prefetch: {
+              anilist: {
+                prefetch: () => t.provider.prefetchDetails(),
+                abortPrefetch: () => t.provider.abortPrefetch()
+              }
+            }
+          })
+    })
+    return { t, step: createTrackerRatesStep('anilist', deps) }
+  }
+
+  it('runs three phases, the details prefetch third, in batches of 50 at the prefetch class', async () => {
+    const { step, t } = await anilistStep()
+    const ctx = ctxFor()
+    const out = await step.run(ctx)
+    expect(ctx.ticks.map((x) => [x.done, x.total, x.message])).toEqual([
+      [0, 3, 'Sending queued changes'],
+      [1, 3, 'Refreshing your list'],
+      [2, 3, 'Caching AniList details'],
+      [3, 3, undefined]
+    ])
+    expect(out.status).toBe('ok')
+    expect(server!.of('Details').map((c) => (c.variables.ids as number[]).length)).toEqual([50, 10])
+    expect(Object.keys(t.store.get('anilistAnimeDetails') as object)).toHaveLength(60)
+  })
+
+  it('aborting the run calls abortPrefetch, and the server sees no further prefetch request', async () => {
+    const controller = new AbortController()
+    const { step } = await anilistStep({ onDetails: () => controller.abort() })
+    await step.run(ctxFor({ signal: controller.signal }))
+    expect(server!.of('Details')).toHaveLength(1)
+  })
+
+  it('without the prefetch in its deps the step reports total: 2 (the mutation control)', async () => {
+    const { step } = await anilistStep({ withPrefetch: false })
+    const ctx = ctxFor()
+    await step.run(ctx)
+    expect(ctx.ticks.every((x) => x.total === 2)).toBe(true)
+    expect(server!.of('Details')).toHaveLength(0)
   })
 })

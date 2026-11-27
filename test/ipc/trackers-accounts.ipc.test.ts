@@ -72,7 +72,11 @@ const A_QUEUE = [entry(1, 100), entry(2, 200, { via: 'mirror' })]
 const vaultMembers = ['encrypt', 'commit', 'write', 'read', 'has', 'isLocked'] as const
 
 function rig(
-  opts: { instances?: readonly ('anilist' | 'mal')[]; seed?: Record<string, unknown> } = {}
+  opts: {
+    instances?: readonly ('anilist' | 'mal')[]
+    seed?: Record<string, unknown>
+    newTrackerCardsEnabled?: boolean
+  } = {}
 ) {
   const store = new InMemoryStorage({
     ...(structuredClone(STORE_DEFAULTS) as Record<string, unknown>),
@@ -144,7 +148,8 @@ function rig(
     store,
     vault,
     trackerRates,
-    cancelAttempt: (id) => auth.cancel(id)
+    cancelAttempt: (id) => auth.cancel(id),
+    newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true
   })
   const auth = createTrackerAuthSessions({
     lifecycle,
@@ -167,6 +172,7 @@ function rig(
     trackerRates,
     trackerLifecycle: lifecycle,
     trackerAuth: auth,
+    newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true,
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => {}),
     runAutoDownloadTick: vi.fn(async () => ({})),
@@ -880,5 +886,45 @@ describe('argument validation', () => {
     await expect(
       r.invoke(CHANNELS.TRACKER_LOGOUT, 'anilist', { pending: 'later' })
     ).rejects.toThrow(/pending/)
+  })
+})
+
+describe('the new-tracker-cards flag (#703 § 8), through AppDeps', () => {
+  it('off: tracker:begin-auth and tracker:complete-auth refuse AniList, and the state says false', async () => {
+    const r = rig({ newTrackerCardsEnabled: false })
+    signsInAs(r, 'anilist', 'tok', A)
+    await expect(r.invoke(CHANNELS.TRACKER_BEGIN_AUTH, 'anilist')).rejects.toThrow(
+      "AniList sign-in isn't available in this build yet"
+    )
+    await expect(r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'anilist', 'tok')).rejects.toThrow(
+      "AniList sign-in isn't available in this build yet"
+    )
+    expect(r.openExternal).not.toHaveBeenCalled()
+    expect(r.store.get('anilistUser')).toBeNull()
+    expect(r.spies.encrypt).not.toHaveBeenCalled()
+    const state = await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)
+    expect(state.newTrackerCardsEnabled).toBe(false)
+  })
+
+  it('off: a Shikimori sign-in still goes through', async () => {
+    const r = rig({ newTrackerCardsEnabled: false })
+    signsInAs(r, 'shikimori', 'code', A)
+    expect(await r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'shikimori', 'code')).toMatchObject({
+      status: 'connected'
+    })
+  })
+
+  it('on: both proceed, and the state says true', async () => {
+    const r = rig({ newTrackerCardsEnabled: true })
+    signsInAs(r, 'anilist', 'tok', A)
+    const begin = r.invoke<TrackerAuthResult>(CHANNELS.TRACKER_BEGIN_AUTH, 'anilist')
+    await vi.waitFor(() => expect(r.openExternal).toHaveBeenCalledTimes(1))
+    expect(await r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'anilist', 'tok')).toMatchObject({
+      status: 'connected',
+      account: { trackerId: 'anilist', user: A }
+    })
+    expect(await begin).toMatchObject({ status: 'connected' })
+    const state = await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)
+    expect(state.newTrackerCardsEnabled).toBe(true)
   })
 })

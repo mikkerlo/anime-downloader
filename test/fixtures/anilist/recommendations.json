@@ -1,0 +1,44 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 101,
+          "idMal": 1,
+          "recommendations": {
+            "nodes": [
+              {
+                "rating": 120,
+                "mediaRecommendation": {
+                  "id": 301,
+                  "idMal": 31,
+                  "type": "ANIME",
+                  "isAdult": false,
+                  "format": "TV",
+                  "title": { "romaji": "Jujutsu Kaisen", "english": "JUJUTSU KAISEN" },
+                  "coverImage": {
+                    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx301.jpg"
+                  }
+                }
+              },
+              {
+                "rating": 40,
+                "mediaRecommendation": {
+                  "id": 302,
+                  "idMal": 32,
+                  "type": "ANIME",
+                  "isAdult": true,
+                  "format": "OVA",
+                  "title": { "romaji": "Adult Recommendation", "english": null },
+                  "coverImage": {
+                    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx302.jpg"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

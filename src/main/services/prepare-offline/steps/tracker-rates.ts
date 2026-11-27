@@ -16,7 +16,7 @@ export interface TrackerRatesStepDeps {
   /** The instance's `drainNow()`: waits for a drain in flight, then drains. */
   drain(): Promise<void>
   refreshRates(opts: { keepQueued: boolean }): Promise<TrackerRatesResult<unknown> | null>
-  /** The details prefetch, abortable through `abortPrefetch`; none until T7. */
+  /** The details prefetch, abortable through `abortPrefetch`: AniList's (#703); MAL has none. */
   prefetch?(): Promise<void>
   abortPrefetch?(): void
 }

@@ -131,6 +131,12 @@ export interface AppDeps {
   trackerAuth: TrackerAuthSessions
   /** The primary, mirror and feature-source setters (#696). */
   trackerChoices: TrackerChoices
+  /**
+   * The AniList and MyAnimeList cards (`trackers/flags.ts`, #703/#702),
+   * computed once from `app.isPackaged`. While false, `tracker:begin-auth` and
+   * `tracker:complete-auth` refuse both trackers.
+   */
+  newTrackerCardsEnabled: boolean
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

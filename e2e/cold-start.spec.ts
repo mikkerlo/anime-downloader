@@ -1,45 +1,32 @@
-import { test, expect } from '@playwright/test'
-import { assertUserData, launchApp, makeProfile } from './helpers/profile'
+// THROWAWAY (#734 cold-start bisect): 12 cold launches, each logging whether
+// the first main-process evaluate failed, the raw error, and a retry.
+import { test } from '@playwright/test'
+import { launchApp, makeProfile } from './helpers/profile'
 
-/**
- * Cold-start regression: IPC must be registered before the renderer mounts.
- *
- * On a fresh profile (no ffmpeg binaries yet) the pre-fix bootstrap awaited
- * the ensureFfmpeg network download BEFORE registerIpcHandlers(), while the
- * window was already up — so every view's first IPC call failed with
- * "No handler registered for 'library-get'" and the UI sat dead until the
- * download settled (or forever, if it failed). Launching on a profile with no
- * binaries seeded reproduces the first-launch state; the assertion is that a
- * store-backed IPC call answers immediately after load, regardless of the
- * (still in-flight, background) binary download.
- */
-test('cold start: IPC answers while first-launch binary downloads are pending', async () => {
-  // The one spec that opts out of seeding (#562): the download is what it tests.
-  const profile = makeProfile({ prefix: 'anime-dl-coldstart-', ffmpeg: 'none', fpcalc: 'none' })
-  const { app } = await launchApp(profile).catch((e: unknown) => {
-    profile.cleanup()
-    throw e
+for (let i = 0; i < 12; i++) {
+  test(`cold start #${i}`, async () => {
+    const profile = makeProfile({ prefix: 'anime-dl-coldstart-', ffmpeg: 'none', fpcalc: 'none' })
+    const t0 = Date.now()
+    const { app } = await launchApp(profile)
+    const launched = Date.now() - t0
+    try {
+      const t1 = Date.now()
+      try {
+        await app.evaluate(({ app }) => app.getPath('userData'))
+        console.log(`[bisect] #${i} ok (launch ${launched}ms, eval ${Date.now() - t1}ms)`)
+      } catch (e) {
+        console.log(
+          `[bisect] #${i} FAIL (launch ${launched}ms, after ${Date.now() - t1}ms): ${String(e)}`
+        )
+        await new Promise((r) => setTimeout(r, 200))
+        const again = await app
+          .evaluate(({ app }) => `ready=${app.isReady()} uptime=${process.uptime()}`)
+          .catch((err: unknown) => `retry failed: ${String(err)}`)
+        console.log(`[bisect] #${i} retry: ${again}`)
+      }
+    } finally {
+      await app.close()
+      profile.cleanup()
+    }
   })
-  // The main process's output, printed when the test fails: a main process
-  // that dies at boot otherwise reads only as "Execution context was destroyed".
-  const mainLog: string[] = []
-  app.process().stdout?.on('data', (b: Buffer) => mainLog.push(`[out] ${String(b)}`))
-  app.process().stderr?.on('data', (b: Buffer) => mainLog.push(`[err] ${String(b)}`))
-  app.process().on('exit', (code, signal) => mainLog.push(`[exit] code=${code} signal=${signal}`))
-  try {
-    await assertUserData(app, profile)
-    const window = await app.firstWindow()
-    await window.waitForLoadState('domcontentloaded')
-
-    const lib = await window.evaluate(() =>
-      (window as unknown as { api: { libraryGet: () => Promise<unknown> } }).api.libraryGet()
-    )
-    expect(lib).toBeTruthy()
-  } catch (err) {
-    console.log(`[cold-start] main process output:\n${mainLog.join('')}`)
-    throw err
-  } finally {
-    await app.close()
-    profile.cleanup()
-  }
-})
+}

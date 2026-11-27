@@ -37,17 +37,6 @@ test('cold start: IPC answers while first-launch binary downloads are pending', 
     expect(lib).toBeTruthy()
   } catch (err) {
     console.log(`[cold-start] main process output:\n${mainLog.join('')}`)
-    // Diagnostic (#734): a dead main process, or one whose default context was replaced?
-    for (const wait of [200, 1000, 3000]) {
-      await new Promise((r) => setTimeout(r, wait))
-      const again = await app
-        .evaluate(({ app }) => ({ ready: app.isReady(), pid: process.pid, up: process.uptime() }))
-        .then((v) => JSON.stringify(v))
-        .catch((e: unknown) => `failed: ${String(e).split('\n')[0]}`)
-      console.log(
-        `[cold-start] evaluate after ${wait} ms: ${again}; alive=${app.process().exitCode === null}`
-      )
-    }
     throw err
   } finally {
     await app.close()

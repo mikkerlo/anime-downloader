@@ -1918,7 +1918,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     // The trackers a resolution queued to: each one's drain is kicked (#715).
     const kicks = new Set<TrackerId>()
     await locked(async () => {
-      const files = await conflictStore.readAll()
+      // Lenient: a corrupt file of one provider never blocks another's resolves.
+      // Its records read as "no longer held", and the drop below re-reads each
+      // file it writes strictly, so an unreadable file is never overwritten.
+      const files = await conflictStore.readAll({ lenient: true })
       const done = new Map<TrackerId, Set<string>>()
       for (const id of new Set(Array.isArray(conflictIds) ? conflictIds : [])) {
         const file = files.find((f) => f.records.some((r) => r.id === id))

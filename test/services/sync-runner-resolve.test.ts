@@ -1107,6 +1107,23 @@ describe.each(RESOLVE_CASES)('resolve on an $label-owned library (#715)', (tc) =
   })
 })
 
+describe('a corrupt conflicts file of one provider (#715 review)', () => {
+  it('blocks no other provider’s resolve, and is never overwritten', async () => {
+    const { pc, rec } = await shikimoriSideConflict()
+    const bad = path.join(pc.userData, 'sync-state', 'conflicts-anilist.json')
+    fs.writeFileSync(bad, '{ not json')
+    pc.offline.value = true
+    const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
+    expect(res).toMatchObject({ resolved: [rec.id], failed: [] })
+    expect(await conflicts(pc)).toEqual([])
+    expect(fs.readFileSync(bad, 'utf8')).toBe('{ not json')
+    // Its own records read as no longer held.
+    expect(await pc.runner.resolve(['c-al'], { 'c-al': keep('local') })).toMatchObject({
+      failed: [{ id: 'c-al', reason: 'This conflict is no longer held.' }]
+    })
+  })
+})
+
 describe('conflictLibraries filters to the record’s owner (#715)', () => {
   const watchRecord = (id: string, ownerScope: number | string, partyLib: string) =>
     ({

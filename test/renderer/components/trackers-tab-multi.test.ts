@@ -237,6 +237,23 @@ describe('only with two or more connected accounts', () => {
 })
 
 describe('switching the primary', () => {
+  it('a rejected setPrimary leaves the current primary checked and the clicked radio unchecked', async () => {
+    connect('shikimori', 'anilist')
+    fake.api.trackerSetPrimary.mockRejectedValueOnce(new Error('set-primary failed'))
+    const w = await mountTab()
+    const shiki = radioOf(w, 'shikimori').element as HTMLInputElement
+    const ani = radioOf(w, 'anilist').element as HTMLInputElement
+    expect([shiki.checked, ani.checked]).toEqual([true, false])
+
+    await radioOf(w, 'anilist').setValue(true)
+    await flushPromises()
+
+    expect(fake.api.trackerSetPrimary).toHaveBeenCalledWith('anilist')
+    expect([shiki.checked, ani.checked]).toEqual([true, false])
+    expect(badgeOn(w)).toEqual(['shikimori'])
+    expect(card(w, 'anilist').find('.choice-error').text()).toContain('set-primary failed')
+  })
+
   it("clicking AniList's radio calls trackerSetPrimary once, never setSetting, and the badge follows the broadcast", async () => {
     connect('shikimori', 'anilist')
     const w = await mountTab()
@@ -351,6 +368,34 @@ describe('disconnecting the primary', () => {
       expect(fake.main.storedPrimary).toBe('anilist')
     }
   )
+
+  it("MyAnimeList primary of three: disconnecting it from MAL's own card asks, and Confirm sets the pick", async () => {
+    connect('shikimori', 'anilist', 'mal')
+    fake.main.storedPrimary = 'mal'
+    const w = await mountTab()
+    expect(badgeOn(w)).toEqual(['mal'])
+    await disconnect(w, 'mal')
+
+    const dialog = primaryDialog(w)
+    expect(dialog.exists()).toBe(true)
+    const radios = dialog.findAll<HTMLInputElement>('input[type="radio"]')
+    expect(radios.map((r) => r.element.value)).toEqual(['shikimori', 'anilist'])
+    expect(radios.map((r) => r.element.checked)).toEqual([true, false])
+    await radios[1]!.setValue(true)
+    await dialog.find('[data-action="confirm"]').trigger('click')
+    await flushPromises()
+    expect(fake.api.trackerSetPrimary).toHaveBeenCalledTimes(1)
+    expect(fake.api.trackerSetPrimary).toHaveBeenCalledWith('anilist')
+  })
+
+  it('the cards sit together in TrackerId order, with Feature sources after them', async () => {
+    connect('shikimori', 'anilist', 'mal')
+    const w = await mountTab()
+    const order = Array.from((w.element as HTMLElement).children).map(
+      (el) => (el as HTMLElement).dataset.trackerId ?? el.className
+    )
+    expect(order).toEqual(['shikimori', 'anilist', 'mal', 'feature-sources'])
+  })
 
   it('two accounts: disconnecting the primary shows no dialog', async () => {
     connect('shikimori', 'anilist')

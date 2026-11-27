@@ -93,14 +93,21 @@ const discardedNote = ref(0);
 const reconcileOffered = ref(false);
 const choiceError = ref('');
 
-async function choosePrimary(e: Event): Promise<void> {
+async function choosePrimary(): Promise<void> {
   choiceError.value = '';
   try {
     await trackersStore.setPrimary(props.trackerId);
     showSaved();
   } catch (err) {
-    // The radio follows the store, which didn't move.
-    (e.target as HTMLInputElement).checked = false;
+    // The store didn't move, so the DOM goes back to it. The radios share one
+    // group across the cards: the click also unchecked the primary's radio in
+    // another card, and Vue won't re-patch it, since its `checked` binding
+    // never changed.
+    for (const radio of document.querySelectorAll<HTMLInputElement>(
+      'input[name="tracker-primary"]'
+    )) {
+      radio.checked = radio.value === primary.value;
+    }
     choiceError.value = String(err);
   }
 }

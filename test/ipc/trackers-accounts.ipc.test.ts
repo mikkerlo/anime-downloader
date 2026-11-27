@@ -75,6 +75,7 @@ function rig(
   opts: {
     instances?: readonly ('anilist' | 'mal')[]
     seed?: Record<string, unknown>
+    /** `AppDeps.newTrackerCardsEnabled` (#703, #702): on unless a test turns it off. */
     newTrackerCardsEnabled?: boolean
   } = {}
 ) {
@@ -760,6 +761,39 @@ describe('the vault on a Shikimori-only profile', () => {
     await r.invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'discard' })
     for (const m of vaultMembers) expect(r.spies[m], m).not.toHaveBeenCalled()
     expect(r.safe.untouched()).toBe(true)
+  })
+})
+
+// #702: flipped through `AppDeps.newTrackerCardsEnabled`, never by re-mocking `electron`.
+describe('the new-tracker-cards flag (MAL)', () => {
+  it('off: BEGIN(mal) and a pasted URL are refused with no bind and no browser, and the accounts state says false', async () => {
+    const r = rig({ newTrackerCardsEnabled: false })
+    await r.invoke(CHANNELS.TRACKER_SET_CLIENT_CONFIG, 'mal', { clientId: 'cid' })
+    const begin = vi.spyOn(r.auth, 'begin')
+    await expect(r.invoke(CHANNELS.TRACKER_BEGIN_AUTH, 'mal')).rejects.toThrow(
+      "MyAnimeList sign-in isn't available in this build yet"
+    )
+    await expect(r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'mal', malUrl('s', 'c'))).rejects.toThrow(
+      "MyAnimeList sign-in isn't available in this build yet"
+    )
+    expect(begin).not.toHaveBeenCalled()
+    expect(r.openExternal).not.toHaveBeenCalled()
+    expect(r.fakes.mal.signIn.begun).toHaveLength(0)
+    expect(
+      (await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)).newTrackerCardsEnabled
+    ).toBe(false)
+  })
+
+  it('on: BEGIN(mal) proceeds, and the accounts state says true', async () => {
+    const r = rig({ newTrackerCardsEnabled: true })
+    await r.invoke(CHANNELS.TRACKER_SET_CLIENT_CONFIG, 'mal', { clientId: 'cid' })
+    const pending = r.invoke<TrackerAuthResult>(CHANNELS.TRACKER_BEGIN_AUTH, 'mal')
+    await vi.waitFor(() => expect(r.openExternal).toHaveBeenCalledTimes(1))
+    expect(
+      (await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)).newTrackerCardsEnabled
+    ).toBe(true)
+    await r.invoke(CHANNELS.TRACKER_CANCEL_AUTH, 'mal')
+    expect(await pending).toEqual({ status: 'cancelled' })
   })
 })
 

@@ -1757,3 +1757,23 @@ download or Delete runs there).
   The page paints from `GET_ANIME_CACHE` and falls back to offline
   `GET_ANIME`, so the case stays green while either route still answers from
   the title's cache entry.
+
+## MyAnimeList fixtures
+
+#702 (T6) adds `test/fixtures/mal/`: the list pages, the entry reads and
+writes, `/users/@me`, the capability reads, the token responses and the error
+bodies (400 "Invalid client id", 403 `forbidden`, 403 "DoS detected",
+`invalid_grant`, `invalid_client`, `invalid_token`, 404).
+
+- **Written, not captured.** They follow MAL's documented and
+  community-reported shapes: no real MAL account was used. The slice's verify
+  list ([Trackers › MyAnimeList](./trackers.md#myanimelist)) replaces them
+  with captures.
+- **The fake.** `test/helpers/fake-mal.ts` serves them as a fake `fetch`
+  behind the two unpackaged-only overrides, `ANIME_DL_MAL_API_BASE` and
+  `ANIME_DL_MAL_OAUTH_BASE`, so every request still goes through
+  `fetchWithTimeout` and the MAL client. `ANIME_DL_MAL_LOOPBACK_PORT=0` gives
+  the sign-in loopback a free port.
+- **The construction.** `test/helpers/mal-tracker.ts` builds MAL the way
+  `index.ts` does (`createMalTracker`), with the real lifecycle, vault,
+  fan-out and router, for the drain and primary-branch tests.

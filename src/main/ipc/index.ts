@@ -4,6 +4,7 @@ import type { StorageService } from '../store/types'
 import type { CredentialVault } from '../trackers/credential-vault'
 import type { TrackerLifecycle } from '../trackers/lifecycle'
 import type { TrackerAuthSessions } from '../trackers/auth-session'
+import type { MalSetup } from '../trackers/mal/setup'
 import type { TrackerRateEntry } from '../trackers/types'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
@@ -144,6 +145,8 @@ export interface AppDeps {
    * another one has a user, so no browser opens and no port is bound.
    */
   secondTrackerEnabled: boolean
+  /** The MAL card's redirect URL and client-ID Test (#702). */
+  malSetup?: MalSetup
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

@@ -348,9 +348,15 @@ onMounted(async () => {
       </SettingsRow>
 
       <!-- Kept mounted (v-show): Reconnect starts the body's sign-in, and the
-         body is shown once it has one in progress, or the reason it couldn't start. -->
+         body is shown once it has one in progress, or the reason it couldn't start.
+         "Needs setup" shows it too: the setup to fix is the body's (MAL, #702).
+         The second-tracker flag (#701) hides it for a tracker that isn't connected. -->
       <SettingsRow
-        v-show="(!user && !connectBlocked) || ((sessionExpired || expiringSoon) && connectActive)"
+        v-show="
+          (!user && !connectBlocked) ||
+          (user && needsSetup) ||
+          ((sessionExpired || expiringSoon) && connectActive)
+        "
         stack
       >
         <component :is="connectForm" ref="connectFormRef" :complete="complete" />

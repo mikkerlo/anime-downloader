@@ -188,6 +188,8 @@ export const CHANNELS = {
   TRACKER_SET_FEATURE_SOURCE: 'tracker:set-feature-source',
   TRACKER_SET_MIRROR: 'tracker:set-mirror',
   TRACKER_SET_PRIMARY: 'tracker:set-primary',
+  // The MAL card's Test of the saved client ID (#702).
+  TRACKER_TEST_CLIENT_CONFIG: 'tracker:test-client-config',
   TRACKER_TRIGGER_SYNC: 'tracker:trigger-sync',
   TRACKER_UPDATE_RATE: 'tracker:update-rate',
 

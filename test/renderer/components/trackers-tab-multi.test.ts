@@ -7,9 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { defineComponent, h } from 'vue'
 import TrackersTab from '../../../src/renderer/src/components/settings/TrackersTab.vue'
-import TrackerAccountCard from '../../../src/renderer/src/components/settings/TrackerAccountCard.vue'
 import { useTrackersStore } from '../../../src/renderer/src/stores/trackers'
 
 enableAutoUnmount(afterEach)
@@ -44,8 +42,8 @@ function createMultiApi() {
     mirror: {},
     featureSources: {},
     secondTrackerEnabled: true,
-    // Main today: Shikimori's and AniList's primary writers are registered.
-    primaryCapable: ['shikimori', 'anilist']
+    // Main today: all three trackers' primary writers are registered.
+    primaryCapable: ['shikimori', 'anilist', 'mal']
   }
   const accountsChanged: Listener<TrackerAccountsState>[] = []
 
@@ -266,39 +264,33 @@ describe('switching the primary', () => {
 })
 
 describe('the picker offers only trackers with a primary write path', () => {
-  // No MyAnimeList card on main yet (#702), so the card is mounted directly.
-  const Body = defineComponent({
-    setup(_, { expose }) {
-      expose({ active: false, begin: async () => {}, reset: () => {} })
-      return () => h('div')
-    }
-  })
-
-  async function malCard(): Promise<VueWrapper> {
-    const w = mount(TrackerAccountCard, {
-      props: { trackerId: 'mal', desc: '', connectForm: Body },
-      attachTo: document.body
-    })
+  it('main today registers a MyAnimeList writer (#702): its card offers the radio, and picking it sets MAL primary', async () => {
+    connect('shikimori', 'mal')
+    const w = await mountTab()
+    expect(radioOf(w, 'mal').exists()).toBe(true)
+    await radioOf(w, 'mal').setValue(true)
     await flushPromises()
-    return w
-  }
-
-  it('MyAnimeList connected beside Shikimori, with no MAL writer registered: no radio on its card', async () => {
-    connect('shikimori', 'mal')
-    const w = await malCard()
-    expect(w.find('.mirror-row').exists()).toBe(true)
-    expect(w.find('input[name="tracker-primary"]').exists()).toBe(false)
+    expect(fake.api.trackerSetPrimary).toHaveBeenCalledWith('mal')
+    expect(badgeOn(w)).toEqual(['mal'])
   })
 
-  it('once main registers a MAL writer, the radio appears', async () => {
+  it('a tracker with no registered writer gets no radio, and gets it once one is registered', async () => {
     connect('shikimori', 'mal')
+    fake.main.primaryCapable = ['shikimori', 'anilist']
+    const w = await mountTab()
+    expect(switchOf(w, 'mal').exists()).toBe(true)
+    expect(radioOf(w, 'mal').exists()).toBe(false)
+    expect(radioOf(w, 'shikimori').exists()).toBe(true)
+
     fake.main.primaryCapable = ['shikimori', 'anilist', 'mal']
-    const w = await malCard()
-    expect(w.find('input[name="tracker-primary"]').exists()).toBe(true)
+    fake.announce()
+    await flushPromises()
+    expect(radioOf(w, 'mal').exists()).toBe(true)
   })
 
   it('a primary disconnect leaving AniList and MyAnimeList, with no MAL writer: no dialog offers MAL', async () => {
     connect('shikimori', 'anilist', 'mal')
+    fake.main.primaryCapable = ['shikimori', 'anilist']
     const w = await mountTab()
     await card(w, 'shikimori')
       .findAll('button')
@@ -319,11 +311,6 @@ describe('disconnecting the primary', () => {
       .trigger('click')
     await flushPromises()
   }
-
-  beforeEach(() => {
-    // Every tracker has a writer here (MAL's stands in for #702's).
-    fake.main.primaryCapable = ['shikimori', 'anilist', 'mal']
-  })
 
   it('three accounts: the dialog lists the two remaining, the interim pre-selected; Confirm on the other sets it', async () => {
     connect('shikimori', 'anilist', 'mal')

@@ -29,16 +29,23 @@ type Phase = 'binding' | 'waiting' | 'exchanging' | 'connected' | 'cancelled' | 
 
 interface Loopback {
   close(): void
+  /** The port bound: the requested one, or the system's pick for port 0. */
+  port: number
 }
 
 interface Attempt {
   readonly trackerId: TrackerId
   readonly flow: TrackerAuthFlow
   readonly provider: TrackerAuthProvider
-  /** Null for an implicit attempt (a completion with no attempt held). */
-  readonly params: TrackerAuthAttempt | null
+  /**
+   * Null for an implicit attempt (a completion with no attempt held). A
+   * loopback attempt's is set once the bind settled, with the port it got.
+   */
+  params: TrackerAuthAttempt | null
   phase: Phase
   loopback: Loopback | null
+  /** The loopback flow's wait limit (`loopback().timeoutMs`), cleared once the attempt leaves `waiting`. */
+  timer: NodeJS.Timeout | null
   /** The pending `BEGIN`, until it resolves. */
   settle: ((result: TrackerAuthResult) => void) | null
   /** The one exchange, once started: a second callback or paste awaits it. */
@@ -109,6 +116,8 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
   }
 
   function closeLoopback(a: Attempt): void {
+    if (a.timer) clearTimeout(a.timer)
+    a.timer = null
     a.loopback?.close()
     a.loopback = null
   }
@@ -172,12 +181,16 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
   function onCallback(a: Attempt, path: string): http.RequestListener {
     return (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-      if (url.pathname !== path) {
-        res.writeHead(404).end()
+      // `Connection: close` on every answer: a kept-alive browser socket would
+      // hold the port past teardown and turn the next `BEGIN` into `port-busy`.
+      if (url.pathname !== path || req.method !== 'GET') {
+        res.writeHead(404, { Connection: 'close' }).end()
         return
       }
       const reply = (status: number, page: string): void => {
-        res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' }).end(page)
+        res
+          .writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' })
+          .end(page)
       }
       if (current.get(a.trackerId) !== a) return reply(400, PAGE_REFUSED)
       // A duplicate callback (a browser reload) while exchanging, or after: no second exchange.
@@ -193,8 +206,13 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
 
   async function bindLoopback(a: Attempt, port: number, path: string): Promise<Loopback> {
     const servers: http.Server[] = []
+    // `close()` alone leaves a connection that is mid-request (and on some
+    // platforms its kept-alive sockets) outliving the attempt.
     const close = (): void => {
-      for (const s of servers) s.close()
+      for (const s of servers) {
+        s.closeAllConnections()
+        s.close()
+      }
     }
     const v4 = createServer(onCallback(a, path))
     try {
@@ -215,7 +233,25 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
         throw new PortBusyError(messageOf(err))
       }
     }
-    return { close }
+    return { close, port: bound }
+  }
+
+  /** Drops an attempt still waiting for the browser after `ms`: its listeners close. */
+  function armTimeout(a: Attempt, ms: number | undefined): void {
+    if (!ms) return
+    a.timer = setTimeout(() => {
+      a.timer = null
+      if (current.get(a.trackerId) !== a || a.phase !== 'waiting') return
+      current.delete(a.trackerId)
+      a.phase = 'error'
+      closeLoopback(a)
+      settleBegin(a, {
+        status: 'error',
+        kind: 'auth',
+        message: `The ${TRACKER_LABELS[a.trackerId]} sign-in timed out. Press Connect again.`
+      })
+    }, ms)
+    a.timer.unref?.()
   }
 
   async function begin(id: TrackerId): Promise<TrackerAuthResult> {
@@ -224,15 +260,15 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
     if (flow.needsSetup?.()) return { status: 'needs-setup' }
     // A second `BEGIN` cancels the first (and resolves a reloaded window's old one).
     cancel(id)
-    const params = flow.begin()
     const loopback = flow.loopback?.()
     const a: Attempt = {
       trackerId: id,
       flow,
       provider,
-      params,
+      params: loopback ? null : flow.begin(),
       phase: loopback ? 'binding' : 'waiting',
       loopback: null,
+      timer: null,
       settle: null,
       exchange: null,
       input: null
@@ -245,21 +281,36 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
       try {
         handle = await bindLoopback(a, loopback.port, loopback.path)
       } catch (err) {
-        if (!(err instanceof PortBusyError)) throw err
+        if (!(err instanceof PortBusyError)) {
+          current.delete(id)
+          throw err
+        }
         // Whoever holds the port would receive the code: never open the browser.
         if (current.get(id) !== a) return pending
         if (a.phase === 'binding') a.phase = 'waiting'
+        a.params = flow.begin({ port: loopback.port })
         a.settle = null
-        return { status: 'port-busy', authorizeUrl: params.authorizeUrl }
+        armTimeout(a, loopback.timeoutMs)
+        return { status: 'port-busy', authorizeUrl: a.params.authorizeUrl }
       }
-      // Cancelled, superseded or completed by a paste while binding.
+      // Cancelled or superseded while binding.
       if (current.get(id) !== a || a.phase !== 'binding') {
         handle.close()
         return pending
       }
       a.loopback = handle
+      try {
+        // The authorize URL carries the port the loopback got (port 0 in tests).
+        a.params = flow.begin({ port: handle.port })
+      } catch (err) {
+        current.delete(id)
+        closeLoopback(a)
+        throw err
+      }
       a.phase = 'waiting'
+      armTimeout(a, loopback.timeoutMs)
     }
+    const params = a.params!
 
     try {
       await deps.openExternal(params.authorizeUrl)
@@ -337,6 +388,7 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
       params: null,
       phase: 'exchanging',
       loopback: null,
+      timer: null,
       settle: null,
       exchange: null,
       input: null

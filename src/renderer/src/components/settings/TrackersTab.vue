@@ -12,10 +12,11 @@ import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 import ShikimoriConnectForm from './ShikimoriConnectForm.vue';
 import AniListConnectForm from './AniListConnectForm.vue';
+import MalConnectForm from './MalConnectForm.vue';
 
-// Settings → Trackers (#700): one account card per tracker. T6 adds the
-// MyAnimeList card. The AniList card (#703) shows only while main reports the
-// new-tracker-cards flag on (#703 § 8). With 2+ connected accounts the cards
+// Settings → Trackers (#700): one account card per tracker, in `TrackerId`
+// order. The AniList (#703) and MyAnimeList (#702) cards show only while main
+// reports the new-tracker-cards flag on. With 2+ connected accounts the cards
 // get the primary and mirror controls and this tab the feature sources (#701).
 const libraryStore = useLibraryStore();
 const trackersStore = useTrackersStore();
@@ -85,7 +86,7 @@ async function onPrimaryChosen(trackerId: TrackerId): Promise<void> {
   }
 }
 
-// A card behind the flag (AniList, #703) renders only once the accounts
+// A card behind the flag (AniList, MyAnimeList) renders only once the accounts
 // payload says so, which can land after this tab mounted: a link to it waits
 // for that payload, then scrolls.
 let waitingFor: TrackerId | null = null;
@@ -132,6 +133,13 @@ watch(
       tracker-id="anilist"
       desc="Connect AniList to sync your list there."
       :connect-form="AniListConnectForm"
+      @needs-primary-choice="onNeedsPrimaryChoice"
+    />
+    <TrackerAccountCard
+      v-if="newTrackerCardsEnabled"
+      tracker-id="mal"
+      desc="Connect your MyAnimeList account through your own MyAnimeList app."
+      :connect-form="MalConnectForm"
       @needs-primary-choice="onNeedsPrimaryChoice"
     />
 

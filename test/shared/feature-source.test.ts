@@ -17,6 +17,9 @@ import { createShikimoriProvider } from '../../src/main/trackers/shikimori.provi
 import { TRACKER_CAPABILITIES, type TrackerProvider } from '../../src/main/trackers/types'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { createTestAniList } from '../helpers/anilist-server'
+import { createMalClient } from '../../src/main/trackers/mal/client'
+import { createMalAuth } from '../../src/main/trackers/mal/auth'
+import { createMalProvider } from '../../src/main/trackers/mal/provider'
 
 const IDS: TrackerId[] = ['shikimori', 'anilist', 'mal']
 
@@ -83,13 +86,29 @@ describe('the capability matrix', () => {
   })
 
   it('agrees with every real provider: no declared capability the matrix lacks, and each declared one implemented', async () => {
-    // Shikimori and AniList (#703) are on main; #702 adds MyAnimeList here.
+    // Shikimori, AniList (#703) and MyAnimeList (#702).
     // Shikimori's equality waits for T11b-d, which move its remaining members.
     const anilist = (await createTestAniList()).provider
+    const malStore = new InMemoryStorage()
+    const malClient = createMalClient({ spacingMs: 0, sleep: async () => {} })
+    const mal = createMalProvider({
+      store: malStore as never,
+      client: malClient,
+      auth: createMalAuth({
+        store: malStore as never,
+        vault: {} as never,
+        client: malClient,
+        generation: () => 0,
+        port: 0
+      }),
+      generation: () => 0
+    })
     const providers: TrackerProvider<unknown, unknown>[] = [
       createShikimoriProvider({ store: new InMemoryStorage() as never }) as never,
-      anilist as never
+      anilist as never,
+      mal as never
     ]
+    expect(providers.map((p) => p.id)).toEqual(['shikimori', 'anilist', 'mal'])
     for (const p of providers) {
       for (const cap of TRACKER_CAPABILITIES) {
         const declared = p.capabilities[cap]

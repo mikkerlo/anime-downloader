@@ -232,7 +232,12 @@ describe('the new-tracker-cards flag', () => {
     const wrapper = mount(TrackersTab)
     await flushPromises()
     const cards = wrapper.findAll('.tracker-account-card')
-    expect(cards.map((c) => c.attributes('data-tracker-id'))).toEqual(['shikimori', 'anilist'])
+    // MyAnimeList's card (#702) shares the flag and follows AniList's.
+    expect(cards.map((c) => c.attributes('data-tracker-id'))).toEqual([
+      'shikimori',
+      'anilist',
+      'mal'
+    ])
     expect(anilistCard(wrapper).find('.set-group-head h3').text()).toBe('AniList')
     expect(anilistCard(wrapper).find('.anilist-open').text()).toBe('Open AniList')
     expect(wrapper.text()).not.toMatch(/AniList Downloader/)

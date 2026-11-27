@@ -198,6 +198,10 @@ describe('secondTrackerEnabled(isPackaged)', () => {
     expect(INDEX).toContain('const secondTracker = secondTrackerEnabled(app.isPackaged)')
     expect(INDEX.split('secondTrackerEnabled: secondTracker').length - 1).toBe(2)
     expect(INDEX).toContain('hasPrimaryWriter: (id) => trackerFanOut.hasPrimaryWriter(id)')
+    // AniList's and MAL's writers are registered on that fan-out (Shikimori's
+    // router sets its own: the primaryCapable row below).
+    expect(INDEX).toContain('writePrimary: (malId, change) => anilistPrimary.write(malId, change)')
+    expect(INDEX).toContain('mal.registerPrimary(trackerFanOut,')
   })
 })
 

@@ -1,0 +1,20 @@
+{
+  "id": 5114,
+  "title": "Fullmetal Alchemist: Brotherhood",
+  "recommendations": [
+    {
+      "node": {
+        "id": 11061,
+        "title": "Hunter x Hunter (2011)"
+      },
+      "num_recommendations": 120
+    },
+    {
+      "node": {
+        "id": 1575,
+        "title": "Code Geass: Hangyaku no Lelouch"
+      },
+      "num_recommendations": 80
+    }
+  ]
+}

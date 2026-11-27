@@ -50,7 +50,8 @@ async function mountPanel(
         ],
         primary,
         mirror: {},
-        featureSources: {}
+        featureSources: {},
+        newTrackerCardsEnabled: false
       } satisfies TrackerAccountsState),
       trackerGetRates: vi.fn(async (trackerId: TrackerId) => ({
         trackerId,

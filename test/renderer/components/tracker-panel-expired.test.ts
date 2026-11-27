@@ -69,7 +69,8 @@ async function mountPanel(
     ],
     primary,
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   } satisfies TrackerAccountsState)
   getSyncStatus.mockResolvedValue({
     state: 'idle',

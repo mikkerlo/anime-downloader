@@ -160,8 +160,15 @@ export async function launchApp(
   // alive and ready (#734: about 1 in 2 cold launches on a CI runner, main
   // included). By DOMContentLoaded `bootstrap()` has registered IPC and created
   // the window, so the first main evaluate lands after the boot burst.
-  const window = await app.firstWindow()
-  await window.waitForLoadState('domcontentloaded')
+  try {
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+  } catch (e) {
+    // The caller never receives `app`, so close it here: a retry (e2e-syncplay's
+    // `setupRetry`) would otherwise boot a second instance on this profile.
+    await app.close().catch(() => {})
+    throw e
+  }
   return { app, profile, downloads }
 }
 

@@ -3,9 +3,10 @@
 //
 // AniList's GraphQL endpoint can answer 200 and still carry `errors`, so the
 // body is always checked and `errors[0].status` decides when it is there. An
-// `Invalid token` message is `auth` whatever its status: the shapes of a
-// revoked token and a truncated paste are unverified, and if either came back
-// as a 400 a status-only read would drop every queued entry one at a time.
+// `Invalid token` message is `auth` whatever its status: a revoked token
+// answers HTTP 400 with `errors[0] = {status: 400, message: "Invalid token"}`
+// (observed 2026-11-27, #734), so a status-only read would drop every queued
+// entry one at a time. The truncated-paste shape is still unverified.
 
 import { isNetworkError } from '../../lib/errors'
 import { TrackerApiError } from '../errors'

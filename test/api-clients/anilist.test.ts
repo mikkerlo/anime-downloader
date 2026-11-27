@@ -2,7 +2,8 @@
 // `test/fixtures/anilist/`: every query and mutation, the session's pinning,
 // the cache-first `getAiringInfo`, and `mediaId` on `tracker:get-rate`. The
 // fixtures are built from AniList's documented response shapes and the
-// epic's live probe; none was captured from a real account in this PR.
+// epic's live probe; `invalid-token-400` has the revoked-token shape #734's
+// real-account check observed (2026-11-27), and #740's rows replay it.
 import { describe, it, expect, afterEach, beforeEach, vi, type Mock } from 'vitest'
 import { ipcMain } from 'electron'
 import {
@@ -20,7 +21,7 @@ import {
   SAVE_MEDIA_LIST_ENTRY
 } from '../../src/main/trackers/anilist/queries'
 import { classifyAnilistError } from '../../src/main/trackers/anilist/classify'
-import { AniListApiError } from '../../src/main/trackers/anilist/errors'
+import { AniListApiError, AniListSessionError } from '../../src/main/trackers/anilist/errors'
 import { ANILIST_AUTHORIZE_URL } from '../../src/main/trackers/anilist/client'
 import { jwtExpiry, type AniListListEntry } from '../../src/main/trackers/anilist/provider'
 import { nextWatchedRate, type RateValues } from '../../src/main/lib/shikimori-rate'
@@ -221,6 +222,25 @@ describe('MediaList: getEntry', () => {
     )
     const { provider } = await createTestAniList()
     expect(await provider.getEntry(SESSION, { malId: 1, remoteId: null })).toBeNull()
+  })
+
+  it('a refused token is the session-gone error, with the refusal as its cause; so is the dead-token rejection after it (#740)', async () => {
+    serve((call) =>
+      call.operation === 'IdMap'
+        ? { body: { data: { Page: { media: [{ id: 101, idMal: 1 }] } } } }
+        : { status: 400, body: anilistFixture('invalid-token-400') }
+    )
+    const { provider } = await createTestAniList()
+    const first = await provider.getEntry(SESSION, { malId: 1, remoteId: null }).catch((e) => e)
+    expect(first).toBeInstanceOf(AniListSessionError)
+    expect(provider.isSessionGone(first)).toBe(true)
+    expect(first.cause).toBeInstanceOf(AniListApiError)
+    expect(first.cause).toMatchObject({ status: 400, errorStatus: 400 })
+    // The limiter now refuses the token without sending: a raw 401 underneath.
+    const second = await provider.getEntry(SESSION, { malId: 1, remoteId: null }).catch((e) => e)
+    expect(second).toBeInstanceOf(AniListSessionError)
+    expect(second.cause).toMatchObject({ status: 401, body: '' })
+    expect(server!.of('MediaList')).toHaveLength(1)
   })
 })
 
@@ -805,5 +825,115 @@ describe('tracker:get-rate carries AniList’s mediaId (§ 5)', () => {
       values: { episodes: 2, status: 'watching', score: 0, rewatches: 0 },
       stale: true
     })
+  })
+})
+
+describe('tracker:get-rate on the read that finds the token refused (#740)', () => {
+  /** The cached row: 3 episodes at 50, where the server has 7 at 85. */
+  const CACHED = {
+    entry: {
+      id: 9001,
+      mediaId: 101,
+      status: 'CURRENT',
+      score: 50,
+      progress: 3,
+      repeat: 0,
+      updatedAt: 1,
+      media: { id: 101, idMal: 1 }
+    },
+    smotretAnime: null
+  }
+  const CACHED_VALUES = { episodes: 3, status: 'watching', score: 5, rewatches: 0 }
+
+  async function refusedRig(reply: { status: number; body: unknown }, cached: boolean) {
+    const world = serveWorld({
+      entries: [
+        {
+          id: 9001,
+          mediaId: 101,
+          idMal: 1,
+          status: 'CURRENT',
+          score: 85,
+          progress: 7,
+          repeat: 0,
+          updatedAt: 1
+        }
+      ]
+    })
+    world.inject('MediaList', reply)
+    const t = await createTestAniList({ seed: { anilistUserRates: cached ? [CACHED] : [] } })
+    const sync = createAniListSyncService(t.provider, {
+      store: t.store as never,
+      broadcast: () => {},
+      syncStatusChannel: 's',
+      offlineQueueChangedChannel: 'q',
+      rateUpdatedChannel: 'r',
+      ratesRefreshedChannel: 'rr'
+    })
+    const fan = createTrackerFanOut({
+      store: t.store as never,
+      trackers: [{ sync: sync as unknown as TrackerSyncService<unknown, unknown> }]
+    })
+    const trackerRates = createTrackerRates({
+      store: t.store as never,
+      trackers: fan,
+      isOffline: () => false
+    })
+    ;(ipcMain.handle as unknown as Mock).mockClear()
+    registerTrackers({
+      store: t.store,
+      trackerRates,
+      newTrackerCardsEnabled: true
+    } as unknown as AppDeps)
+    const h = new Map((ipcMain.handle as unknown as Mock).mock.calls.map(([c, fn]) => [c, fn]))
+    const getRate = () =>
+      h.get(CHANNELS.TRACKER_GET_RATE)!({}, 'anilist', 1) as Promise<TrackerRateResult | null>
+    return { t, world, getRate }
+  }
+
+  const REFUSED = [
+    ['HTTP 400 Invalid token', { status: 400, body: anilistFixture('invalid-token-400') }],
+    ['HTTP 401', { status: 401, body: anilistFixture('invalid-token-401') }],
+    [
+      'auth-200 (a 200 whose errors[0].status is 401)',
+      { status: 200, body: { errors: [{ message: 'Invalid token', status: 401 }], data: null } }
+    ]
+  ] as const
+
+  it.each(REFUSED)(
+    '%s, with a cached rate: answers stale from the cache and expires the session',
+    async (_name, reply) => {
+      const { t, world, getRate } = await refusedRig(reply, true)
+      expect(await getRate()).toMatchObject({ values: CACHED_VALUES, stale: true })
+      expect(world.server.of('MediaList')).toHaveLength(1)
+      await vi.waitFor(() => expect(t.store.get('anilistSessionExpired')).toBe(true))
+      expect(t.store.get('anilistCredentials')).toBeNull()
+      expect(t.onSessionExpired).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('HTTP 400 Invalid token, with an empty cache: rejects with the session-gone error, not the raw refusal', async () => {
+    const { getRate } = await refusedRig(
+      { status: 400, body: anilistFixture('invalid-token-400') },
+      false
+    )
+    const err = await getRate().catch((e) => e)
+    expect(err).toBeInstanceOf(AniListSessionError)
+    expect(err.message).toBe('AniList session expired — sign in again in Settings → Trackers')
+    expect(err.cause).toBeInstanceOf(AniListApiError)
+    expect(err.cause.message).toBe('AniList API error: 400 — Invalid token')
+  })
+
+  it.each([
+    ['an item-class 400 (validation-400)', { status: 400, body: anilistFixture('validation-400') }],
+    ['a server 5xx', { status: 500, body: { errors: [{ message: 'Internal Server Error' }] } }]
+  ] as const)('%s still rejects, not stale, and the session stays', async (_name, reply) => {
+    const { t, getRate } = await refusedRig(reply, true)
+    const err = await getRate().catch((e) => e)
+    expect(err).toBeInstanceOf(AniListApiError)
+    expect(err).not.toBeInstanceOf(AniListSessionError)
+    expect(err.status).toBe(reply.status)
+    expect(t.store.get('anilistSessionExpired')).toBe(false)
+    expect(t.onSessionExpired).not.toHaveBeenCalled()
   })
 })

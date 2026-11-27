@@ -15,6 +15,10 @@ export interface FakeTrackerMain {
   queueLength: number
   /** The `shikimori:get-sync-status` queue length, which the card must not read. */
   legacyQueueLength: number
+  /** The AniList / MAL cards' flag (#703), as main reports it. */
+  newTrackerCardsEnabled?: boolean
+  /** The account's `sessionExpiresAt` (AniList's token `exp`, #703). */
+  sessionExpiresAt?: number
 }
 
 const IDS: TrackerId[] = ['shikimori', 'anilist', 'mal']
@@ -54,12 +58,18 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
           hasCredentials: user !== null && !main.sessionExpired,
           sessionExpired: mine && main.sessionExpired,
           needsSetup: mine && main.needsSetup,
-          credentialState: user !== null && !main.sessionExpired ? 'ok' : 'none'
-        }
+          credentialState: user !== null && !main.sessionExpired ? 'ok' : 'none',
+          ...(mine && user !== null && main.sessionExpiresAt !== undefined
+            ? { sessionExpiresAt: main.sessionExpiresAt }
+            : {})
+        } satisfies TrackerAccount
       }),
       primary: main.user ? trackerId : null,
       mirror: {},
-      featureSources: {}
+      featureSources: {},
+      ...(main.newTrackerCardsEnabled !== undefined
+        ? { newTrackerCardsEnabled: main.newTrackerCardsEnabled }
+        : {})
     }
   }
 

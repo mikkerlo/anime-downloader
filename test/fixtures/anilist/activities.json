@@ -1,0 +1,40 @@
+{
+  "data": {
+    "Page": {
+      "activities": [
+        {
+          "id": 7001,
+          "status": "watched episode",
+          "progress": "5",
+          "createdAt": 1764100000,
+          "user": { "id": 6001, "name": "bob", "avatar": { "medium": null } },
+          "media": {
+            "id": 101,
+            "idMal": 1,
+            "isAdult": false,
+            "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+            "coverImage": {
+              "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg"
+            }
+          }
+        },
+        {
+          "id": 7002,
+          "status": "completed",
+          "progress": null,
+          "createdAt": 1764090000,
+          "user": { "id": 6002, "name": "carol", "avatar": { "medium": null } },
+          "media": {
+            "id": 950,
+            "idMal": 950,
+            "isAdult": true,
+            "title": { "romaji": "Adult Title", "english": null },
+            "coverImage": {
+              "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx950.jpg"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

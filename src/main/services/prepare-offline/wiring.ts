@@ -90,6 +90,10 @@ export interface TrackerRatesWiring {
   store: Store
   /** Every tracker's sync instance (the fan-out's `syncServices()`). */
   trackers: () => TrackerSyncService<unknown, unknown>[]
+  /** A tracker's details prefetch, the step's third phase (AniList's, #703). */
+  prefetch?: Partial<
+    Record<RatesTrackerId, Required<Pick<TrackerRatesStepDeps, 'prefetch' | 'abortPrefetch'>>>
+  >
 }
 
 /** One tracker's rates-step deps, each resolving the instance when a run calls it. */
@@ -102,10 +106,14 @@ export function trackerRatesDeps(
     if (!sync) throw new Error(`no ${trackerId} sync service`)
     return sync
   }
+  const prefetch = w.prefetch?.[trackerId]
   return {
     isConnected: () => isTrackerConnected(w.store, instance()),
     drain: () => instance().drainNow(),
-    refreshRates: (opts) => instance().refreshRates(opts)
+    refreshRates: (opts) => instance().refreshRates(opts),
+    ...(prefetch
+      ? { prefetch: () => prefetch.prefetch(), abortPrefetch: () => prefetch.abortPrefetch() }
+      : {})
   }
 }
 

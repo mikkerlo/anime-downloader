@@ -65,13 +65,22 @@ export function kickoffEntry(
   }
 }
 
-/** The kick-off's list at one online edge: `edgeTrackers`, with Shikimori's details prefetch. */
+/**
+ * The kick-off's list at one online edge: `edgeTrackers`, with Shikimori's
+ * details prefetch and any other tracker's from `prefetches` (AniList's, #703).
+ */
 export function kickoffTrackers(
   store: Store,
   syncs: Pick<TrackerSyncService<unknown, unknown>, 'trackerId' | 'keys' | 'syncQueue'>[],
-  prefetchShikimoriDetails: () => Promise<unknown> | unknown
+  prefetchShikimoriDetails: () => Promise<unknown> | unknown,
+  prefetches: Partial<
+    Record<Exclude<TrackerId, 'shikimori'>, () => Promise<unknown> | unknown>
+  > = {}
 ): KickoffTracker[] {
   return edgeTrackers(store, syncs).map((sync) =>
-    kickoffEntry(sync, sync.trackerId === 'shikimori' ? prefetchShikimoriDetails : undefined)
+    kickoffEntry(
+      sync,
+      sync.trackerId === 'shikimori' ? prefetchShikimoriDetails : prefetches[sync.trackerId]
+    )
   )
 }

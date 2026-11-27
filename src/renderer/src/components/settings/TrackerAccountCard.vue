@@ -8,6 +8,7 @@ import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 import TrackerPendingDialog from './TrackerPendingDialog.vue';
 import type { TrackerConnectFormHandle } from './tracker-connect-form';
+import { formatExpiry, isExpiringSoon } from './session-expiry';
 
 // One tracker's account in Settings → Trackers (#700): what Connectors' Shikimori
 // group was, keyed by `trackerId`. The connect body is the tracker's own
@@ -35,6 +36,15 @@ const sessionExpired = computed(() =>
 );
 const needsSetup = computed(() => Boolean(syncRow.value?.needsSetup || account.value?.needsSetup));
 const queueLength = computed(() => syncRow.value?.queueLength ?? 0);
+// A tracker whose token ends on a known date (AniList, #703): warned from two
+// weeks before it, while the session still works.
+const expiresAt = computed(() => account.value?.sessionExpiresAt);
+const expiringSoon = computed(
+  () => !sessionExpired.value && isExpiringSoon(expiresAt.value, Date.now())
+);
+const expiryDate = computed(() =>
+  typeof expiresAt.value === 'number' ? formatExpiry(expiresAt.value) : ''
+);
 
 const connectFormRef = ref<TrackerConnectFormHandle | null>(null);
 const connectActive = computed(() => connectFormRef.value?.active ?? false);
@@ -191,6 +201,9 @@ onMounted(async () => {
               ><span class="dot"></span>Needs setup</span
             >
             <span v-else class="chip green"><span class="dot"></span>Connected</span>
+            <span v-if="expiringSoon" class="chip orange expiry-chip"
+              ><span class="dot"></span>Expires {{ expiryDate }}</span
+            >
           </div>
           <div v-if="sessionExpired" class="ci-meta">
             {{ label }} rejected the saved sign-in.
@@ -198,6 +211,9 @@ onMounted(async () => {
               {{ queueLength }} pending update{{ queueLength > 1 ? 's' : '' }} will sync after you
               reconnect.
             </template>
+          </div>
+          <div v-else-if="expiringSoon" class="ci-meta expiry-warning">
+            Your {{ label }} sign-in expires on {{ expiryDate }}. Sign in again to keep syncing.
           </div>
           <div v-else class="ci-meta">{{ label }} account</div>
         </div>
@@ -209,7 +225,17 @@ onMounted(async () => {
         >
           Reconnect
         </button>
-        <button v-else class="btn btn-sm btn-outline" @click="disconnect">Disconnect</button>
+        <button
+          v-else-if="expiringSoon"
+          class="btn btn-sm btn-primary sign-in-again"
+          :disabled="connectActive"
+          @click="reconnect"
+        >
+          Sign in again
+        </button>
+        <button v-if="!sessionExpired" class="btn btn-sm btn-outline" @click="disconnect">
+          Disconnect
+        </button>
       </div>
 
       <!-- With no account the chip has no card to sit on, so it gets a row; the
@@ -220,7 +246,7 @@ onMounted(async () => {
 
       <!-- Kept mounted (v-show): Reconnect starts the body's sign-in, and the
          body is shown once it has one in progress, or the reason it couldn't start. -->
-      <SettingsRow v-show="!user || (sessionExpired && connectActive)" stack>
+      <SettingsRow v-show="!user || ((sessionExpired || expiringSoon) && connectActive)" stack>
         <component :is="connectForm" ref="connectFormRef" :complete="complete" />
       </SettingsRow>
 

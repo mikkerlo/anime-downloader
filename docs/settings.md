@@ -64,13 +64,13 @@ kept-changes Discard go through the tracker channels, which write
 | `prepareOfflineLastRun` | object \| null | `null` | The last Prepare for offline run (#592): `{ finishedAt, cancelled, steps: [{ id, label, status }] }`, with no per-file details, so Settings > General can say "Last prepared 3 d ago" after a restart. Written by `PrepareOfflineService` at the end of each run |
 | `sharedLibraryPromptDismissed` | array | `[]` | `libraryId`s whose found-on-a-drive toast was answered "Don't ask for this drive" (#581); the availability poller doesn't offer them again. Forget removes the library's id — see [Shared Library](shared-library.md#drive-detection-581) |
 | `anilistCredentials` | object\|null | `null` | AniList token, as a credential-vault blob `{ v: 1, enc: 'safeStorage' \| 'plain', data }`, never in clear unless the keyring is unavailable ([Storage](storage.md#tracker-credential-vault-690)). Write-through. Refused by both `set-setting` and `get-setting`; written by #695 (T3b)'s auth channels. Owner: #703 (T7) |
-| `anilistUser` | object\|null | `null` | The signed-in AniList account, `TrackerUser` (`{ id, nickname, avatar }`), in plain text so the queue keeps its owner when the credential is `locked`. Owner: #703 (T7) |
+| `anilistUser` | object\|null | `null` | The signed-in AniList account, `TrackerUser` (`{ id, nickname, avatar }`) plus what the `Viewer` check cached: `scoreFormat`, `displayAdultContent`, and `tokenExpiresAt` (the token's JWT `exp` in ms, or null), in plain text so the queue keeps its owner when the credential is `locked` and the accounts state reads the expiry without decrypting. Owner: #703 (T7) |
 | `anilistSessionExpired` | boolean | `false` | AniList rejected the stored token; the user must sign in again. Owner: #703 (T7) |
 | `anilistUserRates` | array | `[]` | Cached AniList list entries. Owner: #691 (T2a) / #703 (T7) |
 | `anilistUpdateQueue` | array | `[]` | Pending AniList rate updates. Write-through. Owner: #691 (T2a) |
 | `anilistParkedQueues` | object | `{}` | Unsynced AniList changes kept for another account, as `shikimoriParkedQueues`. Write-through. Owner: #691 (T2a) |
 | `anilistAnimeDetails` | object | `{}` | Per-anime AniList details. Owner: #703 (T7) |
-| `anilistIdMap` | object | `{}` | AniList media id ↔ MAL id map (AniList is the only tracker not keyed by MAL id). Owner: #703 (T7) |
+| `anilistIdMap` | object | `{}` | MAL id → AniList media id map (AniList is the only tracker not keyed by MAL id): `{ [malId]: { anilistId: number \| null, at } }`. `null` is a successful lookup that omitted the title, re-asked after 7 days. Seeded by every list read; survives a logout. Owner: #703 (T7) |
 | `myanimelistCredentials` | object\|null | `null` | MyAnimeList tokens, as a credential-vault blob (see `anilistCredentials`). Write-through. Refused by both `set-setting` and `get-setting`. Owner: #702 (T6) |
 | `myanimelistUser` | object\|null | `null` | The signed-in MAL account, `TrackerUser`, in plain text. Owner: #702 (T6) |
 | `myanimelistSessionExpired` | boolean | `false` | MAL rejected the stored refresh token. Owner: #702 (T6) |

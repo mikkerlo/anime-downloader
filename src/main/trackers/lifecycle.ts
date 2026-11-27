@@ -30,6 +30,7 @@ import { TRACKER_IDS, type TrackerRates } from '../services/trackers/rates'
 import type { PersistedStoreKey } from '../store/keys'
 import type { StorageService } from '../store/types'
 import { getClientConfig } from './client-config'
+import { assertMayConnect } from './flags'
 import { VAULT_KEYS, type CredentialVault, type VaultKey } from './credential-vault'
 import { TRACKER_KEYS } from './keys'
 import { resolvePrimary, storedPrimary as readStoredPrimary } from './primary'
@@ -121,6 +122,20 @@ export interface TrackerLifecycleDeps {
    * `newTrackerCardsEnabled`. Absent means off.
    */
   newTrackerCardsEnabled?: boolean
+  /**
+   * The second-tracker flag (`trackers/flags.ts`, #701), computed once by
+   * `index.ts`: while off, the head of a login's synchronous block refuses a
+   * tracker when another one has a user. The accounts state carries it as
+   * `secondTrackerEnabled`. Absent means off.
+   */
+  secondTrackerEnabled?: boolean
+  /**
+   * Whether main has a primary write path for the tracker (the fan-out's
+   * registered writers, #692): the accounts state lists those as
+   * `primaryCapable`, and the primary picker offers only them (#701). Absent
+   * means none.
+   */
+  hasPrimaryWriter?: (trackerId: TrackerId) => boolean
 }
 
 export interface TrackerLifecycle {
@@ -131,7 +146,9 @@ export interface TrackerLifecycle {
    * current or a logout bumped the generation since the call began, and
    * resolves `cancelled` having written nothing. Without one (the
    * `SHIKIMORI_EXCHANGE_CODE` alias) the login is unguarded, as in 6.x.
-   * Rejects with what `load` or `vault.encrypt` rejects with.
+   * Rejects with what `load` or `vault.encrypt` rejects with, and with
+   * `SecondTrackerRefusedError`, having written nothing, when the
+   * second-tracker flag is off and another tracker has a user (#701).
    */
   completeLogin(
     trackerId: TrackerId,
@@ -245,12 +262,15 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     const blob = credKey ? await vault.encrypt(credentials) : null
 
     // ---- One synchronous block from here: no await below. ----
-    // The head checks. The stale-attempt check refuses an overtaken sign-in;
-    // T5b's second-tracker check (#701) goes beside it, so a refusal also
-    // parks nothing, and #696's primary write goes with the commit.
+    // The head checks. The stale-attempt check refuses an overtaken sign-in.
+    // The second-tracker check (#701) runs here, after every await, so a
+    // tracker that connected while the user read or the encrypt was pending
+    // is seen; a refusal parks nothing, and #696's primary write goes with
+    // the commit below it.
     if (attempt && (!attempt.isCurrent() || generation(id) !== startGeneration)) {
       return { status: 'cancelled' }
     }
+    assertMayConnect(deps.secondTrackerEnabled === true, id, (t) => userOf(t) !== null)
 
     const steps = stepsOf(id)
     const prev = userOf(id)
@@ -374,7 +394,9 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
       featureSources:
         (store.get('trackerFeatureSource') as TrackerAccountsState['featureSources'] | undefined) ??
         {},
-      newTrackerCardsEnabled: deps.newTrackerCardsEnabled === true
+      newTrackerCardsEnabled: deps.newTrackerCardsEnabled === true,
+      secondTrackerEnabled: deps.secondTrackerEnabled === true,
+      primaryCapable: ORDER.filter((t) => deps.hasPrimaryWriter?.(t) === true)
     }
   }
 

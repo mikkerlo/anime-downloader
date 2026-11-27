@@ -4,20 +4,26 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 // `disconnect`: the live queue is about to be kept or dropped by a logout.
 // `switch`: main has already parked the previous account's changes, so there is
 // no Cancel and closing means Keep. `discard`: confirms dropping a kept row.
+// `mirror-off` (#701): switching a mirror off drops the changes queued for it
+// from the primary, so it asks first, even with none queued; closing cancels.
 const props = defineProps<{
-  mode: 'disconnect' | 'switch' | 'discard';
+  mode: 'disconnect' | 'switch' | 'discard' | 'mirror-off';
   /** The tracker's display name (`TRACKER_LABELS`), e.g. 'Shikimori'. */
   trackerLabel: string;
   count: number;
   /** Whose changes these are; null for the unknown-account bucket. */
   nickname: string | null;
   newNickname?: string;
+  /** `mirror-off`: the primary's display name, which the mirrored changes came from. */
+  primaryLabel?: string;
 }>();
 
 const emit = defineEmits<{
   keep: [];
   discard: [];
   cancel: [];
+  /** `mirror-off`: Stop mirroring. */
+  confirm: [];
 }>();
 
 const changes = computed(() =>
@@ -31,8 +37,14 @@ const owner = computed(() => props.nickname ?? 'an unknown account');
 const title = computed(() => {
   if (props.mode === 'disconnect') return `Disconnect ${props.trackerLabel}?`;
   if (props.mode === 'switch') return 'Signed in to a different account';
+  if (props.mode === 'mirror-off') return `Stop mirroring to ${props.trackerLabel}?`;
   return 'Discard kept changes?';
 });
+
+// Only the changes mirrored from the primary are dropped (#692's `discardQueue`).
+const mirroredCount = computed(() =>
+  props.count === 1 ? "1 change won't be sent" : `${props.count} changes won't be sent`
+);
 
 function close(): void {
   if (props.mode === 'switch') emit('keep');
@@ -67,6 +79,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         {{ changes }} for {{ owner }} {{ notSynced }} been synced yet. They won't be sent to
         {{ newNickname }}.
       </p>
+      <p v-else-if="mode === 'mirror-off'" class="pending-text">
+        Changes you make in {{ primaryLabel }} will no longer be sent to {{ trackerLabel }}.
+        <template v-if="count > 0">
+          {{ mirroredCount }}: they were mirrored from {{ primaryLabel }} and haven't synced yet.
+        </template>
+      </p>
       <p v-else class="pending-text">
         {{ changes }} for {{ owner }} {{ notSynced }} been synced yet. Discarding them can't be
         undone.
@@ -81,11 +99,19 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         >
           Cancel
         </button>
-        <button class="btn btn-danger" data-action="discard" @click="emit('discard')">
+        <button
+          v-if="mode === 'mirror-off'"
+          class="btn btn-danger"
+          data-action="confirm"
+          @click="emit('confirm')"
+        >
+          Stop mirroring
+        </button>
+        <button v-else class="btn btn-danger" data-action="discard" @click="emit('discard')">
           Discard
         </button>
         <button
-          v-if="mode !== 'discard'"
+          v-if="mode === 'disconnect' || mode === 'switch'"
           ref="keepButton"
           class="btn btn-primary"
           data-action="keep"

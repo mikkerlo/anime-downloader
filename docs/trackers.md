@@ -642,6 +642,39 @@ vault.
 `myanimelistClientConfig` and `myanimelistClientSecret` for the renderer
 (`setClientConfig`, [Storage](./storage.md)). The secret is never returned.
 
+### The second-tracker flag
+
+#701 (T5b) gates connecting a second tracker until #708 (T10) removes the
+flag. `secondTrackerEnabled(isPackaged)` (`src/main/trackers/flags.ts`) is
+true unpackaged and false packaged. `index.ts` computes it once and passes the
+one value through `AppDeps.secondTrackerEnabled` and the lifecycle's deps, so a
+test flips it by building deps. It is separate from the AniList and MyAnimeList
+cards' flag (`newTrackerCardsEnabled`, #703), which lifts earlier; the card
+flag must not lift before this one is in.
+
+- **The rule.** While the flag is off, a sign-in for tracker X is refused when
+  another tracker Y ≠ X has a user (an expired session counts). A reconnect of
+  the same tracker isn't a second tracker, so Shikimori's "Sign in again"
+  keeps working. One function, `assertMayConnect`, applies it everywhere; the
+  reason is "Connecting a second tracker isn't available yet".
+- **At begin.** `tracker:begin-auth` and `shikimori:get-auth-url` reject before
+  any attempt starts: no browser opens and no port is bound.
+- **At commit.** An attempt stays open after its `BEGIN` resolves, so a later
+  paste or loopback callback could otherwise commit a second tracker (begin
+  AniList; connect Shikimori; paste the AniList token). `completeLogin` checks
+  again at the head of its synchronous block, after the user read and, for
+  AniList and MAL, after `vault.encrypt` resolves, so a Shikimori commit that
+  landed during the encrypt is seen. The check runs after the stale-attempt
+  check and before the park, the credential commit and #696's second-connect
+  primary write, so a refused login writes nothing: no credentials, no user,
+  no `<provider>SessionExpired`, no park, no `trackerPrimary`. It rejects with
+  `SecondTrackerRefusedError`; the attempt ends in `error` with `kind: 'auth'`,
+  and `shikimori:exchange-code` rejects with the same message.
+- **The renderer.** The accounts state carries the flag as
+  `secondTrackerEnabled`. A card for a tracker that isn't connected hides its
+  Connect action, and says why, while another tracker is connected and the
+  flag is off (the Shikimori card too, for an AniList-only user).
+
 ## Primary, mirrors and feature sources
 
 #696 (T3c) adds the three setters (`tracker:set-primary`, `tracker:set-mirror`,
@@ -836,7 +869,7 @@ generic sync service carries both halves:
 
 **`tracker:accounts-changed`** carries the same `TrackerAccountsState` as
 `tracker:list-accounts`, built by the same `accountsState()`, so a field added
-to the builder (#701's `secondTrackerEnabled`, #702 and #703's
+to the builder (#701's `secondTrackerEnabled` and `primaryCapable`, #702 and #703's
 `newTrackerCardsEnabled`) reaches both. Every emit goes through one seam,
 `trackerLifecycle.notifyAccountsChanged()`; `index.ts` passes the lifecycle
 `broadcast` and the channel. It fires once after:
@@ -893,7 +926,14 @@ has the details).
   is the account half of the detail page's Auto-download gate: the `airing`
   source resolves (so that tracker has a user). `detailsFor(trackerId, malId)`
   reads `detailsByTracker`, which the eager `tracker:details-updated`
-  subscriber upserts per tracker.
+  subscriber upserts per tracker. `defaultFeatureSource(feature)` is the same
+  call with that feature's override left out, the "Default (‹tracker›)" label
+  of Settings → Trackers (#701).
+- **The multi-account controls (#701)** read `multiAccount`,
+  `secondTrackerEnabled`, `primaryCapable` and `mirrorOn(id)`, and call
+  `setPrimary`, `setMirror` and `setFeatureSource`, which go through #696's
+  setters and leave the state to the broadcast. `openReconcile` is null until
+  #708 sets it.
 - **`accountsLoaded`** (#704) goes true in the same step that applies the
   first accounts payload (the init read, or a broadcast that beat it), or when
   that read fails, and never goes back. The detail page gates its rate panel
@@ -944,10 +984,10 @@ carries the row. Nothing in the drain triggers one; this is accepted for now.
 #700 (T5a) moves the Shikimori account out of Settings → Connectors (which
 keeps the Anime 365 token) into a Trackers tab right after it
 (`TrackersTab.vue`), as a generic `TrackerAccountCard` keyed by `trackerId`.
-T6 adds the MyAnimeList card and T5b the multi-account controls. #703 (T7)
-adds the AniList card (`AniListConnectForm.vue`), shown only while the
-accounts state's `newTrackerCardsEnabled` is true, so a Shikimori-only user of
-a packaged build sees the one card.
+T6 adds the MyAnimeList card and #701 (T5b) the multi-account controls
+below. #703 (T7) adds the AniList card (`AniListConnectForm.vue`), shown only
+while the accounts state's `newTrackerCardsEnabled` is true, so a
+Shikimori-only user of a packaged build sees the one card.
 
 - **States** come from `useTrackersStore` for the card's tracker: the
   account's `user` (Connected, or not connected), and from its
@@ -974,6 +1014,53 @@ a packaged build sees the one card.
   (`usePrimaryTrackerLabel`, Shikimori's while there is none). Main's
   `SESSION_EXPIRED_MESSAGE` and `NOT_CONNECTED_MESSAGE` point at
   Settings → Trackers.
+
+### Multi-account controls
+
+#701 (T5b) adds the controls for two or more connected accounts (an expired
+one counts, as `anyAccount` does). With one account or none the tab is
+exactly T5a's. None of them uses `autoSave`, since `set-setting` refuses
+these keys: each calls a `useTrackersStore` action (`setPrimary`,
+`setMirror`, `setFeatureSource`) that calls #696's setter, the store follows
+the `tracker:accounts-changed` it emits, and the "Saved" toast flashes when
+the setter resolves.
+
+- **The primary.** Each connected card shows a "Primary tracker" radio and the
+  primary a "Primary" badge. The radio is offered only for a tracker in the
+  accounts state's `primaryCapable`: the trackers whose primary writer the
+  fan-out has registered (`TrackerFanOut.hasPrimaryWriter`). `applyChange`
+  throws for a primary with no writer, so MyAnimeList isn't offered until its
+  writer is on main.
+- **Disconnecting the primary.** When the logout resolves with
+  `needsPrimaryChoice`, `TrackersTab` opens `TrackerPrimaryDialog` ("Which
+  tracker becomes primary?") over the remaining trackers that can be primary,
+  with the interim primary main already wrote (the first of them in
+  `TrackerId` order) pre-selected. It has no Cancel: closing it, or Confirm on
+  the interim, keeps that tracker and calls nothing; Confirm on another calls
+  `tracker:set-primary`. A rejected logout, or one that left fewer than two
+  candidates, opens nothing. A non-empty queue still asks through
+  `TrackerPendingDialog` first.
+- **The mirror toggle**, on every connected card but the primary's: "Mirror
+  changes to this tracker", on unless `trackerMirror` says false. Switching it
+  off asks for the count (`tracker:set-mirror(id, false)`) and opens
+  `TrackerPendingDialog`'s `mirror-off` mode, even at 0: "Stop mirroring to
+  ‹tracker›?", naming the changes mirrored from the primary, with Cancel and
+  Stop mirroring. Cancel calls nothing more. Stop mirroring sends
+  `{ confirm: true }`; main writes the flag off, then discards the mirror
+  queue under the tracker's lock. The card then reports the result's
+  `discarded` ("4 changes discarded", nothing at 0), never the dialog's count.
+- **Switching it back on** returns `offerReconcile`. The card shows "Review
+  differences with ‹primary›?" (Review, Not now) only while the store's
+  `openReconcile` is set; #708 (T10) sets it, so until then the offer stays
+  hidden rather than a dead button.
+- **Feature sources**, a group below the cards: one row per feature key
+  (Calendar, Chronology, For You, Details, Auto-download episode counts for
+  `airing`), listing the connected trackers `isCapable` allows. One is plain
+  text and none hides the row. Otherwise a select: "Default (‹tracker›)" first,
+  which clears the override, labelled from the store's `defaultFeatureSource`
+  (`resolveFeatureSource` with that feature's override left out), then each
+  tracker. An override naming a disconnected tracker stays stored; the select
+  shows Default.
 
 ## Boot, the online edge and Prepare
 

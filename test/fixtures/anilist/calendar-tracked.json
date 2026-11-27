@@ -1,0 +1,85 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 301,
+          "idMal": 301,
+          "isAdult": false,
+          "format": "TV_SHORT",
+          "title": { "romaji": "Mini Anime", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx301.jpg"
+          },
+          "nextAiringEpisode": { "episode": 2, "airingAt": 1764350000 }
+        },
+        {
+          "id": 235,
+          "idMal": 235,
+          "isAdult": false,
+          "format": "TV",
+          "title": { "romaji": "Meitantei Conan", "english": "Case Closed" },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx235.jpg"
+          },
+          "nextAiringEpisode": { "episode": 1181, "airingAt": 1764500000 }
+        },
+        {
+          "id": 302,
+          "idMal": 302,
+          "isAdult": false,
+          "format": "TV",
+          "title": { "romaji": "Finished Anime", "english": "Finished" },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx302.jpg"
+          },
+          "nextAiringEpisode": null
+        },
+        {
+          "id": 950,
+          "idMal": 950,
+          "isAdult": true,
+          "format": "ONA",
+          "title": { "romaji": "Adult Title", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx950.jpg"
+          },
+          "nextAiringEpisode": { "episode": 3, "airingAt": 1764400000 }
+        },
+        {
+          "id": 303,
+          "idMal": null,
+          "isAdult": false,
+          "format": "ONA",
+          "title": { "romaji": "No MAL Id", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx303.jpg"
+          },
+          "nextAiringEpisode": { "episode": 7, "airingAt": 1764360000 }
+        },
+        {
+          "id": 154587,
+          "idMal": 52991,
+          "isAdult": false,
+          "format": "TV",
+          "title": { "romaji": "Sousou no Frieren", "english": "Frieren: Beyond Journey's End" },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx154587.jpg"
+          },
+          "nextAiringEpisode": { "episode": 5, "airingAt": 1764300000 }
+        },
+        {
+          "id": 400,
+          "idMal": 400,
+          "isAdult": false,
+          "format": "TV",
+          "title": { "romaji": "Completed On List", "english": null },
+          "coverImage": {
+            "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx400.jpg"
+          },
+          "nextAiringEpisode": { "episode": 9, "airingAt": 1764450000 }
+        }
+      ]
+    }
+  }
+}

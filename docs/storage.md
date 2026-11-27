@@ -89,7 +89,17 @@ Attached roots themselves are never storage roots: see [Shared Library](./shared
 
 ### Shikimori display snapshots: `userData/shikimori-snapshots.json` (#570)
 
-The calendar and friends-activity snapshots (see [Shikimori](./shikimori.md#offline-snapshots-568)) persist to `{ version: 1, userId, calendar?: { data, fetchedAt }, friendsActivity?: { data, fetchedAt } }`, written tmp + rename on every stored set. Not a store key, for the same `config.json` re-serialization reason as the merge bases. At startup the shikimori-sync service keeps the file only when `userId` is the stored `shikimoriUser.id` and deletes it otherwise; `clearOfflineSnapshots()` (logout, account switch) deletes it.
+The calendar and friends-activity snapshots (see [Shikimori](./shikimori.md#offline-snapshots-568)) persist to `{ version: 1, userId, calendar?: { data, fetchedAt }, friendsActivity?: { data, fetchedAt } }`, written tmp + rename on every stored set. Not a store key, for the same `config.json` re-serialization reason as the merge bases. At startup the shikimori-sync service keeps the file only when `userId` is the stored `shikimoriUser.id` and deletes it otherwise; `clearOfflineSnapshots()` (logout, account switch) deletes it. Since #709 the writer is the shared helper `src/main/trackers/display-snapshots.ts`; the file's path, shape and bytes are unchanged.
+
+### Per-provider display snapshots: `userData/<provider>-snapshots.json` (#709)
+
+Every other provider's display snapshots go to their own file in the same shape and under the same rules (`trackers/display-snapshots.ts`), keyed by that provider's `<provider>User.id`. Today that is AniList's calendar: `userData/anilist-snapshots.json`, `{ version: 1, userId, calendar?: { data, fetchedAt } }` (T12 adds `friendsActivity?`).
+
+- **Created** only by a successful AniList calendar fetch, so a user who never connects AniList (or never opens the calendar with AniList the source) never has the file.
+- **Loaded** at startup only when its `userId` is the stored `anilistUser.id`; any other file is deleted, as is one found with no AniList account.
+- **Deleted** on AniList logout and account switch (the lifecycle's per-tracker reset, `anilistSessionSteps`).
+- A fetch that outlives a switch is returned to its caller but never stored, so it can't evict the new user's snapshot. Written tmp + rename.
+- **Downgrade:** v6.x never reads it, so the file is inert there.
 
 ## Hot/Cold Storage
 

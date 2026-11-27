@@ -12,12 +12,9 @@ import {
   type TasteRate
 } from '../recommendations'
 import { rateFromCacheEntry, type StoredRateEntry } from '../lib/shikimori-rate-cache'
-import {
-  CALENDAR_CACHE_TTL_MS,
-  type CachedCalendar,
-  type CalendarEntry,
-  type ShikiSyncStatus
-} from '../services/shikimori-sync'
+import { type CalendarEntry, type ShikiSyncStatus } from '../services/shikimori-sync'
+import { createShikimoriCalendar } from '../services/shikimori-sync/calendar'
+import { freshResult as fresh, staleResult as stale } from '../trackers/display-snapshots'
 import {
   cachedShikimoriRate,
   createShikimoriPrimary,
@@ -47,16 +44,6 @@ export function register({
   syncRunner,
   secondTrackerEnabled
 }: AppDeps) {
-  // Null when the account changed while the list was in flight: it is the
-  // previous account's list and must not land in the new one's cache (#588).
-  // The fetch lives in the sync service (#592), shared with Prepare for offline.
-  async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[] | null> {
-    const result = await sync.fetchAndCacheRates({
-      status: status as shikimori.ShikiUserRateStatus | undefined
-    })
-    return result ? result.entries : null
-  }
-
   // The shared refresh (#694): the calendar, recs and `SHIKIMORI_RATES_REFRESHED`
   // go with the instance's `refreshRates`, and this tail runs after it.
   trackerRates.setRefreshHooks('shikimori', {
@@ -465,10 +452,6 @@ export function register({
     sync.invalidateRecommendations()
   }
 
-  function currentUserId(): number | undefined {
-    return (store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id
-  }
-
   // Shikimori's steps in the account lifecycle (#695), which runs login,
   // switch and logout for every tracker: today's `sync.*` calls, the
   // user-scoped reset's prefetch abort and snapshots, and the Shared Library
@@ -709,16 +692,6 @@ export function register({
   // Offline (#568) both lists come from the sync service's snapshot, whatever
   // its age, before anything that could reach the network; with none, an empty
   // stale shape. Online a failed fetch falls back to the snapshot the same way.
-  function fresh<T>(snapshot: { data: T; fetchedAt: number }): ShikiSnapshotResult<T> {
-    return { data: snapshot.data, fetchedAt: snapshot.fetchedAt, stale: false }
-  }
-
-  function stale<E>(snapshot: { data: E[]; fetchedAt: number } | null): ShikiSnapshotResult<E[]> {
-    return snapshot
-      ? { data: snapshot.data, fetchedAt: snapshot.fetchedAt, stale: true }
-      : { data: [], fetchedAt: null, stale: true }
-  }
-
   ipcMain.handle(
     CHANNELS.SHIKIMORI_GET_FRIENDS_ACTIVITY,
     async (): Promise<ShikiSnapshotResult<ShikiFriendActivityEntry[]>> => {
@@ -746,100 +719,20 @@ export function register({
     }
   )
 
+  // The body is shared with `tracker:get-calendar`'s Shikimori branch (#709);
+  // this alias keeps its key and behaviour until v7.0 (#717).
+  const getShikimoriCalendar = createShikimoriCalendar({
+    store,
+    sync,
+    lookupByMalIds,
+    isOffline: () => offlineService?.isOffline() ?? false
+  })
+
   ipcMain.handle(
     CHANNELS.SHIKIMORI_GET_CALENDAR,
-    async (_event, force = false): Promise<ShikiSnapshotResult<CalendarEntry[]>> => {
-      const cachedCalendar = sync.getCachedCalendar()
-      if (offlineService?.isOffline()) return stale(cachedCalendar)
-      if (
-        !force &&
-        cachedCalendar &&
-        !cachedCalendar.invalidated &&
-        Date.now() - cachedCalendar.fetchedAt < CALENDAR_CACHE_TTL_MS
-      ) {
-        return fresh(cachedCalendar)
-      }
-      try {
-        return fresh(await fetchCalendar())
-      } catch (err) {
-        const snapshot = sync.getCachedCalendar()
-        if (!snapshot) throw err
-        console.warn('[shikimori] calendar fetch failed, serving the snapshot:', err)
-        return stale(snapshot)
-      }
-    }
+    (_event, force = false): Promise<ShikiSnapshotResult<CalendarEntry[]>> =>
+      getShikimoriCalendar(force)
   )
-
-  async function fetchCalendar(): Promise<CachedCalendar> {
-    const userId = currentUserId() ?? null
-
-    let cachedRates = store.get('shikimoriUserRates') as {
-      rate: { target_id?: number; episodes: number; status: shikimori.ShikiUserRateStatus }
-      shikiAnime?: { id: number }
-    }[]
-
-    if (cachedRates.length === 0) {
-      try {
-        await fetchAndCacheShikimoriRates()
-        cachedRates = store.get('shikimoriUserRates') as typeof cachedRates
-      } catch (err) {
-        console.warn('[shikimori] calendar: rate fetch failed:', err)
-      }
-    }
-
-    // Older cached entries may lack `rate.target_id`; fall back to `shikiAnime.id`
-    // (also the MAL ID) — same compatibility shim used by `home:get-continue-watching`.
-    function malIdOf(r: (typeof cachedRates)[number]): number | undefined {
-      return r.rate.target_id ?? r.shikiAnime?.id
-    }
-
-    const tracked = new Set<number>()
-    const statusByMal = new Map<number, shikimori.ShikiUserRateStatus>()
-    for (const r of cachedRates) {
-      const malId = malIdOf(r)
-      if (!malId) continue
-      statusByMal.set(malId, r.rate.status)
-      if (
-        r.rate.status === 'watching' ||
-        r.rate.status === 'rewatching' ||
-        r.rate.status === 'planned'
-      ) {
-        tracked.add(malId)
-      }
-    }
-
-    if (tracked.size === 0) return sync.setCachedCalendar([], userId)
-
-    const calendar = await shikimori.getCalendar()
-    const filtered = calendar.filter((c) => c.next_episode_at && tracked.has(c.anime.id))
-
-    const malIds = Array.from(new Set(filtered.map((c) => c.anime.id)))
-    const malMap = await lookupByMalIds(malIds)
-
-    function absoluteImage(url: string): string {
-      return url.startsWith('http') ? url : `${SHIKI_BASE}${url}`
-    }
-
-    const entries: CalendarEntry[] = filtered.map((c) => {
-      const malId = c.anime.id
-      const smotret = malMap[malId] ?? null
-      const posterUrl =
-        smotret?.posterUrlSmall ||
-        absoluteImage(c.anime.image.preview || c.anime.image.x96 || c.anime.image.original)
-      return {
-        malId,
-        animeId: smotret?.id ?? null,
-        name: c.anime.russian || c.anime.name,
-        posterUrl,
-        kind: c.anime.kind,
-        episodeInt: String(c.next_episode ?? c.anime.episodes_aired + 1),
-        nextEpisodeAt: c.next_episode_at!,
-        userStatus: statusByMal.get(malId) ?? 'planned'
-      }
-    })
-
-    return sync.setCachedCalendar(entries, userId)
-  }
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_RELATED, async (_event, malId: number) => {
     const franchise = await shikimori.getFranchise(malId)

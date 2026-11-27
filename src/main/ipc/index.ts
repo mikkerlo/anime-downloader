@@ -5,6 +5,7 @@ import type { CredentialVault } from '../trackers/credential-vault'
 import type { TrackerLifecycle } from '../trackers/lifecycle'
 import type { TrackerAuthSessions } from '../trackers/auth-session'
 import type { MalSetup } from '../trackers/mal/setup'
+import type { AniListCalendar } from '../trackers/anilist/calendar'
 import type { TrackerRateEntry } from '../trackers/types'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
@@ -147,6 +148,8 @@ export interface AppDeps {
   secondTrackerEnabled: boolean
   /** The MAL card's redirect URL and client-ID Test (#702). */
   malSetup?: MalSetup
+  /** AniList's calendar, `tracker:get-calendar`'s AniList branch (#709). */
+  anilistCalendar?: AniListCalendar
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

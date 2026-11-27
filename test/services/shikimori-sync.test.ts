@@ -870,6 +870,27 @@ describe('ShikimoriSyncService — snapshots on disk (#570)', () => {
     expect(fs.readdirSync(dir)).toEqual(['shikimori-snapshots.json'])
   })
 
+  // #709 moved the writer into `trackers/display-snapshots.ts`; the bytes are
+  // 6.x's: key order version, userId, calendar, friendsActivity, no spacing.
+  it('the file is byte-for-byte the 6.x layout, whichever section was written last', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: 1_700_000_000_000 })
+    try {
+      const { svc } = makeService({}, file)
+      svc.setCachedFriendsActivity(1, [])
+      svc.setCachedCalendar([calEntry('A')])
+      const expected =
+        '{"version":1,"userId":1,' +
+        `"calendar":{"data":[${JSON.stringify(calEntry('A'))}],"fetchedAt":1700000000000},` +
+        '"friendsActivity":{"data":[],"fetchedAt":1700000000000}}'
+      expect(fs.readFileSync(file, 'utf8')).toBe(expected)
+      svc.invalidateCalendarCache()
+      svc.setCachedFriendsActivity(1, [])
+      expect(fs.readFileSync(file, 'utf8')).toBe(expected)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a file written for user 7 is ignored and deleted when the stored user is 8', () => {
     makeService({ shikimoriUser: { id: 7, nickname: 'a' } }, file).svc.setCachedCalendar([
       calEntry('A')

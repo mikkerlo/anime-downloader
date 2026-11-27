@@ -219,6 +219,15 @@ interface TrackerLogoutResult {
 // `resolveFeatureSource` (`src/shared/trackers/feature-source.ts`) resolves it.
 type TrackerFeature = 'calendar' | 'chronology' | 'forYou' | 'details' | 'airing'
 
+// ---- Calendar (#709) ---------------------------------------------------------
+
+// `tracker:get-calendar`: the resolved `calendar` source's calendar, in the
+// `shikimori:get-calendar` shape, and which tracker it came from. With no
+// source (no account, or MyAnimeList only) it is `trackerId: null` and empty.
+type TrackerCalendarResult = ShikiSnapshotResult<CalendarEntry[]> & {
+  trackerId: TrackerId | null
+}
+
 // ---- Details (#706) ----------------------------------------------------------
 
 // A title's details from a non-Shikimori tracker, normalized: what

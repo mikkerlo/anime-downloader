@@ -88,7 +88,8 @@ import { createTrackerAuthSessions } from './trackers/auth-session'
 import { createShikimoriProvider } from './trackers/shikimori.provider'
 import { createAiringDep, createTickIfAiringSource } from './trackers/feature-source'
 import { createAniListProvider } from './trackers/anilist/provider'
-import { createAniListSyncService } from './trackers/anilist/sync'
+import { anilistSessionSteps, createAniListSyncService } from './trackers/anilist/sync'
+import { anilistCalendarSyncHooks, createAniListCalendar } from './trackers/anilist/calendar'
 import { createAniListEventBridge } from './trackers/anilist/events'
 import { createAniListPrimary } from './services/trackers/anilist-primary'
 import { newTrackerCardsEnabled, secondTrackerEnabled } from './trackers/flags'
@@ -453,6 +454,16 @@ const anilistProvider = createAniListProvider({
   // Each `anilistAnimeDetails` write goes out as `tracker:details-updated` (#706).
   onDetailsWritten: (malId, details) => anilistSync.broadcastDetails(malId, details)
 })
+// AniList's calendar (#709): `tracker:get-calendar`'s AniList branch. Its
+// snapshot file appears only once an AniList calendar fetch succeeds.
+const anilistCalendar = createAniListCalendar({
+  store,
+  getCalendar: (opts) => anilistProvider.getCalendar(opts),
+  fetchRates: () => anilistSync.fetchAndCacheRates(),
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  isOffline,
+  snapshotsPath: path.join(app.getPath('userData'), 'anilist-snapshots.json')
+})
 const anilistSync = createAniListSyncService(anilistProvider, {
   store,
   broadcast: createAniListEventBridge({
@@ -481,12 +492,17 @@ const anilistSync = createAniListSyncService(anilistProvider, {
     void anilistProvider
       .requestPrefetch(malId)
       .catch((err) => console.warn('[anilist] details prefetch failed:', err)),
-  // A refresh of AniList's list ticks auto-download while AniList is the
-  // `airing` source (#706). Shikimori's tick stays in `ipc/shikimori.ipc.ts`.
-  onRatesRefreshed: createTickIfAiringSource({
-    store,
-    runTick: () => runAutoDownloadTick('rates-refreshed')
-  })
+  // Every entry written into AniList's rate cache, and every refresh of it,
+  // invalidates its calendar (#709). A refresh then ticks auto-download while
+  // AniList is the `airing` source (#706); Shikimori's tick stays in
+  // `ipc/shikimori.ipc.ts`.
+  ...anilistCalendarSyncHooks(
+    anilistCalendar,
+    createTickIfAiringSource({
+      store,
+      runTick: () => runAutoDownloadTick('rates-refreshed')
+    })
+  )
 })
 // AniList's primary branch (#703): queue-first, through the instance's drain.
 const anilistPrimary = createAniListPrimary({
@@ -537,16 +553,12 @@ const trackerLifecycle = createTrackerLifecycle({
   // Read at call time: the Shikimori router sets its writer after this.
   hasPrimaryWriter: (id) => trackerFanOut.hasPrimaryWriter(id)
 })
-// AniList's steps: the instance's own, plus the details prefetch's abort on a
-// logout or a switch, so no prefetch outlives the account it was for.
-trackerLifecycle.setSteps('anilist', {
-  resetExtra: () => anilistProvider.abortPrefetch(),
-  startTimer: () => anilistSync.startSyncTimer(),
-  drain: () => void anilistSync.syncQueue(),
-  stopTimer: () => anilistSync.stopSyncTimer(),
-  broadcastStatus: () => anilistSync.broadcastSyncStatus(),
-  broadcastQueue: () => anilistSync.broadcastQueueChanged()
-})
+// AniList's steps: the instance's own, plus the details prefetch's abort and
+// the calendar snapshot's deletion (#709) on a logout or a switch.
+trackerLifecycle.setSteps(
+  'anilist',
+  anilistSessionSteps({ provider: anilistProvider, sync: anilistSync, calendar: anilistCalendar })
+)
 // The sign-in flows, the capabilities `tracker:set-feature-source` checks
 // (#696), and the feature sources' reads (#706). MyAnimeList (#702) has no
 // `getAiringInfo`, so its sync construction passes `detailsUpdatedChannel` but
@@ -1002,6 +1014,7 @@ function registerIpcHandlers(): void {
     newTrackerCardsEnabled: newTrackerCards,
     secondTrackerEnabled: secondTracker,
     malSetup: mal.setup,
+    anilistCalendar,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

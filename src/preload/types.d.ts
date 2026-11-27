@@ -361,6 +361,8 @@ interface Api {
   onTrackerOfflineQueueChanged: (
     callback: (data: TrackerOfflineQueueChangedEvent) => void
   ) => Unsubscribe
+  // The calendar (#709)
+  trackerGetCalendar: (force?: boolean) => Promise<TrackerCalendarResult>
   // Details (#706)
   trackerGetDetails: (malId: number, trackerId?: TrackerId) => Promise<TrackerDetails | null>
   onTrackerDetailsUpdated: (callback: (data: TrackerDetailsUpdatedEvent) => void) => Unsubscribe

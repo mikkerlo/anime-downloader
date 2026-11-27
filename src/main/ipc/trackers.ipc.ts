@@ -1,6 +1,7 @@
 // The `tracker:*` account, auth and logout channels (#695), the primary,
 // mirror and feature-source setters (#696), the rate, sync-status and
-// queue channels (#694, epic #688), and the details read (#706). Each handler validates its
+// queue channels (#694, epic #688), the details read (#706) and the calendar
+// (#709). Each handler validates its
 // arguments, calls the shared function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
@@ -20,6 +21,7 @@ import { getClientConfig, setClientConfig } from '../trackers/client-config'
 import { storedFeatureSource } from '../trackers/feature-source'
 import { assertMayConnect } from '../trackers/flags'
 import { isConnected } from '../trackers/primary'
+import { createShikimoriCalendar } from '../services/shikimori-sync/calendar'
 import { TRACKER_LABELS } from '../trackers/types'
 import type { AppDeps } from './index'
 
@@ -116,8 +118,21 @@ export function register({
   trackerChoices: choices,
   newTrackerCardsEnabled,
   secondTrackerEnabled,
-  malSetup
+  malSetup,
+  shikimoriSyncService,
+  lookupByMalIds,
+  offlineService,
+  anilistCalendar
 }: AppDeps): void {
+  // `shikimori:get-calendar`'s body (#709): the same function, so the two
+  // channels can't disagree while Shikimori is the `calendar` source.
+  const getShikimoriCalendar = createShikimoriCalendar({
+    store,
+    sync: shikimoriSyncService,
+    lookupByMalIds,
+    isOffline: () => offlineService?.isOffline() ?? false
+  })
+
   const clientConfigView = (): TrackerClientConfig => ({
     ...getClientConfig(store),
     ...(malSetup ? { redirectUri: malSetup.redirectUri() } : {})
@@ -316,6 +331,24 @@ export function register({
       }
       const outcome = await rates.markEpisodeWatched(id, epNum, rates.primary())
       return outcome ? writtenValues(outcome) : null
+    }
+  )
+
+  // The airing calendar from the resolved `calendar` source (#709), read at
+  // call time. MyAnimeList has no schedule, so with no source (no account, or
+  // MAL only) it is the empty shape and no request is made.
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_CALENDAR,
+    async (_event, force?: unknown): Promise<TrackerCalendarResult> => {
+      const refetch = force === true
+      const source = storedFeatureSource(store, 'calendar')
+      if (source === 'shikimori') {
+        return { trackerId: source, ...(await getShikimoriCalendar(refetch)) }
+      }
+      if (source === 'anilist' && anilistCalendar) {
+        return { trackerId: source, ...(await anilistCalendar.get(refetch)) }
+      }
+      return { trackerId: null, data: [], fetchedAt: null, stale: false }
     }
   )
 

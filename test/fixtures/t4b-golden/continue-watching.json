@@ -1,0 +1,161 @@
+{
+  "reply": [
+    {
+      "kind": "next",
+      "animeId": 115,
+      "animeName": "Romaji 5115",
+      "posterUrl": "https://smotret.invalid/posters/115-fresh.jpg",
+      "episodeInt": "3",
+      "episodeLabel": "Episode 3",
+      "updatedAt": 1795780800000,
+      "malId": null
+    },
+    {
+      "kind": "next",
+      "animeId": 117,
+      "animeName": "Русский 5117",
+      "posterUrl": "https://shikimori.io/system/animes/preview/5117.jpg",
+      "episodeInt": "2",
+      "episodeLabel": "Episode 2",
+      "updatedAt": 1795780800000,
+      "malId": 5117
+    },
+    {
+      "kind": "next",
+      "animeId": 119,
+      "animeName": "Русский 5119",
+      "posterUrl": "https://shikimori.io/system/animes/preview/5119.jpg",
+      "episodeInt": "2",
+      "episodeLabel": "Episode 2",
+      "updatedAt": 1795780800000,
+      "malId": 5119
+    },
+    {
+      "kind": "resume",
+      "animeId": 101,
+      "animeName": "Alpha Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/101.jpg",
+      "episodeInt": "3",
+      "episodeLabel": "Alpha Saga — серия 3",
+      "position": 300,
+      "duration": 1200,
+      "updatedAt": 1795779000000
+    },
+    {
+      "kind": "resume",
+      "animeId": 103,
+      "animeName": "Gamma Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/103.jpg",
+      "episodeInt": "2",
+      "episodeLabel": "Gamma Saga — серия 2",
+      "position": 200,
+      "duration": 1200,
+      "updatedAt": 1795770000000
+    },
+    {
+      "kind": "resume",
+      "animeId": 104,
+      "animeName": "Delta Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/104.jpg",
+      "episodeInt": "5",
+      "episodeLabel": "Episode 5",
+      "position": 400,
+      "duration": 1200,
+      "updatedAt": 1795766400000
+    },
+    {
+      "kind": "resume",
+      "animeId": 109,
+      "animeName": "Theta Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/109.jpg",
+      "episodeInt": "4",
+      "episodeLabel": "Theta Saga — 4",
+      "position": 500,
+      "duration": 1200,
+      "updatedAt": 1795762800000
+    },
+    {
+      "kind": "resume",
+      "animeId": 110,
+      "animeName": "Kappa Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/110.jpg",
+      "episodeInt": "1",
+      "episodeLabel": "Episode 1",
+      "position": 600,
+      "duration": 1200,
+      "updatedAt": 1795759200000
+    },
+    {
+      "kind": "resume",
+      "animeId": 112,
+      "animeName": "Mu Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/112.jpg",
+      "episodeInt": "7",
+      "episodeLabel": "Episode 7",
+      "position": 700,
+      "duration": 1200,
+      "updatedAt": 1795755600000
+    },
+    {
+      "kind": "resume",
+      "animeId": 118,
+      "animeName": "Sigma Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/118.jpg",
+      "episodeInt": "2",
+      "episodeLabel": "Episode 2",
+      "position": 800,
+      "duration": 1200,
+      "updatedAt": 1795752000000
+    },
+    {
+      "kind": "next",
+      "animeId": 105,
+      "animeName": "Epsilon Saga (ru)",
+      "posterUrl": "https://smotret.invalid/posters/105.jpg",
+      "episodeInt": "2",
+      "episodeLabel": "Epsilon Saga — серия 2",
+      "updatedAt": 1795744800000,
+      "malId": 5105
+    },
+    {
+      "kind": "next",
+      "animeId": 106,
+      "animeName": "Zeta Saga (ru)",
+      "posterUrl": "https://shikimori.io/system/animes/preview/5106.jpg",
+      "episodeInt": "1",
+      "episodeLabel": "Episode 1",
+      "updatedAt": 1795741200000,
+      "malId": 5106
+    },
+    {
+      "kind": "next",
+      "animeId": 107,
+      "animeName": "Eta Saga (ru)",
+      "posterUrl": "https://cdn.invalid/x96/5107.jpg",
+      "episodeInt": "4",
+      "episodeLabel": "Eta Saga — 4",
+      "updatedAt": 1795737600000,
+      "malId": 5107
+    },
+    {
+      "kind": "next",
+      "animeId": 114,
+      "animeName": "Русский 5114",
+      "posterUrl": "https://shikimori.io/system/animes/original/5114.jpg",
+      "episodeInt": "6",
+      "episodeLabel": "Episode 6",
+      "updatedAt": 1795730400000,
+      "malId": 5114
+    }
+  ],
+  "getAnimeCalls": [
+    109,
+    105,
+    106,
+    107,
+    114,
+    115,
+    117,
+    119
+  ]
+}

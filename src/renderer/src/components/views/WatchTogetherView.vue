@@ -52,11 +52,11 @@ async function connect(): Promise<void> {
   }
   let username = cfg?.username?.trim() || '';
   if (!username) {
-    const shiki = await window.api.shikimoriGetUser();
-    if (shiki?.nickname) {
-      username = shiki.nickname;
-      await window.api.setSetting('syncplay', { ...(cfg || {}), username });
-    }
+    // The primary tracker's nickname, read at connect: no store whose first
+    // accounts pull could still be in flight (#699).
+    const { accounts, primary } = await window.api.trackerListAccounts();
+    username = accounts.find((a) => a.trackerId === primary)?.user?.nickname ?? '';
+    if (username) await window.api.setSetting('syncplay', { ...(cfg || {}), username });
   }
   if (!username) {
     actionError.value = 'Set a username in Settings → Watch Together';

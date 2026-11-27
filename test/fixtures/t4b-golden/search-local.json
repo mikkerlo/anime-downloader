@@ -1,0 +1,497 @@
+[
+  {
+    "query": "saga",
+    "filters": null,
+    "reply": {
+      "results": [
+        {
+          "id": 101,
+          "title": "Alpha Saga",
+          "titles": {
+            "ru": "Alpha Saga (ru)",
+            "romaji": "Alpha Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/101.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "starred"
+            },
+            {
+              "kind": "watching"
+            },
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ],
+          "airingStatus": "ongoing"
+        },
+        {
+          "id": 103,
+          "title": "Gamma Saga",
+          "titles": {
+            "ru": "Gamma Saga (ru)",
+            "romaji": "Gamma Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/103.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "downloaded"
+            },
+            {
+              "kind": "watching"
+            }
+          ],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ],
+          "airingStatus": "anons"
+        },
+        {
+          "id": 102,
+          "title": "Beta Saga",
+          "titles": {
+            "ru": "Beta Saga (ru)",
+            "romaji": "Beta Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/102.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "starred"
+            },
+            {
+              "kind": "watching"
+            }
+          ],
+          "listStatus": "completed",
+          "genres": [
+            "Comedy"
+          ]
+        },
+        {
+          "id": 105,
+          "title": "Epsilon Saga",
+          "titles": {
+            "ru": "Epsilon Saga (ru)",
+            "romaji": "Epsilon Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/105.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ]
+        },
+        {
+          "id": 108,
+          "title": "Iota Saga",
+          "titles": {
+            "ru": "Iota Saga (ru)",
+            "romaji": "Iota Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/108.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [],
+          "listStatus": "on_hold",
+          "genres": [
+            "Comedy"
+          ],
+          "airingStatus": "released"
+        },
+        {
+          "id": 120,
+          "title": "Omega Saga",
+          "titles": {},
+          "posterUrlSmall": "anime-poster://shared/lib-golden/120",
+          "numberOfEpisodes": 0,
+          "type": "",
+          "typeTitle": "",
+          "year": 0,
+          "season": "",
+          "localSources": [
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "planned",
+          "genres": [
+            "Drama"
+          ]
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "saga",
+    "filters": {
+      "status": "watching"
+    },
+    "reply": {
+      "results": [
+        {
+          "id": 101,
+          "title": "Alpha Saga",
+          "titles": {
+            "ru": "Alpha Saga (ru)",
+            "romaji": "Alpha Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/101.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "starred"
+            },
+            {
+              "kind": "watching"
+            },
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ],
+          "airingStatus": "ongoing"
+        },
+        {
+          "id": 103,
+          "title": "Gamma Saga",
+          "titles": {
+            "ru": "Gamma Saga (ru)",
+            "romaji": "Gamma Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/103.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "downloaded"
+            },
+            {
+              "kind": "watching"
+            }
+          ],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ],
+          "airingStatus": "anons"
+        },
+        {
+          "id": 105,
+          "title": "Epsilon Saga",
+          "titles": {
+            "ru": "Epsilon Saga (ru)",
+            "romaji": "Epsilon Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/105.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ]
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "saga",
+    "filters": {
+      "status": "completed"
+    },
+    "reply": {
+      "results": [
+        {
+          "id": 102,
+          "title": "Beta Saga",
+          "titles": {
+            "ru": "Beta Saga (ru)",
+            "romaji": "Beta Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/102.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "starred"
+            },
+            {
+              "kind": "watching"
+            }
+          ],
+          "listStatus": "completed",
+          "genres": [
+            "Comedy"
+          ]
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "saga",
+    "filters": {
+      "status": "on_hold"
+    },
+    "reply": {
+      "results": [
+        {
+          "id": 108,
+          "title": "Iota Saga",
+          "titles": {
+            "ru": "Iota Saga (ru)",
+            "romaji": "Iota Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/108.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [],
+          "listStatus": "on_hold",
+          "genres": [
+            "Comedy"
+          ],
+          "airingStatus": "released"
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "saga",
+    "filters": {
+      "status": "planned"
+    },
+    "reply": {
+      "results": [
+        {
+          "id": 120,
+          "title": "Omega Saga",
+          "titles": {},
+          "posterUrlSmall": "anime-poster://shared/lib-golden/120",
+          "numberOfEpisodes": 0,
+          "type": "",
+          "typeTitle": "",
+          "year": 0,
+          "season": "",
+          "localSources": [
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "planned",
+          "genres": [
+            "Drama"
+          ]
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "saga",
+    "filters": {
+      "genre": "Drama"
+    },
+    "reply": {
+      "results": [
+        {
+          "id": 101,
+          "title": "Alpha Saga",
+          "titles": {
+            "ru": "Alpha Saga (ru)",
+            "romaji": "Alpha Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/101.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "starred"
+            },
+            {
+              "kind": "watching"
+            },
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ],
+          "airingStatus": "ongoing"
+        },
+        {
+          "id": 103,
+          "title": "Gamma Saga",
+          "titles": {
+            "ru": "Gamma Saga (ru)",
+            "romaji": "Gamma Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/103.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [
+            {
+              "kind": "downloaded"
+            },
+            {
+              "kind": "watching"
+            }
+          ],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ],
+          "airingStatus": "anons"
+        },
+        {
+          "id": 105,
+          "title": "Epsilon Saga",
+          "titles": {
+            "ru": "Epsilon Saga (ru)",
+            "romaji": "Epsilon Saga"
+          },
+          "posterUrlSmall": "https://smotret.invalid/posters/105.jpg",
+          "numberOfEpisodes": 12,
+          "type": "tv",
+          "typeTitle": "TV",
+          "year": 2025,
+          "season": "fall",
+          "localSources": [],
+          "listStatus": "watching",
+          "genres": [
+            "Drama"
+          ]
+        },
+        {
+          "id": 120,
+          "title": "Omega Saga",
+          "titles": {},
+          "posterUrlSmall": "anime-poster://shared/lib-golden/120",
+          "numberOfEpisodes": 0,
+          "type": "",
+          "typeTitle": "",
+          "year": 0,
+          "season": "",
+          "localSources": [
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "planned",
+          "genres": [
+            "Drama"
+          ]
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "omega",
+    "filters": null,
+    "reply": {
+      "results": [
+        {
+          "id": 120,
+          "title": "Omega Saga",
+          "titles": {},
+          "posterUrlSmall": "anime-poster://shared/lib-golden/120",
+          "numberOfEpisodes": 0,
+          "type": "",
+          "typeTitle": "",
+          "year": 0,
+          "season": "",
+          "localSources": [
+            {
+              "kind": "shared",
+              "libraryId": "lib-golden",
+              "libraryName": "Golden drive"
+            }
+          ],
+          "listStatus": "planned",
+          "genres": [
+            "Drama"
+          ]
+        }
+      ],
+      "corpusSize": 6
+    }
+  },
+  {
+    "query": "s",
+    "filters": null,
+    "reply": {
+      "results": [],
+      "corpusSize": 6
+    }
+  }
+]

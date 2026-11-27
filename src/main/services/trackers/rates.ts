@@ -22,7 +22,7 @@ import {
 import { rateValues, type RateValues } from '../../lib/shikimori-rate'
 import type { StorageService } from '../../store/types'
 import { TRACKER_KEYS } from '../../trackers/keys'
-import { TRACKER_LABELS, type TrackerEntry } from '../../trackers/types'
+import { TRACKER_LABELS, type TrackerEntry, type TrackerRateEntry } from '../../trackers/types'
 import type { ApplyOutcome, PrimaryResults, TrackerFanOut } from './fan-out'
 import type { TrackerDrainStatus, TrackerSyncService } from './sync'
 
@@ -76,6 +76,12 @@ export interface TrackerRates {
   instance(trackerId: TrackerId): Instance | null
   /** The fan-out's primary: the stored one if connected, else the first connected, else null. */
   primary(): TrackerId | null
+  /**
+   * The primary's rate cache as read-side entries (#698): each row through
+   * its codec's `entryOf`, with the row itself as `native`. Writes nothing.
+   * `[]` with no primary, or for a primary whose instance hasn't landed.
+   */
+  primaryEntries(): TrackerRateEntry<unknown>[]
   /** Null with no instance. Rejects as today's `shikimori:get-rate` does. */
   readRate(trackerId: TrackerId, malId: number): Promise<RateRead | null>
   /**
@@ -218,6 +224,13 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
     return result.entries as unknown[]
   }
 
+  function primaryEntries(): TrackerRateEntry<unknown>[] {
+    const id = trackers.primary()
+    const t = id ? instance(id) : null
+    if (!id || !t) return []
+    return cachedRows(id).map((row) => ({ ...t.rateCache.entryOf(row), native: row }))
+  }
+
   function writeTarget(only?: TrackerId): TrackerId {
     return only ?? trackers.primary() ?? trackers.syncServices()[0]?.trackerId ?? 'shikimori'
   }
@@ -290,6 +303,7 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
   return {
     instance,
     primary: () => trackers.primary(),
+    primaryEntries,
     readRate,
     getRates,
     refreshInBackground,

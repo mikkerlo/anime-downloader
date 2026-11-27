@@ -1,12 +1,63 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   buildContinueWatchingEntries,
   finalizeContinueWatchingEntries,
   type ContinueWatchingInputs,
-  type CachedShikiRate
+  type ContinueWatchingRate
 } from '../../src/main/lib/continue-watching'
 import type { AnimeSearchResult, AnimeDetail } from '../../src/main/smotret-api'
 import type { AnimeCacheEntry } from '../../src/main/services/anime-cache'
+import type { CachedRateEntry } from '../../src/main/lib/shikimori-rate-cache'
+import { shikimoriRateCache } from '../../src/main/trackers/shikimori.provider'
+import { SHIKIMORI_ORIGIN } from '../../src/shared/shikimori'
+
+// A cached `shikimoriUserRates` row, as older versions may have written it.
+interface ShikiRow {
+  rate: { target_id?: number | null; episodes: number; status: string; updated_at?: string }
+  shikiAnime?: {
+    id: number
+    name?: string
+    russian?: string
+    image?: { preview?: string; x96?: string; original?: string }
+    episodes_aired?: number
+  }
+  smotretAnime?: AnimeSearchResult | null
+}
+
+// What the primary reader hands continue-watching for a Shikimori primary (#698).
+const viaCodec = (row: ShikiRow): ContinueWatchingRate => ({
+  ...shikimoriRateCache.entryOf(row as unknown as CachedRateEntry),
+  native: row
+})
+
+// An AniList primary's entry: absolute posters, a nullable `episodesAired`.
+const anilist = (
+  malId: number,
+  status: ShikiUserRateStatus,
+  episodes: number,
+  extras: {
+    updatedAt?: number | null
+    episodesAired?: number | null
+    poster?: string | null
+    title?: string
+    smotretAnime?: AnimeSearchResult | null
+  } = {}
+): ContinueWatchingRate => ({
+  trackerId: 'anilist',
+  malId,
+  values: { episodes, status, score: 0, rewatches: 0 },
+  updatedAt: extras.updatedAt === undefined ? null : extras.updatedAt,
+  anime: {
+    title: extras.title ?? `AniList ${malId}`,
+    poster: extras.poster === undefined ? null : extras.poster,
+    kind: 'TV',
+    episodes: null,
+    episodesAired: extras.episodesAired === undefined ? null : extras.episodesAired,
+    status: null
+  },
+  smotretAnime: extras.smotretAnime ?? null,
+  native: { mediaId: malId + 100000 }
+})
 
 const stubAnime = (id: number, extras: Partial<AnimeSearchResult> = {}): AnimeSearchResult => ({
   id,
@@ -113,15 +164,17 @@ describe('buildContinueWatchingEntries — resume rows', () => {
 })
 
 describe('buildContinueWatchingEntries — Shikimori interaction', () => {
+  // Every case here goes through the Shikimori codec, as the primary reader does.
   const rate = (
     targetId: number,
     status: string,
-    extras: Partial<CachedShikiRate['rate']> = {},
-    shiki?: CachedShikiRate['shikiAnime']
-  ): CachedShikiRate => ({
-    rate: { target_id: targetId, episodes: 3, status, ...extras },
-    shikiAnime: shiki
-  })
+    extras: Partial<ShikiRow['rate']> = {},
+    shiki?: ShikiRow['shikiAnime']
+  ): ContinueWatchingRate =>
+    viaCodec({
+      rate: { target_id: targetId, episodes: 3, status, ...extras },
+      shikiAnime: shiki
+    })
 
   it('overrides resume.updatedAt with Shikimori rate.updated_at when available', () => {
     const inputs = emptyInputs()
@@ -166,10 +219,10 @@ describe('buildContinueWatchingEntries — Shikimori interaction', () => {
     inputs.malMap = { '300': stubAnime(30) }
     inputs.recent = { '30': stubAnime(30) }
     inputs.rates = [
-      {
+      viaCodec({
         rate: { target_id: 300, episodes: 12, status: 'watching' },
         shikiAnime: { id: 300, episodes_aired: 12 }
-      }
+      })
     ]
 
     const { entries } = buildContinueWatchingEntries(inputs)
@@ -189,12 +242,232 @@ describe('buildContinueWatchingEntries — Shikimori interaction', () => {
   })
 })
 
+describe('buildContinueWatchingEntries — the Shikimori codec keeps 6.x picks (#698)', () => {
+  const NOW = Date.parse('2026-11-27T12:00:00Z')
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function posterOf(image: NonNullable<ShikiRow['shikiAnime']>['image']): string {
+    const inputs = emptyInputs()
+    inputs.malMap = { '600': stubAnime(60, { posterUrlSmall: '' }) }
+    inputs.rates = [
+      viaCodec({
+        rate: { target_id: 600, episodes: 1, status: 'watching' },
+        shikiAnime: { id: 600, image }
+      })
+    ]
+    return buildContinueWatchingEntries(inputs).entries[0].posterUrl
+  }
+
+  it('the poster fallback is the preview, made absolute on the Shikimori origin', () => {
+    expect(posterOf({ preview: '/p/600.jpg', x96: '/x/600.jpg', original: '/o/600.jpg' })).toBe(
+      `${SHIKIMORI_ORIGIN}/p/600.jpg`
+    )
+  })
+
+  it('then x96, and an absolute path is kept as it is', () => {
+    expect(posterOf({ x96: 'https://cdn.invalid/x96/600.jpg', original: '/o/600.jpg' })).toBe(
+      'https://cdn.invalid/x96/600.jpg'
+    )
+  })
+
+  it('then original; no image leaves the poster empty', () => {
+    expect(posterOf({ original: '/o/600.jpg' })).toBe(`${SHIKIMORI_ORIGIN}/o/600.jpg`)
+    expect(posterOf(undefined)).toBe('')
+  })
+
+  it('a legacy row with no target_id joins nothing through malIdMap', () => {
+    const inputs = emptyInputs()
+    inputs.malMap = { '610': stubAnime(61), '612': stubAnime(63) }
+    inputs.recent = { '61': stubAnime(61) }
+    inputs.watchProgress = { '63:2': { position: 30, duration: 100, updatedAt: 1000 } }
+    inputs.library = { '63': stubAnime(63) }
+    inputs.rates = [
+      // Its codec `malId` is 610, which malIdMap holds: still no next-up row.
+      viaCodec({ rate: { episodes: 1, status: 'watching' }, shikiAnime: { id: 610 } }),
+      // Completed under 612 = anime 63: the resume row stays.
+      viaCodec({ rate: { episodes: 12, status: 'completed' }, shikiAnime: { id: 612 } })
+    ]
+    expect(inputs.rates.map((r) => r.malId)).toEqual([610, 612])
+
+    // The next-up row has no anime id, so finalize drops it.
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => `${e.kind}:${e.animeId}`)).toEqual(['resume:63', 'next:0'])
+    expect(entries[1].malId).toBeUndefined()
+    expect(finalizeContinueWatchingEntries(entries, {}).map((e) => e.animeId)).toEqual([63])
+  })
+
+  it('a legacy row joined by smotretAnime keeps its missing or null malId', () => {
+    const inputs = emptyInputs()
+    // Not local, so the name lookup reaches malIdMap, which it can't by a missing id.
+    inputs.malMap = { '611': stubAnime(99), '613': stubAnime(98) }
+    inputs.rates = [
+      viaCodec({
+        rate: { episodes: 1, status: 'watching' },
+        shikiAnime: { id: 611 },
+        smotretAnime: stubAnime(62)
+      }),
+      viaCodec({
+        rate: { target_id: null, episodes: 1, status: 'watching' },
+        shikiAnime: { id: 613 },
+        smotretAnime: stubAnime(64)
+      })
+    ]
+
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => [e.animeId, e.malId, e.animeName])).toEqual([
+      [62, undefined, ''],
+      [64, null, '']
+    ])
+  })
+
+  it('a null updatedAt: a resume row keeps its own sort key, a next-up row takes now', () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
+    const inputs = emptyInputs()
+    inputs.watchProgress = { '65:1': { position: 30, duration: 100, updatedAt: 1234 } }
+    inputs.library = { '65': stubAnime(65) }
+    inputs.recent = { '66': stubAnime(66) }
+    inputs.rates = [
+      viaCodec({
+        rate: { target_id: 650, episodes: 0, status: 'watching' },
+        smotretAnime: stubAnime(65)
+      }),
+      viaCodec({
+        rate: { target_id: 660, episodes: 0, status: 'watching', updated_at: 'not a date' },
+        smotretAnime: stubAnime(66)
+      })
+    ]
+    expect(inputs.rates.map((r) => r.updatedAt)).toEqual([null, null])
+
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => [e.kind, e.animeId, e.updatedAt])).toEqual([
+      ['resume', 65, 1234],
+      ['next', 66, NOW]
+    ])
+  })
+
+  it('the epoch is missing too: no resume override, and a next-up row takes now', () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
+    const EPOCH = '1970-01-01T00:00:00.000Z'
+    const inputs = emptyInputs()
+    inputs.watchProgress = { '67:1': { position: 30, duration: 100, updatedAt: 1234 } }
+    inputs.library = { '67': stubAnime(67) }
+    inputs.recent = { '68': stubAnime(68) }
+    inputs.rates = [
+      viaCodec({
+        rate: { target_id: 670, episodes: 0, status: 'watching', updated_at: EPOCH },
+        smotretAnime: stubAnime(67)
+      }),
+      viaCodec({
+        rate: { target_id: 680, episodes: 0, status: 'watching', updated_at: EPOCH },
+        smotretAnime: stubAnime(68)
+      })
+    ]
+    expect(inputs.rates.map((r) => r.updatedAt)).toEqual([0, 0])
+
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => [e.kind, e.animeId, e.updatedAt])).toEqual([
+      ['resume', 67, 1234],
+      ['next', 68, NOW]
+    ])
+  })
+})
+
+describe('buildContinueWatchingEntries — an AniList primary (#698)', () => {
+  const COVER = 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx700.jpg'
+
+  it('next-up rows come from AniList watching / rewatching entries', () => {
+    const inputs = emptyInputs()
+    inputs.malMap = { '701': stubAnime(71) }
+    inputs.recent = { '70': stubAnime(70), '71': stubAnime(71), '72': stubAnime(72) }
+    inputs.rates = [
+      anilist(700, 'watching', 3, { smotretAnime: stubAnime(70) }),
+      // Joined through malIdMap by the entry's malId.
+      anilist(701, 'rewatching', 7),
+      anilist(702, 'planned', 0, { smotretAnime: stubAnime(72) }),
+      anilist(703, 'completed', 12, { smotretAnime: stubAnime(72) })
+    ]
+
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => [e.kind, e.animeId, e.episodeInt, e.malId])).toEqual([
+      ['next', 70, '4', 700],
+      ['next', 71, '8', 701]
+    ])
+  })
+
+  it('the episodesAired skip holds', () => {
+    const inputs = emptyInputs()
+    inputs.recent = { '73': stubAnime(73) }
+    inputs.rates = [
+      anilist(730, 'watching', 12, { episodesAired: 12, smotretAnime: stubAnime(73) })
+    ]
+    expect(buildContinueWatchingEntries(inputs).entries).toEqual([])
+  })
+
+  it('episodesAired null or 0 is no upper bound: a long-running show still gets a next-up row', () => {
+    const inputs = emptyInputs()
+    inputs.recent = { '74': stubAnime(74), '75': stubAnime(75) }
+    inputs.rates = [
+      anilist(740, 'watching', 1100, { episodesAired: null, smotretAnime: stubAnime(74) }),
+      anilist(750, 'watching', 20, { episodesAired: 0, smotretAnime: stubAnime(75) })
+    ]
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => [e.animeId, e.episodeInt])).toEqual([
+      [74, '1101'],
+      [75, '21']
+    ])
+  })
+
+  it("the poster and name fallbacks are AniList's, with no Shikimori prefix", () => {
+    const inputs = emptyInputs()
+    inputs.malMap = { '760': stubAnime(76, { posterUrlSmall: '' }) }
+    inputs.rates = [anilist(760, 'watching', 0, { poster: COVER, title: 'Frieren' })]
+    const [draft] = buildContinueWatchingEntries(inputs).entries
+    expect(draft.posterUrl).toBe(COVER)
+
+    const out = finalizeContinueWatchingEntries([{ ...draft, animeName: '' }], {
+      76: {
+        ...stubAnime(76, { posterUrlSmall: '', title: '', titles: {} }),
+        posterUrl: '',
+        descriptions: [],
+        episodes: [],
+        genres: []
+      }
+    })
+    expect(out[0]).toMatchObject({ animeName: 'Frieren', posterUrl: COVER })
+  })
+
+  it('resume rows take the AniList updatedAt, and a completed AniList status hides them', () => {
+    const inputs = emptyInputs()
+    inputs.watchProgress = {
+      '77:2': { position: 30, duration: 100, updatedAt: 1000 },
+      '78:5': { position: 50, duration: 100, updatedAt: 2000 }
+    }
+    inputs.library = { '77': stubAnime(77), '78': stubAnime(78) }
+    inputs.malMap = { '770': stubAnime(77) }
+    inputs.rates = [
+      anilist(770, 'on_hold', 1, { updatedAt: 1_800_000_000_000 }),
+      anilist(780, 'completed', 12, { updatedAt: 5, smotretAnime: stubAnime(78) })
+    ]
+
+    const { entries } = buildContinueWatchingEntries(inputs)
+    expect(entries.map((e) => [e.kind, e.animeId, e.updatedAt])).toEqual([
+      ['resume', 77, 1_800_000_000_000]
+    ])
+  })
+})
+
 describe('buildContinueWatchingEntries — unresolvedIds + finalize', () => {
   it('flags rows missing local metadata for fetch', () => {
     const inputs = emptyInputs()
     inputs.malMap = { '500': stubAnime(50, { posterUrlSmall: '' }) }
     inputs.rates = [
-      { rate: { target_id: 500, episodes: 1, status: 'watching' }, shikiAnime: { id: 500 } }
+      viaCodec({
+        rate: { target_id: 500, episodes: 1, status: 'watching' },
+        shikiAnime: { id: 500 }
+      })
     ]
 
     const { unresolvedIds } = buildContinueWatchingEntries(inputs)
@@ -227,8 +500,8 @@ describe('buildContinueWatchingEntries — unresolvedIds + finalize', () => {
         episodeInt: '5',
         episodeLabel: 'Episode 5',
         updatedAt: 100,
-        shikiPosterFallback: 'shiki-fallback.jpg',
-        shikiNameFallback: 'Shiki Title'
+        posterFallback: 'shiki-fallback.jpg',
+        nameFallback: 'Shiki Title'
       }
     ]
     const fetched: Record<number, AnimeDetail | null> = {
@@ -248,9 +521,9 @@ describe('buildContinueWatchingEntries — unresolvedIds + finalize', () => {
       posterUrl: 'fresh-poster.jpg',
       episodeLabel: 'Pilot'
     })
-    // Internal Shikimori fallback fields are stripped.
-    expect(out[0]).not.toHaveProperty('shikiPosterFallback')
-    expect(out[0]).not.toHaveProperty('shikiNameFallback')
+    // The internal draft fallback fields are stripped.
+    expect(out[0]).not.toHaveProperty('posterFallback')
+    expect(out[0]).not.toHaveProperty('nameFallback')
   })
 
   it('finalizeContinueWatchingEntries drops entries that are still nameless', () => {

@@ -2,15 +2,16 @@
 // and every `animeCache` entry with a detail (which, after #570, includes
 // continue-watching titles), plus the titles of every available attached
 // Shared Library (#583). Pure: the handler hands in one store snapshot per
-// query. Titles that are only on the Shikimori list are not in the corpus; the
-// rates only annotate corpus titles with `listStatus`, joined by MAL id.
+// query. Titles that are only on the primary tracker's list are not in the
+// corpus; its entries only annotate corpus titles with `listStatus`, joined by
+// MAL id (#698).
+
+import type { TrackerRateEntry } from '../trackers/types'
 
 export const MIN_QUERY_CODE_POINTS = 2
 
-interface StoredRateRow {
-  rate?: { status?: ShikiUserRateStatus; target_id?: number }
-  shikiAnime?: { id?: number }
-}
+/** What local search reads of a primary tracker's entry (#698). */
+export type LocalSearchRate = Pick<TrackerRateEntry<unknown>, 'malId' | 'values'>
 
 /**
  * One available attached library's title snapshot, as
@@ -27,7 +28,9 @@ export interface LocalSearchSnapshot {
   library?: Record<string, AnimeSearchResult | undefined>
   downloadedAnime?: Record<string, AnimeSearchResult | undefined>
   animeCache?: Record<string, { animeDetail?: AnimeDetail } | undefined>
-  shikimoriUserRates?: StoredRateRow[]
+  /** The primary tracker's entries; `listStatus` is in the canonical vocabulary. */
+  rates?: readonly LocalSearchRate[]
+  /** Still Shikimori's: `airingStatus` moves to the `details` source in #706. */
   shikimoriAnimeDetails?: Record<string, { details?: { status?: string } } | undefined>
   /** A `watchProgress` entry in the last 90 days (#570's recent-watch index). */
   isRecentlyWatched: (animeId: number) => boolean
@@ -114,8 +117,10 @@ function project(a: AnimeSearchResult): AnimeSearchResult {
   }
 }
 
-function malIdOf(row: StoredRateRow): number | undefined {
-  const id = row.rate?.target_id ?? row.shikiAnime?.id
+// The codec's `malId` is Shikimori's `target_id ?? shikiAnime.id`, the
+// fallback this used to apply itself.
+function malIdOf(entry: LocalSearchRate): number | undefined {
+  const id = entry.malId
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : undefined
 }
 
@@ -227,9 +232,9 @@ export function buildCorpus(snapshot: LocalSearchSnapshot): LocalCorpusEntry[] {
   const cache = snapshot.animeCache ?? {}
   const attached = attachedById(snapshot.attached)
   const statusByMal = new Map<number, ShikiUserRateStatus>()
-  for (const row of snapshot.shikimoriUserRates ?? []) {
-    const malId = malIdOf(row)
-    if (malId !== undefined && row.rate?.status) statusByMal.set(malId, row.rate.status)
+  for (const entry of snapshot.rates ?? []) {
+    const malId = malIdOf(entry)
+    if (malId !== undefined && entry.values?.status) statusByMal.set(malId, entry.values.status)
   }
 
   const ids = new Set<string>([

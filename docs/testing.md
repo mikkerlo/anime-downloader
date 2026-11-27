@@ -27,18 +27,6 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   carries a real-looking token (`Bearer …`, non-fake `access_token` /
   `refresh_token`). See `test/fixtures/shikimori/README.md` for the
   refresh + anonymization procedure.
-- **MyAnimeList** (#702): `test/fixtures/mal/` holds the list pages, entry
-  reads and writes, `/users/@me`, the capability reads, the token responses and
-  the error bodies (400 "Invalid client id", 403 `forbidden`, 403 "DoS
-  detected", `invalid_grant`, `invalid_client`, `invalid_token`, 404). They are
-  **written from MAL's documented and community-reported shapes, not captured**:
-  no real MAL account was used, and the slice's verify tasks (see
-  [Trackers › MyAnimeList](./trackers.md#myanimelist)) replace them with
-  captures. `test/helpers/fake-mal.ts` serves them as a fake `fetch` behind the
-  two unpackaged-only overrides `ANIME_DL_MAL_API_BASE` and
-  `ANIME_DL_MAL_OAUTH_BASE`; `ANIME_DL_MAL_LOOPBACK_PORT=0` gives the sign-in
-  loopback a free port. `test/helpers/mal-tracker.ts` builds MAL as `index.ts`
-  does (`createMalTracker`) for the drain and primary-branch tests.
 - **Modelled server** (`test/helpers/syncplay-min-election-server.ts`) — a
   cut-down Syncplay server for the one seam hand-fed frames cannot express:
   `Room.getPosition()`'s `min(watchers)` election and the link latency that
@@ -1146,6 +1134,17 @@ later slice keeps green.
   of `ipc/shikimori.ipc.ts` by #692), a renamed `shikimori-rates`
   step id or label, one changed byte in the manifest the v1 writer emits, and a
   new `STORE_DEFAULTS` key without the allow-list.
+- **The T4b replies** (#698). 6.0.21's session doesn't capture the
+  `home:get-continue-watching` or `search:local` replies, so T4b recorded them
+  itself, in its first commit and against the unmodified readers:
+  `test/ipc/t4b-golden.test.ts` replays both routers over the fixed profile in
+  `test/fixtures/t4b-golden/store.json` (in `.prettierignore`), with the legacy
+  rows (no `target_id`, a null one, no `updated_at`, an unparseable one and the
+  epoch), a fixed `Date.now()` and a stubbed `smotretApi.getAnime`, and compares
+  the replies' `JSON.stringify` with the recorded bytes. `T4B_GOLDEN_RECORD=1`
+  rewrites them; no later commit does. Proved red on feeding the entry's `malId`
+  into continue-watching's joins, on putting the codec's `original` poster first,
+  on `?? Date.now()` for a next-up clock and on dropping the reader's `native`.
 - **The `STORE_DEFAULTS` dump.** `STORE_DEFAULTS` moved out of
   `src/main/index.ts` into `src/main/store/defaults.ts` so the session can open
   the real store (`index.ts` boots the app when imported). A golden captured
@@ -1737,3 +1736,23 @@ download or Delete runs there).
   The page paints from `GET_ANIME_CACHE` and falls back to offline
   `GET_ANIME`, so the case stays green while either route still answers from
   the title's cache entry.
+
+## MyAnimeList fixtures
+
+#702 (T6) adds `test/fixtures/mal/`: the list pages, the entry reads and
+writes, `/users/@me`, the capability reads, the token responses and the error
+bodies (400 "Invalid client id", 403 `forbidden`, 403 "DoS detected",
+`invalid_grant`, `invalid_client`, `invalid_token`, 404).
+
+- **Written, not captured.** They follow MAL's documented and
+  community-reported shapes: no real MAL account was used. The slice's verify
+  list ([Trackers › MyAnimeList](./trackers.md#myanimelist)) replaces them
+  with captures.
+- **The fake.** `test/helpers/fake-mal.ts` serves them as a fake `fetch`
+  behind the two unpackaged-only overrides, `ANIME_DL_MAL_API_BASE` and
+  `ANIME_DL_MAL_OAUTH_BASE`, so every request still goes through
+  `fetchWithTimeout` and the MAL client. `ANIME_DL_MAL_LOOPBACK_PORT=0` gives
+  the sign-in loopback a free port.
+- **The construction.** `test/helpers/mal-tracker.ts` builds MAL the way
+  `index.ts` does (`createMalTracker`), with the real lifecycle, vault,
+  fan-out and router, for the drain and primary-branch tests.

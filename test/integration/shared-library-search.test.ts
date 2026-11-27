@@ -68,7 +68,9 @@ beforeEach(() => {
   const deps = {
     store: harness.store,
     recentWatch,
-    attachedLibraryService
+    attachedLibraryService,
+    // Signed out: no primary tracker, so no list annotates the corpus (#698).
+    primaryEntries: () => []
   } as unknown as AppDeps
   registerAnime(deps)
   registerSharedLibrary(deps)

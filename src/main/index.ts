@@ -892,6 +892,7 @@ function registerIpcHandlers(): void {
     shikimoriSyncService,
     trackers: trackerFanOut,
     trackerRates,
+    primaryEntries: () => trackerRates.primaryEntries(),
     trackerLifecycle,
     trackerAuth,
     trackerChoices,

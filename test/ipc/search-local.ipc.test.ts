@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { ipcMain } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
-import { CHANNELS } from '../../src/shared/ipc/channels'
+import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { register as registerAnime } from '../../src/main/ipc/anime.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { createRecentWatchIndex } from '../../src/main/lib/recent-watch'
@@ -15,7 +15,9 @@ import {
   createAttachedLibraryService,
   type AttachedLibraryService
 } from '../../src/main/services/attached-library'
+import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
+import { shikimoriOnlyTrackers } from '../helpers/tracker-fan-out'
 import { cleanup } from '../helpers/shared-library'
 import { FIXTURE_LIBRARY_ID, copyFixtureLibrary } from '../helpers/attached-library'
 
@@ -34,6 +36,18 @@ function anime(id: number, title: string): AnimeSearchResult {
     year: 2024,
     season: 'fall'
   }
+}
+
+function shikimoriSync(store: InMemoryStorage): ReturnType<typeof createShikimoriSyncService> {
+  return createShikimoriSyncService({
+    store: store as never,
+    broadcast: () => {},
+    syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
+    offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
+    rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+    animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
+    ratesRefreshedChannel: EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED
+  })
 }
 
 function harness(
@@ -56,17 +70,25 @@ function harness(
         }
       }
     },
+    // Seeded through the primary reader (#698): a signed-in Shikimori is the primary.
+    shikimoriUser: { id: 4242, nickname: 'u', avatar: '' },
     shikimoriUserRates: [{ rate: { status: 'watching', target_id: 303 } }],
     shikimoriAnimeDetails: { 303: { details: { status: 'ongoing' } } },
     watchProgress: { '3:1': { position: 10, duration: 100, updatedAt: NOW - DAY } }
   })
+  const { trackerRates } = shikimoriOnlyTrackers(store as never, shikimoriSync(store))
   const get = vi.spyOn(store, 'get') as unknown as Mock
   const recentWatch = createRecentWatchIndex({
     readWatchProgress: () => store.get('watchProgress') as Record<string, { updatedAt: number }>,
     now: () => NOW
   })
   ;(ipcMain.handle as Mock).mockClear()
-  registerAnime({ store, recentWatch, attachedLibraryService } as unknown as AppDeps)
+  registerAnime({
+    store,
+    recentWatch,
+    attachedLibraryService,
+    primaryEntries: () => trackerRates.primaryEntries()
+  } as unknown as AppDeps)
   const handler = (ipcMain.handle as Mock).mock.calls.find(
     ([channel]) => channel === CHANNELS.SEARCH_LOCAL
   )![1] as (...args: unknown[]) => LocalSearchResponse

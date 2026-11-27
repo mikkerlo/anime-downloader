@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import TrackersTab from '../../../src/renderer/src/components/settings/TrackersTab.vue'
+import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 import { createTrackerCardApi } from '../../helpers/tracker-card-api'
 
 enableAutoUnmount(afterEach)
@@ -56,6 +57,43 @@ describe('the MAL card and the flag', () => {
     expect(steps.text()).toContain('http://localhost:41753/callback')
     expect(steps.text()).toContain('other')
     expect(steps.text()).toContain('https://github.com/mikkerlo/anime-downloader')
+  })
+})
+
+// T4c's sidebar button and popover rows call `navigateToSettingsTab('trackers', 'mal')`.
+describe('the MAL card is the deep link’s target', () => {
+  const scrollIntoView = vi.fn()
+  beforeEach(() => {
+    HTMLElement.prototype.scrollIntoView = scrollIntoView
+  })
+  const scrolledTo = () =>
+    scrollIntoView.mock.contexts.map((el) => (el as HTMLElement).dataset.trackerId)
+
+  it('first mount, before the accounts payload landed: the MAL card scrolls into view once it renders', async () => {
+    const library = useLibraryStore()
+    library.navigateToSettingsTab('trackers', 'mal')
+    library.consumePendingSettingsTab()
+    await mountTab()
+    expect(scrolledTo()).toEqual(['mal'])
+    expect(library.pendingSettingsTrackerId).toBeNull()
+  })
+
+  it('already alive: a second link to MAL scrolls it again', async () => {
+    const library = useLibraryStore()
+    await mountTab()
+    library.navigateToSettingsTab('trackers', 'mal')
+    library.consumePendingSettingsTab()
+    await flushPromises()
+    expect(scrolledTo()).toEqual(['mal'])
+  })
+
+  it('with the flag off there is no MAL card, so the link scrolls nowhere', async () => {
+    fake.main.newTrackerCardsEnabled = false
+    const library = useLibraryStore()
+    library.navigateToSettingsTab('trackers', 'mal')
+    library.consumePendingSettingsTab()
+    await mountTab()
+    expect(scrollIntoView).not.toHaveBeenCalled()
   })
 })
 

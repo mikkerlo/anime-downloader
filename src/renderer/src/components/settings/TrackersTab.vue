@@ -11,15 +11,25 @@ import MalConnectForm from './MalConnectForm.vue';
 // (#702) shows while the new-tracker-cards flag is on; T7 adds AniList's, and
 // T5b the multi-account controls.
 const libraryStore = useLibraryStore();
-const { newTrackerCardsEnabled } = storeToRefs(useTrackersStore());
+const { newTrackerCardsEnabled, accountsLoaded } = storeToRefs(useTrackersStore());
 const root = ref<HTMLElement | null>(null);
 
 async function scrollToCard(trackerId: TrackerId | null): Promise<void> {
   if (!trackerId) return;
   await nextTick();
-  root.value
-    ?.querySelector(`[data-tracker-id="${trackerId}"]`)
-    ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  const card = root.value?.querySelector(`[data-tracker-id="${trackerId}"]`);
+  if (card) {
+    card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return;
+  }
+  // MAL's card renders only once the accounts payload carries its flag: a
+  // deep link that beat the payload scrolls when it lands (#702).
+  if (accountsLoaded.value) return;
+  const stop = watch(accountsLoaded, (loaded) => {
+    if (!loaded) return;
+    stop();
+    void scrollToCard(trackerId);
+  });
 }
 
 // A deep link ("Session expired", "Sign in again") names the card to show. The

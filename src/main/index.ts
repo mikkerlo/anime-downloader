@@ -91,6 +91,8 @@ import { createAiringDep, createTickIfAiringSource } from './trackers/feature-so
 import { createAniListProvider } from './trackers/anilist/provider'
 import { anilistSessionSteps, createAniListSyncService } from './trackers/anilist/sync'
 import { anilistCalendarSyncHooks, createAniListCalendar } from './trackers/anilist/calendar'
+import { createAniListRelated } from './trackers/anilist/related'
+import { createMalRelated } from './trackers/mal/related'
 import { createAniListEventBridge } from './trackers/anilist/events'
 import { createAniListPrimary } from './services/trackers/anilist-primary'
 import { newTrackerCardsEnabled, secondTrackerEnabled } from './trackers/flags'
@@ -467,6 +469,15 @@ const anilistCalendar = createAniListCalendar({
   isOffline,
   snapshotsPath: path.join(app.getPath('userData'), 'anilist-snapshots.json')
 })
+// The chronology walks (#710): `tracker:get-related`'s AniList and MAL branches.
+// AniList's runs at `interactive`, a level per request; MAL's is one request at
+// a time on its client's limiter, cached in memory per title for an hour.
+const anilistRelated = createAniListRelated({
+  store,
+  resolveRef: (malId, opts) => anilistProvider.resolveRef(malId, opts),
+  getRelatedBatch: (ids, opts) => anilistProvider.getRelatedBatch(ids, opts)
+})
+const malRelated = createMalRelated({ getRelated: (ref) => mal.provider.getRelated!(ref) })
 const anilistSync = createAniListSyncService(anilistProvider, {
   store,
   broadcast: createAniListEventBridge({
@@ -930,6 +941,8 @@ function registerIpcHandlers(): void {
     secondTrackerEnabled: secondTracker,
     malSetup: mal.setup,
     anilistCalendar,
+    anilistRelated,
+    malRelated,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

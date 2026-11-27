@@ -82,7 +82,7 @@ function installApi(opts: {
     shikimoriGetUser: vi.fn().mockResolvedValue(shiki ? SHIKI_USER : null),
     shikimoriGetRate: vi.fn().mockResolvedValue(null),
     shikimoriGetFriendsRates: vi.fn().mockResolvedValue([]),
-    shikimoriGetRelated: vi.fn().mockResolvedValue([]),
+    trackerGetRelated: vi.fn().mockResolvedValue([]),
     shikimoriGetAnimeDetails: vi
       .fn()
       .mockResolvedValue(

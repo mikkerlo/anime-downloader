@@ -1,0 +1,23 @@
+{
+  "data": {
+    "__type": {
+      "name": "MediaRelation",
+      "kind": "ENUM",
+      "enumValues": [
+        { "name": "ADAPTATION" },
+        { "name": "PREQUEL" },
+        { "name": "SEQUEL" },
+        { "name": "PARENT" },
+        { "name": "SIDE_STORY" },
+        { "name": "CHARACTER" },
+        { "name": "SUMMARY" },
+        { "name": "ALTERNATIVE" },
+        { "name": "SPIN_OFF" },
+        { "name": "OTHER" },
+        { "name": "SOURCE" },
+        { "name": "COMPILATION" },
+        { "name": "CONTAINS" }
+      ]
+    }
+  }
+}

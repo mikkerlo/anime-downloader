@@ -122,6 +122,7 @@ interface Rig {
   get: (force?: boolean) => Promise<TrackerCalendarResult>
   calendarRequests: () => number
   lifecycle: ReturnType<typeof createTrackerLifecycle>
+  lookupByMalIds: Mock
 }
 
 let dirs: string[] = []
@@ -260,7 +261,8 @@ async function rig(
     get: (force = false) =>
       invoke(CHANNELS.TRACKER_GET_CALENDAR, force) as Promise<TrackerCalendarResult>,
     calendarRequests: () => world.server.of('Calendar').length,
-    lifecycle
+    lifecycle,
+    lookupByMalIds
   }
 }
 
@@ -488,6 +490,54 @@ describe('the AniList calendar is invalidated at every site that changes the tra
   it('control: with no change the read inside the TTL is served from the cache', async () => {
     const r = await cached()
     await r.get()
+    expect(r.calendarRequests()).toBe(1)
+  })
+})
+
+// The invalidation fires from inside the smotret lookup, after the fetch read
+// `anilistUserRates` (`LIST` keeps 3 rows, so the lookup runs), so each race is
+// ordered without a timer. The no-invalidation controls are the two
+// served-from-the-cache rows above.
+describe('an invalidate() during an in-flight AniList fetch (#747)', () => {
+  function invalidatingLookup(r: Rig): void {
+    r.lookupByMalIds.mockImplementationOnce(async () => {
+      r.calendar.invalidate()
+      return {}
+    })
+  }
+
+  it('A1: with a record, the raced fetch is stored invalidated and the next read refetches', async () => {
+    const r = await rig({ entries: LIST, airing: AIRING })
+    await r.get()
+    vi.setSystemTime(T0 + MIN)
+    invalidatingLookup(r)
+    await r.get(true)
+    expect(r.calendar.cached()?.invalidated).toBe(true)
+
+    expect(await r.get()).toMatchObject({ fetchedAt: T0 + MIN, stale: false })
+    expect(r.calendarRequests()).toBe(3)
+  })
+
+  it('A2: the first fetch, with no record yet, is stored invalidated and the next read refetches', async () => {
+    const r = await rig({ entries: LIST, airing: AIRING })
+    invalidatingLookup(r)
+    await r.get()
+    expect(r.calendar.cached()?.invalidated).toBe(true)
+
+    vi.setSystemTime(T0 + MIN)
+    expect(await r.get()).toMatchObject({ fetchedAt: T0 + MIN, stale: false })
+    expect(r.calendarRequests()).toBe(2)
+  })
+
+  it('A3: the empty-rates self-fill invalidates nothing, so the next read is served from the cache', async () => {
+    const r = await rig({ entries: LIST, airing: AIRING, coldCache: true })
+    await r.get()
+    expect(r.world.server.of('MediaListCollection')).toHaveLength(1)
+    expect(r.calendar.cached()).toMatchObject({ invalidated: false })
+    expect(r.calendar.cached()?.data).toHaveLength(3)
+
+    vi.setSystemTime(T0 + MIN)
+    expect(await r.get()).toMatchObject({ fetchedAt: T0, stale: false })
     expect(r.calendarRequests()).toBe(1)
   })
 })

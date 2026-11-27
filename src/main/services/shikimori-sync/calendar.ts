@@ -20,7 +20,10 @@ const SHIKI_BASE = SHIKIMORI_ORIGIN
 
 export interface ShikimoriCalendarDeps {
   store: StorageService
-  sync: Pick<ShikimoriSyncService, 'getCachedCalendar' | 'setCachedCalendar' | 'fetchAndCacheRates'>
+  sync: Pick<
+    ShikimoriSyncService,
+    'getCachedCalendar' | 'setCachedCalendar' | 'beginCalendarFetch' | 'fetchAndCacheRates'
+  >
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   isOffline: () => boolean
 }
@@ -37,6 +40,8 @@ export function createShikimoriCalendar(deps: ShikimoriCalendarDeps): ShikimoriC
   }
 
   async function fetchCalendar(): Promise<CachedCalendar> {
+    // Before the rates read: an invalidation from here on marks what this stores (#747).
+    const since = sync.beginCalendarFetch()
     const userId = currentUserId() ?? null
 
     let cachedRates = store.get('shikimoriUserRates') as {
@@ -74,7 +79,7 @@ export function createShikimoriCalendar(deps: ShikimoriCalendarDeps): ShikimoriC
       }
     }
 
-    if (tracked.size === 0) return sync.setCachedCalendar([], userId)
+    if (tracked.size === 0) return sync.setCachedCalendar([], userId, since)
 
     const calendar = await shikimori.getCalendar()
     const filtered = calendar.filter((c) => c.next_episode_at && tracked.has(c.anime.id))
@@ -104,7 +109,7 @@ export function createShikimoriCalendar(deps: ShikimoriCalendarDeps): ShikimoriC
       }
     })
 
-    return sync.setCachedCalendar(entries, userId)
+    return sync.setCachedCalendar(entries, userId, since)
   }
 
   return (force = false) =>

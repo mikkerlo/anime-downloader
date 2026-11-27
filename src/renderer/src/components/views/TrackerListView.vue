@@ -50,6 +50,12 @@ const entries = computed<TrackerRateEntry[]>(() =>
   selected.value ? trackersStore.ratesFor(selected.value) : []
 );
 
+// Something to render already, so a load or a failed refresh doesn't replace
+// it: Shikimori's dashboard (as before #707), another tracker's cached rows.
+const hasContent = computed(() =>
+  isShikimori.value ? dashboard.value !== null : entries.value.length > 0
+);
+
 const loading = ref(false);
 const error = ref('');
 const statusFilter = ref<string>('to_watch');
@@ -352,10 +358,10 @@ watch(
         </button>
       </div>
 
-      <div v-else-if="loading && !dashboard" class="status-text">
+      <div v-else-if="loading && !hasContent" class="status-text">
         {{ isShikimori ? 'Loading your profile…' : 'Loading your list…' }}
       </div>
-      <div v-else-if="error && !dashboard" class="status-text error-text">{{ error }}</div>
+      <div v-else-if="error && !hasContent" class="status-text error-text">{{ error }}</div>
 
       <template v-else>
         <!-- Profile header: the Shikimori dashboard, only while Shikimori is selected -->

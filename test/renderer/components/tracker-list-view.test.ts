@@ -203,9 +203,21 @@ const toWatchOption = (w: VueWrapper) =>
     .text()
 
 // The DOM compare: scoped-style ids and Vue's placeholder comments aren't
-// rendered output.
-const norm = (html: string): string =>
-  html.replace(/ data-v-[0-9a-f]+=""/g, '').replace(/<!--[\s\S]*?-->/g, '')
+// rendered output, so a clone drops them as nodes and attributes before it is
+// serialized (no string surgery on the markup).
+function norm(el: Element): string {
+  const clone = el.cloneNode(true) as Element
+  const comments: Node[] = []
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_COMMENT)
+  while (walker.nextNode()) comments.push(walker.currentNode)
+  for (const c of comments) c.parentNode?.removeChild(c)
+  for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
+    for (const name of node.getAttributeNames()) {
+      if (name.startsWith('data-v-')) node.removeAttribute(name)
+    }
+  }
+  return clone.outerHTML
+}
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -269,11 +281,11 @@ describe('TrackerListView: a Shikimori primary, as ShikimoriView was', () => {
     stubShikimori(shikimoriRows as ShikiAnimeRateEntry[], GOLDEN_PROFILE)
     const w = await mountView()
 
-    expect(norm(w.find('header').element.outerHTML)).toBe(mainDom.header)
-    expect(norm(w.find('.body').element.outerHTML)).toBe(mainDom.toWatch)
+    expect(norm(w.find('header').element)).toBe(mainDom.header)
+    expect(norm(w.find('.body').element)).toBe(mainDom.toWatch)
     await filterSelect(w).setValue('')
     await flushPromises()
-    expect(norm(w.find('.body').element.outerHTML)).toBe(mainDom.all)
+    expect(norm(w.find('.body').element)).toBe(mainDom.all)
   })
 
   it('card titles are russian || name, posters image.original made absolute, To Watch as before', async () => {
@@ -376,6 +388,48 @@ describe('TrackerListView: another tracker', () => {
     expect(w.find('.results-grid .score-badge').text()).toBe('9')
   })
 
+  // #749 review: the loading / error branches open only with nothing to show,
+  // so a pending or failed "Sync now" keeps AniList's cached grid.
+  it('AniList-only: the cached grid survives a pending and a failed "Sync now"', async () => {
+    const rows = [
+      entry('anilist', 1, { values: { status: 'completed' } }),
+      entry('anilist', 2, { values: { status: 'completed' } })
+    ]
+    const api = stubApi({
+      accounts: accountsState({ anilist: ANILIST_USER }, 'anilist'),
+      rates: { anilist: rows }
+    })
+    const w = await mountView()
+    await filterSelect(w).setValue('completed')
+    await flushPromises()
+    expect(cardTitles(w)).toHaveLength(2)
+
+    let fail!: (e: Error) => void
+    api.trackerGetRates.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    )
+    await w.find('.hdr-btn.outline').trigger('click')
+    await flushPromises()
+    // In flight: the rows stay, no "Loading your list…".
+    expect(w.find('.hdr-btn.outline').attributes('disabled')).toBeDefined()
+    expect(cardTitles(w)).toHaveLength(2)
+    expect(w.text()).not.toContain('Loading your list')
+
+    fail(new Error('AniList is down'))
+    await flushPromises()
+    expect(cardTitles(w)).toHaveLength(2)
+    expect(w.find('.error-text').exists()).toBe(false)
+  })
+
+  it('AniList-only with no cached rows: a failed load shows its error', async () => {
+    stubApi({
+      accounts: accountsState({ anilist: ANILIST_USER }, 'anilist'),
+      rates: { anilist: new Error('AniList is down') }
+    })
+    const w = await mountView()
+    expect(w.find('.error-text').text()).toBe('AniList is down')
+  })
+
   it('an empty AniList list reads "No anime in your AniList list."', async () => {
     stubApi({
       accounts: accountsState({ anilist: ANILIST_USER }, 'anilist'),
@@ -451,6 +505,20 @@ describe('TrackerListView: two trackers and the header dropdown', () => {
     expect(w.find('header h2').text()).toBe('AniList')
     expect(cardTitles(w)).toEqual(['anilist title 1'])
     expect(api.trackerGetRates.mock.calls).toEqual([['anilist']])
+  })
+
+  it('switching to a tracker whose rows are cached shows them at once, no loading text', async () => {
+    const api = stubApi({
+      accounts: both(),
+      rates: { shikimori: viaCodec(RATES), anilist: [entry('anilist', 1)] },
+      profile: PROFILE
+    })
+    const w = await mountView()
+    api.trackerGetRates.mockImplementation(() => new Promise(() => {}))
+    await trackerSelect(w).setValue('anilist')
+    await flushPromises()
+    expect(w.text()).not.toContain('Loading your list')
+    expect(cardTitles(w)).toEqual(['anilist title 1'])
   })
 
   it('AniList selected: no Shikimori dashboard although the profile is loaded, its own error and name', async () => {

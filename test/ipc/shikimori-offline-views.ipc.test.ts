@@ -98,9 +98,10 @@ interface Harness {
   store: InMemoryStorage
   offline: OfflineService
   lookupByMalIds: Mock
+  sync: ReturnType<typeof createShikimoriSyncService>
 }
 
-function harness(snapshotsPath?: string): Harness {
+function harness(snapshotsPath?: string, seed: Record<string, unknown> = {}): Harness {
   const store = new InMemoryStorage({
     shikimoriCredentials: { access_token: 'a', refresh_token: 'r' },
     shikimoriUser: { id: 7, nickname: 'me' },
@@ -109,7 +110,8 @@ function harness(snapshotsPath?: string): Harness {
     shikimoriParkedQueues: {},
     shikimoriAnimeDetails: {},
     shikimoriRecommendations: [],
-    shikimoriSessionExpired: false
+    shikimoriSessionExpired: false,
+    ...seed
   })
   const broadcast = vi.fn()
   const offline = createOfflineService({
@@ -160,7 +162,8 @@ function harness(snapshotsPath?: string): Harness {
     invoke: async (channel, ...args) => handlers.get(channel)!({}, ...args),
     store,
     offline,
-    lookupByMalIds
+    lookupByMalIds,
+    sync
   }
 }
 
@@ -286,6 +289,66 @@ describe('calendar online (#568) — today, plus the failed-fetch fallback', () 
     const h = harness()
     getCalendar.mockRejectedValue(new ShikiApiError('Shikimori API error: 500', 500))
     await expect(calendar(h)).rejects.toThrow(/500/)
+  })
+})
+
+// The invalidation fires from inside `/api/calendar`, after the fetch read the
+// rates, so each race is ordered without a timer. The no-invalidation control
+// is "a fresh snapshot within the TTL is served without a fetch" above.
+describe('calendar: an invalidation during an in-flight fetch (#747)', () => {
+  function invalidatingCalendar(h: Harness): void {
+    getCalendar.mockImplementationOnce(async () => {
+      h.sync.invalidateCalendarCache()
+      return [calendarRow(MAL)]
+    })
+  }
+
+  it('S1: with a record, the raced fetch is stored invalidated and the next read refetches', async () => {
+    const h = harness()
+    await calendar(h)
+    invalidatingCalendar(h)
+    await calendar(h, true)
+    expect(h.sync.getCachedCalendar()?.invalidated).toBe(true)
+
+    vi.setSystemTime(T0 + 60_000)
+    expect(await calendar(h)).toMatchObject({ fetchedAt: T0 + 60_000, stale: false })
+    expect(getCalendar).toHaveBeenCalledTimes(3)
+  })
+
+  it('S2: the first fetch, with no record yet, is stored invalidated and the next read refetches', async () => {
+    const h = harness()
+    invalidatingCalendar(h)
+    await calendar(h)
+    expect(h.sync.getCachedCalendar()?.invalidated).toBe(true)
+
+    vi.setSystemTime(T0 + 60_000)
+    expect(await calendar(h)).toMatchObject({ fetchedAt: T0 + 60_000, stale: false })
+    expect(getCalendar).toHaveBeenCalledTimes(2)
+  })
+
+  it('S3: the empty-rates self-fill invalidates nothing, so the next read is served from the cache', async () => {
+    const h = harness(undefined, { shikimoriUserRates: [] })
+    getUserAnimeRates.mockImplementation(async () => [
+      {
+        id: 900 + MAL,
+        score: 7,
+        status: 'watching',
+        episodes: 3,
+        rewatches: 0,
+        updated_at: '2026-10-01T00:00:00Z',
+        anime: { id: MAL, name: 'FMA' }
+      }
+    ])
+    await calendar(h)
+    expect(getUserAnimeRates).toHaveBeenCalledTimes(1)
+    expect(h.sync.getCachedCalendar()).toMatchObject({
+      data: [expect.objectContaining({ malId: MAL })],
+      invalidated: false
+    })
+
+    vi.setSystemTime(T0 + 60_000)
+    expect(await calendar(h)).toMatchObject({ fetchedAt: T0, stale: false })
+    expect(getCalendar).toHaveBeenCalledTimes(1)
   })
 })
 

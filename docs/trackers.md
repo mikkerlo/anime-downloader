@@ -1413,8 +1413,15 @@ Shikimori branch is `shikimori:get-calendar`'s body
   instance's hooks (`anilistCalendarSyncHooks`, spread into its construction
   in `index.ts`): `onRateUpdated` (a live or queued edit's cache patch, the
   drain's reconcile) and `onRatesRefreshed` (a list refresh, then T11a's
-  `tickIfAiringSource`). The Shikimori and AniList caches are independent,
-  so switching the source back serves the other's cache with no refetch.
+  `tickIfAiringSource`). An invalidation that lands while a fetch is in
+  flight is kept (#747, `createCalendarCache`): the fetch stores its result
+  already invalidated, so the next online read refetches, the very first
+  fetch included; the call that raced the edit still returns its pre-edit
+  result. Both hooks fire after the `anilistUserRates` write, so a fetch
+  that begins after one reads the post-edit rows, and the empty-rates
+  self-fill (`fetchAndCacheRates`) fires neither. The Shikimori and AniList
+  caches are independent, so switching the source back serves the other's
+  cache with no refetch.
 - **Snapshot:** `userData/anilist-snapshots.json`, per AniList user, created
   only by a successful fetch and deleted on logout and switch
   (`anilistSessionSteps`); see [Storage](./storage.md), *Per-provider display

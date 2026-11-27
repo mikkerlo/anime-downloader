@@ -6,7 +6,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
-import { fitsFreeSpace, requiredBytes } from '../../src/shared/shared-library-export'
+import {
+  OWNER_NOT_OFFERED,
+  SEPARATE_NEWER_MINOR,
+  fitsFreeSpace,
+  requiredBytes
+} from '../../src/shared/shared-library-export'
 import { renderIndexHtml } from '../../src/main/lib/shared-library/index-html'
 
 // The real page; the spy sees the job's in-memory base after each checkpoint (#713).
@@ -15,6 +20,7 @@ vi.mock('../../src/main/lib/shared-library/index-html', async (importOriginal) =
   return { ...real, renderIndexHtml: vi.fn(real.renderIndexHtml) }
 })
 import {
+  LAYOUT_MINORS,
   UNKNOWN_FIELDS,
   serializeMeta,
   setUnknownFields
@@ -26,7 +32,8 @@ import { nodeFs } from '../../src/main/services/shared-library-export/copy'
 import type { JobRecord } from '../../src/main/services/shared-library-export/job'
 import {
   STALE_EPISODE_LIST,
-  classifyTarget
+  classifyTarget,
+  type ClassifyWho
 } from '../../src/main/services/shared-library-export/plan'
 import {
   buildMeta,
@@ -377,12 +384,25 @@ describe('titles with no downloadedAnime record (#655)', () => {
   })
 })
 
+/** A Shikimori-only PC (#714's `ClassifyWho`), or one logged out with `null`. */
+const shikiOnly = (id: number | null): ClassifyWho =>
+  id === null
+    ? { accounts: { shikimoriUserId: null, trackerAccounts: [] }, owner: null, keep: [] }
+    : {
+        accounts: {
+          shikimoriUserId: id,
+          trackerAccounts: [{ provider: 'shikimori', userId: String(id) }]
+        },
+        owner: { shikimoriId: id, nickname: 'me' },
+        keep: [{ shikimoriId: id, nickname: 'me' }]
+      }
+
 describe('the target table', () => {
   const ME = 4242
 
   it('no library: a new one at <dir>/<name>', async () => {
     env = makeExportEnv()
-    const t = await classifyTarget(env.drive, 'Trip', ME, exists)
+    const t = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists)
     expect(t).toMatchObject({ kind: 'new', root: path.join(env.drive, 'Trip'), blocked: null })
   })
 
@@ -390,7 +410,7 @@ describe('the target table', () => {
     env = makeExportEnv()
     const root = path.join(env.drive, 'Stick')
     await seedLibrary(root, { libraryId: OTHER_LIB, name: 'Stick' })
-    const t = await classifyTarget(root, 'whatever', ME, exists)
+    const t = await classifyTarget(root, 'whatever', shikiOnly(ME), exists)
     expect(t).toMatchObject({ kind: 'add', root, libraryName: 'Stick' })
   })
 
@@ -398,7 +418,7 @@ describe('the target table', () => {
     env = makeExportEnv()
     await seedLibrary(path.join(env.drive, 'Trip'), { libraryId: OTHER_LIB, name: 'Trip' })
     for (const who of [ME, null]) {
-      const t = await classifyTarget(env.drive, 'Trip', who, exists)
+      const t = await classifyTarget(env.drive, 'Trip', shikiOnly(who), exists)
       expect(t.kind).toBe('add')
       expect(t.blocked).toBeNull()
     }
@@ -412,7 +432,7 @@ describe('the target table', () => {
       owner: { shikimoriId: ME, nickname: 'me' }
     })
     for (const mode of ['videos', 'metadata'] as const) {
-      const t = await classifyTarget(env.drive, 'Trip', ME, exists, { mode })
+      const t = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists, { mode })
       expect(t).toMatchObject({ kind: 'own-metadata', mode: 'metadata', blocked: null })
       expect(t.manifest?.libraryId).toBe(OTHER_LIB)
     }
@@ -421,7 +441,7 @@ describe('the target table', () => {
   it('a Videos-only library With metadata: an upgrade, for any logged-in user (#586)', async () => {
     env = makeExportEnv()
     await seedLibrary(path.join(env.drive, 'Trip'), { libraryId: OTHER_LIB, name: 'Trip' })
-    const t = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    const t = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists, { mode: 'metadata' })
     expect(t).toMatchObject({ kind: 'upgrade', mode: 'metadata', blocked: null })
     expect(t.manifest?.libraryId).toBe(OTHER_LIB)
   })
@@ -438,7 +458,7 @@ describe('the target table', () => {
       [null, 'videos'],
       [ME, 'metadata']
     ] as const) {
-      const t = await classifyTarget(env.drive, 'Trip', who, exists, { mode, claimed })
+      const t = await classifyTarget(env.drive, 'Trip', shikiOnly(who), exists, { mode, claimed })
       expect(t).toMatchObject({
         kind: 'claimed',
         mode,
@@ -448,7 +468,7 @@ describe('the target table', () => {
       })
     }
     // Not claimed here: foreign.
-    const t = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    const t = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists, { mode: 'metadata' })
     expect(t.kind).toBe('foreign')
   })
 
@@ -464,14 +484,16 @@ describe('the target table', () => {
       name: 'Trip',
       owner: { shikimoriId: ME, nickname: 'me' }
     })
-    const own = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    const own = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists, { mode: 'metadata' })
     expect(own).toMatchObject({
       kind: 'own-metadata',
       root: path.join(env.drive, 'Trip (2)'),
       ownerNickname: 'friend'
     })
     // In Videos only, the own sibling is skipped as before (#574).
-    const videos = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'videos' })
+    const videos = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists, {
+      mode: 'videos'
+    })
     expect(videos).toMatchObject({ kind: 'foreign', root: path.join(env.drive, 'Trip (3)') })
 
     fs.rmSync(path.join(env.drive, 'Trip (2)'), { recursive: true })
@@ -479,7 +501,7 @@ describe('the target table', () => {
       libraryId: '2a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
       name: 'Trip'
     })
-    const up = await classifyTarget(env.drive, 'Trip', ME, exists, { mode: 'metadata' })
+    const up = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists, { mode: 'metadata' })
     expect(up).toMatchObject({ kind: 'upgrade', root: path.join(env.drive, 'Trip (2)') })
   })
 
@@ -492,7 +514,7 @@ describe('the target table', () => {
     })
     fs.mkdirSync(path.join(env.drive, 'Trip (2)'))
     for (const who of [ME, null]) {
-      const t = await classifyTarget(env.drive, 'Trip', who, exists)
+      const t = await classifyTarget(env.drive, 'Trip', shikiOnly(who), exists)
       expect(t).toMatchObject({
         kind: 'foreign',
         ownerNickname: 'friend',
@@ -527,7 +549,7 @@ describe('the target table', () => {
       libraryId: '5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
       name: 'Trip'
     })
-    const t = await classifyTarget(env.drive, 'Trip', ME, exists)
+    const t = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists)
     expect(t).toMatchObject({
       kind: 'add',
       root: path.join(env.drive, 'Trip (5)'),
@@ -538,7 +560,7 @@ describe('the target table', () => {
 
     // With no Videos-only sibling, the first free name.
     fs.rmSync(path.join(env.drive, 'Trip (5)'), { recursive: true })
-    const fresh = await classifyTarget(env.drive, 'Trip', ME, exists)
+    const fresh = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists)
     expect(fresh).toMatchObject({ kind: 'foreign', root: path.join(env.drive, 'Trip (5)') })
   })
 
@@ -550,7 +572,7 @@ describe('the target table', () => {
       path.join(root, LIBRARY_DIR, 'manifest.json'),
       JSON.stringify({ layoutVersion: 3, layoutMinor: 0, libraryId: OTHER_LIB })
     )
-    const t = await classifyTarget(env.drive, 'Trip', ME, exists)
+    const t = await classifyTarget(env.drive, 'Trip', shikiOnly(ME), exists)
     expect(t.kind).toBe('read-only')
     expect(t.blocked).toMatch(/newer version/)
   })
@@ -570,7 +592,7 @@ describe('a layout v2 library (#713)', () => {
     })
     for (const who of [ME, null]) {
       for (const mode of ['videos', 'metadata'] as const) {
-        const t = await classifyTarget(env.drive, 'Trip', who, exists, { mode })
+        const t = await classifyTarget(env.drive, 'Trip', shikiOnly(who), exists, { mode })
         expect(t, `${who} ${mode}`).toMatchObject({
           kind: 'foreign',
           ownerNickname: 'alice',
@@ -612,6 +634,276 @@ describe('a layout v2 library (#713)', () => {
     if (res.ok) await env.svc.settled(res.job.jobId)
     expect(spy.mock.calls.length).toBeGreaterThan(0)
     for (const [base] of spy.mock.calls) expect(base.layoutVersion).toBe(1)
+  })
+})
+
+describe('the export owner picker (#714)', () => {
+  const ME = { id: 4242, nickname: 'me', avatar: null }
+  const AL = { id: 9, nickname: 'al', avatar: null }
+  const FRIEND_LIB = '7a7b7c7d-1e2f-4a3b-8c4d-5e6f7a8b9c0d'
+  const stateOk = async (t: { libraryId: string }) =>
+    ({
+      libraryId: t.libraryId,
+      drive: 'ok',
+      shikimori: 'skipped',
+      counts: { applied: 0, conflicts: 0, clamped: 0 },
+      waitingMalIds: [],
+      rewatchesSuperseded: 0
+    }) as SyncLibraryResult
+
+  /**
+   * A Shikimori + AniList PC, AniList primary. `seam` offers AniList as an
+   * owner too, as #715 will; the actor then holds both accounts.
+   */
+  function pc(seam: boolean, users: { shikimori?: boolean; anilist?: boolean } = {}): void {
+    const shikimori = users.shikimori ?? true
+    const anilist = users.anilist ?? true
+    const accounts = [
+      ...(shikimori ? [{ provider: 'shikimori', userId: String(ME.id) }] : []),
+      ...(anilist ? [{ provider: 'anilist', userId: String(AL.id) }] : [])
+    ]
+    env = makeExportEnv(
+      {
+        ...(seam ? { ownerProviders: ['shikimori', 'anilist'] as const } : {}),
+        writeLibraryState: stateOk,
+        actor: () => ({
+          installId: 'pc-export',
+          appVersion: '7.0.0',
+          shikimoriUserId: shikimori ? ME.id : null,
+          claim: null,
+          trackerAccounts: accounts
+        })
+      },
+      { shikimoriUser: shikimori ? ME : null }
+    )
+    if (anilist) env.store.set('anilistUser', AL)
+    env.store.set('trackerPrimary', anilist ? 'anilist' : 'shikimori')
+  }
+  const episode = (): string =>
+    env.addEpisode({ animeId: 7, title: 'Show', episodeInt: '1', translationId: 11 }).key
+  const plan = (over: Partial<ExportPlanRequest> = {}) =>
+    env.svc.plan({ animeIds: [7], target: env.drive, name: 'Trip', mode: 'metadata', ...over })
+  const manifestAt = (root: string) =>
+    JSON.parse(fs.readFileSync(path.join(root, LIBRARY_DIR, 'manifest.json'), 'utf8'))
+  async function startOk(req: Partial<ExportStartRequest>): Promise<void> {
+    const res = await env.svc.start({
+      selection: sel(episode()),
+      target: env.drive,
+      name: 'Trip',
+      mode: 'metadata',
+      ...req
+    })
+    if (!res.ok) throw new Error(res.reason)
+    await env.svc.settled(res.job.jobId)
+  }
+
+  it('until #715 the plan offers Shikimori only, and defaults to it even with AniList primary', async () => {
+    pc(false)
+    const p = await env.svc.plan({ animeIds: [7], target: null, name: '' })
+    expect(p).toMatchObject({
+      canExportMetadata: true,
+      nickname: 'me',
+      owners: [{ provider: 'shikimori', nickname: 'me', olderVersions: true }],
+      defaultOwner: 'shikimori'
+    })
+    // An AniList-only PC can't export With metadata yet.
+    pc(false, { shikimori: false })
+    expect(await env.svc.plan({ animeIds: [7], target: null, name: '' })).toMatchObject({
+      canExportMetadata: false,
+      nickname: null,
+      owners: [],
+      defaultOwner: null
+    })
+  })
+
+  it('with AniList offered (the #715 seam): both owners, the primary first by default, the older-versions flag on Shikimori only', async () => {
+    pc(true)
+    const p = await env.svc.plan({ animeIds: [7], target: null, name: '' })
+    expect(p.owners).toEqual([
+      { provider: 'shikimori', nickname: 'me', olderVersions: true },
+      { provider: 'anilist', nickname: 'al', olderVersions: false }
+    ])
+    expect(p).toMatchObject({ defaultOwner: 'anilist', nickname: 'al' })
+  })
+
+  it('a re-export keeps the existing owner: an own Shikimori library with no pick is own-metadata, its owner reported and kept', async () => {
+    pc(true)
+    const root = path.join(env.drive, 'Trip')
+    await seedLibrary(root, {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: { shikimoriId: ME.id, nickname: 'me' }
+    })
+    const p = await plan()
+    expect(p.target).toMatchObject({
+      kind: 'own-metadata',
+      root,
+      owner: { provider: 'shikimori', nickname: 'me' }
+    })
+    await startOk({})
+    expect(manifestAt(root).owner).toEqual({ shikimoriId: ME.id, nickname: 'me' })
+    expect(manifestAt(root).layoutVersion).toBe(1)
+  })
+
+  it('picking AniList on the own Shikimori library: other-owner, a sibling for AniList, never the Shikimori sibling', async () => {
+    pc(true)
+    const root = path.join(env.drive, 'Trip')
+    await seedLibrary(root, {
+      libraryId: OTHER_LIB,
+      name: 'Trip',
+      owner: { shikimoriId: ME.id, nickname: 'me' }
+    })
+    // A Shikimori-owned sibling isn't AniList's own: skipped.
+    await seedLibrary(path.join(env.drive, 'Trip (2)'), {
+      libraryId: FRIEND_LIB,
+      name: 'Trip',
+      owner: { shikimoriId: ME.id, nickname: 'me' }
+    })
+    const p = await plan({ target: root, owner: 'anilist' })
+    expect(p.target).toMatchObject({
+      kind: 'other-owner',
+      root: path.join(env.drive, 'Trip (3)'),
+      ownerNickname: 'me',
+      owner: { provider: 'shikimori', nickname: 'me' }
+    })
+    await startOk({ target: root, owner: 'anilist' })
+    expect(manifestAt(path.join(env.drive, 'Trip (3)'))).toMatchObject({
+      layoutVersion: 2,
+      owner: { provider: 'anilist', userId: '9', nickname: 'al' }
+    })
+    expect(manifestAt(root).owner).toEqual({ shikimoriId: ME.id, nickname: 'me' })
+  })
+
+  it('the default name follows the pick; a different pick on a parent folder with the default name is a plain new', async () => {
+    pc(true)
+    await seedLibrary(path.join(env.drive, 'Anime Library (me)'), {
+      libraryId: OTHER_LIB,
+      name: 'Anime Library (me)',
+      owner: { shikimoriId: ME.id, nickname: 'me' }
+    })
+    const al = await plan({ name: '', owner: 'anilist' })
+    expect(al.target).toMatchObject({
+      kind: 'new',
+      root: path.join(env.drive, 'Anime Library (al)'),
+      libraryName: 'Anime Library (al)'
+    })
+    const shiki = await plan({ name: '', owner: 'shikimori' })
+    expect(shiki.target).toMatchObject({ kind: 'own-metadata', libraryName: 'Anime Library (me)' })
+  })
+
+  it('export → separate → re-export: the second plan is own-metadata on <name> (2), with no takeover', async () => {
+    pc(true)
+    const videos = path.join(env.drive, 'Trip')
+    await seedLibrary(videos, { libraryId: OTHER_LIB, name: 'Trip' })
+    const before = scan(videos)
+    const first = await plan({ owner: 'anilist' })
+    expect(first.target).toMatchObject({ kind: 'upgrade', root: videos })
+    const separate = await plan({ owner: 'anilist', sibling: true })
+    expect(separate.target).toMatchObject({ kind: 'new', root: path.join(env.drive, 'Trip (2)') })
+    await startOk({ owner: 'anilist', sibling: true })
+    expect(scan(videos)).toEqual(before)
+    const again = await plan({ owner: 'anilist' })
+    expect(again.target).toMatchObject({
+      kind: 'own-metadata',
+      root: path.join(env.drive, 'Trip (2)'),
+      owner: { provider: 'anilist', nickname: 'al' }
+    })
+    // A Shikimori pick still takes the Videos-only library over, with today's warning.
+    expect((await plan({ owner: 'shikimori' })).target).toMatchObject({
+      kind: 'upgrade',
+      root: videos
+    })
+  })
+
+  it('"separate" never hands back a Videos-only (2) as another upgrade', async () => {
+    pc(true)
+    await seedLibrary(path.join(env.drive, 'Trip'), { libraryId: OTHER_LIB, name: 'Trip' })
+    await seedLibrary(path.join(env.drive, 'Trip (2)'), { libraryId: FRIEND_LIB, name: 'Trip' })
+    const p = await plan({ owner: 'anilist', sibling: true })
+    expect(p.target).toMatchObject({ kind: 'new', root: path.join(env.drive, 'Trip (3)') })
+  })
+
+  it('a takeover T13a’s minor check would refuse goes straight to the separate path, and start never reaches the takeover', async () => {
+    pc(true)
+    const videos = path.join(env.drive, 'Trip')
+    await seedLibrary(videos, { libraryId: OTHER_LIB, name: 'Trip' })
+    const file = path.join(videos, LIBRARY_DIR, 'manifest.json')
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.writeFileSync(file, JSON.stringify({ ...m, layoutMinor: LAYOUT_MINORS[1] + 1 }))
+    const before = scan(videos)
+    const p = await plan({ owner: 'anilist' })
+    expect(p.target).toMatchObject({
+      kind: 'new',
+      root: path.join(env.drive, 'Trip (2)'),
+      separateReason: SEPARATE_NEWER_MINOR
+    })
+    await startOk({ owner: 'anilist', confirmTakeover: true })
+    expect(scan(videos)).toEqual(before)
+    expect(manifestAt(path.join(env.drive, 'Trip (2)')).owner).toMatchObject({
+      provider: 'anilist'
+    })
+    // A Shikimori takeover keeps v1, so the minor doesn't stop it.
+    expect((await plan({ owner: 'shikimori' })).target).toMatchObject({
+      kind: 'upgrade',
+      root: videos
+    })
+  })
+
+  // PR #730 review: gated on the library, not the request. A Videos only
+  // export at an own v2 library went to `own-metadata`: written on a
+  // Shikimori + AniList PC, refused ("Log in to Shikimori…") on an AniList-only one.
+  it.each([
+    ['Shikimori + AniList', {}],
+    ['AniList only', { shikimori: false }]
+  ] as const)(
+    '%s PC, Videos only at an own v2 AniList library: other-owner next to it, the v2 library byte-identical',
+    async (_l, users) => {
+      pc(false, users)
+      const v2 = path.join(env.drive, 'Trip')
+      await seedLibrary(v2, {
+        libraryId: OTHER_LIB,
+        name: 'Trip',
+        owner: { provider: 'anilist', userId: String(AL.id), nickname: 'al' }
+      })
+      const before = scan(v2)
+      const p = await plan({ target: v2, mode: 'videos' })
+      expect(p.target).toMatchObject({
+        kind: 'other-owner',
+        mode: 'videos',
+        root: path.join(env.drive, 'Trip (2)'),
+        ownerNickname: 'al',
+        owner: { provider: 'anilist', nickname: 'al' }
+      })
+      await startOk({ target: v2, mode: 'videos' })
+      expect(scan(v2)).toEqual(before)
+      expect(manifestAt(path.join(env.drive, 'Trip (2)'))).toMatchObject({
+        layoutVersion: 1,
+        mode: 'videos',
+        owner: null
+      })
+    }
+  )
+
+  it('start refuses an owner that isn’t offered, or isn’t connected', async () => {
+    pc(false)
+    const res = await env.svc.start({
+      selection: sel(episode()),
+      target: env.drive,
+      name: 'Trip',
+      mode: 'metadata',
+      owner: 'anilist'
+    })
+    expect(res).toEqual({ ok: false, reason: OWNER_NOT_OFFERED })
+    pc(true, { anilist: false })
+    expect(
+      await env.svc.start({
+        selection: sel(episode()),
+        target: env.drive,
+        name: 'Trip',
+        mode: 'metadata',
+        owner: 'anilist'
+      })
+    ).toEqual({ ok: false, reason: OWNER_NOT_OFFERED })
   })
 })
 

@@ -1,11 +1,12 @@
 // Who owns a Shared Library, across layout majors (#713). Every owner
 // comparison goes through here.
 //
-// A v1 owner (`{ shikimoriId }`) is matched by this PC's Shikimori user, and a
-// claim only ever names a v1 owner. A v2 owner (`{ provider, userId }`) is
-// matched only by a tracker account the actor carries, never by the Shikimori
-// user, even when its `provider` is `'shikimori'`. Production actors carry no
-// tracker account yet, so on this version every v2 owner is `foreign`.
+// A v1 owner (`{ shikimoriId }`) is matched by this PC's Shikimori user. A v2
+// owner (`{ provider, userId }`) is matched only by a tracker account the actor
+// carries, never by `shikimoriUserId`, even when its `provider` is
+// `'shikimori'`. Since #714 a PC presents every connected account
+// (`ownerAccountsOf`), Shikimori's included, so a hand-written v2
+// `provider: 'shikimori'` owner matches the same Shikimori account.
 
 /** An owner as `(provider, userId)`, whatever its layout. */
 export interface NormalizedOwner {
@@ -21,6 +22,20 @@ export interface OwnerAccounts {
 }
 
 type AnyOwner = SharedLibraryOwner | SharedLibraryTrackerOwner | null | undefined
+
+/**
+ * What a PC with these connected accounts presents (#714): its Shikimori
+ * account's id for a v1 owner, and every account for a v2 one.
+ */
+export function ownerAccountsOf(
+  accounts: readonly { provider: string; userId: string }[]
+): Pick<SharedLibraryActor, 'shikimoriUserId' | 'trackerAccounts'> {
+  const shikimori = accounts.find((a) => a.provider === 'shikimori')
+  return {
+    shikimoriUserId: shikimori ? Number(shikimori.userId) : null,
+    trackerAccounts: accounts.map(({ provider, userId }) => ({ provider, userId }))
+  }
+}
 
 export function isTrackerOwner(owner: AnyOwner): owner is SharedLibraryTrackerOwner {
   return owner != null && 'provider' in owner

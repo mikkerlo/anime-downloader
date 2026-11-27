@@ -535,6 +535,55 @@ describe('Combine, and the rewatch question (owner decision 6)', () => {
   }
 })
 
+describe('a claim unlocks a rate conflict only for the owner it names (#714)', () => {
+  const scoped = (libraryId: string): SyncConflictRecord => ({
+    id: 'c-scope',
+    ownerScope: OWNER.id,
+    animeId: ID,
+    fieldPath: 'rate.score',
+    parties: { local: 7, [`library:${libraryId}`]: 8 },
+    bases: { [`library:${libraryId}`]: 6 },
+    at: {},
+    suggestion: null,
+    reason: 'changed on both sides, to different values',
+    firstSeenRunId: 'r1',
+    lastSeenRunId: 'r1'
+  })
+  const SIGN_IN = { id: 'c-scope', reason: "Sign in as the library's owner to resolve this." }
+
+  it('a v2 claim library holding the title does not unlock a Shikimori-scoped rate conflict', async () => {
+    const tracker = { provider: 'anilist', userId: String(OWNER.id) }
+    const { root, libraryId } = await makeLibrary({
+      tracker,
+      doc: titleDoc({ rate: r({ score: 8 }, T0 + 77) })
+    })
+    const pc = makePc({ user: null, installId: 'pc-claim' })
+    await pc.attach(root)
+    const recs = pc.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>
+    recs[libraryId].trackerClaim = { ...tracker, at: 1 }
+    pc.store.set('attachedLibraries', recs)
+    expect(pc.attached.get(libraryId)).toMatchObject({ role: 'claim', layoutVersion: 2 })
+    seedConflicts(pc, [scoped(libraryId)])
+    const res = await pc.runner.resolve(['c-scope'], { 'c-scope': keep('local') })
+    expect(res.failed).toEqual([SIGN_IN])
+    expect(await driveScore(root)).toBe(8)
+  })
+
+  it('a v1 claim library of another owner holding the title does not unlock it either', async () => {
+    const { root, libraryId } = await makeLibrary({
+      ownerId: 777,
+      doc: titleDoc({ rate: r({ score: 8 }, T0 + 77) })
+    })
+    const pc = makePc({ user: null, installId: 'pc-claim' })
+    await pc.attach(root, { claim: true })
+    expect(pc.attached.get(libraryId)?.role).toBe('claim')
+    seedConflicts(pc, [scoped(libraryId)])
+    const res = await pc.runner.resolve(['c-scope'], { 'c-scope': keep('local') })
+    expect(res.failed).toEqual([SIGN_IN])
+    expect(await driveScore(root)).toBe(8)
+  })
+})
+
 describe('a claim PC', () => {
   it('resolving writes the drive and its base and queues nothing for Shikimori', async () => {
     const libRate = r({ score: 8 }, T0 + 77)

@@ -41,12 +41,60 @@ describe('buildActor', () => {
     expect(buildActor(storeWith(v2), LIB, '7.0.0').claim).toBeNull()
   })
 
-  it('a logged-in PC carries no claim', () => {
+  it('a logged-in PC carries no claim, and presents its Shikimori account (#714)', () => {
     const rec = record({ claim: { ownerId: 5, at: 1 } })
     expect(buildActor(storeWith(rec, { id: 5 }), LIB, '7.0.0')).toMatchObject({
       shikimoriUserId: 5,
       claim: null,
-      trackerAccounts: []
+      trackerAccounts: [{ provider: 'shikimori', userId: '5' }]
+    })
+  })
+})
+
+describe('buildActor (#714): every connected account, a claim only with none', () => {
+  it.each(['anilistUser', 'myanimelistUser'])(
+    'only %s set, plus a leftover claim on the record: claim null',
+    (key) => {
+      for (const rec of [
+        record({ claim: { ownerId: 5, at: 1 } }),
+        record({
+          owner: null,
+          trackerOwner: { provider: 'anilist', userId: '5' },
+          trackerClaim: { provider: 'anilist', userId: '5', at: 1 }
+        })
+      ]) {
+        const store = storeWith(rec)
+        store.set(key, { id: 5, nickname: 'x', avatar: null })
+        expect(buildActor(store, LIB, '7.0.0').claim).toBeNull()
+      }
+    }
+  )
+
+  it('with no account: a v1 claim is { libraryId, ownerId }, a v2 trackerClaim { libraryId, provider, userId }', () => {
+    const v1 = buildActor(storeWith(record({ claim: { ownerId: 5, at: 1 } })), LIB, '7.0.0')
+    expect(v1.claim).toEqual({ libraryId: LIB, ownerId: 5 })
+    const v2 = record({
+      owner: null,
+      trackerOwner: { provider: 'anilist', userId: '5' },
+      trackerClaim: { provider: 'anilist', userId: '5', at: 1 }
+    })
+    expect(buildActor(storeWith(v2), LIB, '7.0.0').claim).toEqual({
+      libraryId: LIB,
+      provider: 'anilist',
+      userId: '5'
+    })
+  })
+
+  it('presents every connected account in tracker order; shikimoriUserId is the Shikimori one only', () => {
+    const store = storeWith(record({}))
+    store.set('myanimelistUser', { id: 7, nickname: 'm', avatar: null })
+    store.set('anilistUser', { id: 6, nickname: 'a', avatar: null })
+    expect(buildActor(store, LIB, '7.0.0')).toMatchObject({
+      shikimoriUserId: null,
+      trackerAccounts: [
+        { provider: 'anilist', userId: '6' },
+        { provider: 'mal', userId: '7' }
+      ]
     })
   })
 })

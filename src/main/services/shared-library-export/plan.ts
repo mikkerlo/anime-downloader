@@ -7,10 +7,16 @@ import { titleNames } from '../../lib/anime-record'
 import type { FileCheckResult } from '../../lib/episode-file-scan'
 import type { DownloadedEpisodesMap } from '../../lib/downloaded-episodes'
 import { discoverLibraries } from '../../lib/shared-library/discover'
-import { itemKey } from '../../lib/shared-library/format'
+import { LAYOUT_MINORS, itemKey } from '../../lib/shared-library/format'
 import { libraryFolderName } from '../../lib/shared-library/naming'
 import { readLibrary } from '../../lib/shared-library/read'
-import { isOwnedBy } from '../../lib/shared-library/owner'
+import {
+  isOwnedBy,
+  isTrackerOwner,
+  sameOwner,
+  type OwnerAccounts
+} from '../../lib/shared-library/owner'
+import { SEPARATE_NEWER_MINOR } from '@shared/shared-library-export'
 
 export const DEFAULT_LIBRARY_NAME = 'Anime Library'
 
@@ -388,6 +394,30 @@ export interface ClassifiedTarget {
   blocked: string | null
   /** The manifest at `root` (`add`, `upgrade`, `own-metadata`), for the present items and the job's base. */
   manifest: SharedLibraryManifest | null
+  /**
+   * The owner a With metadata export writes (#714): the pick, or an own
+   * library's owner when it keeps it. Null when none can be written.
+   */
+  writeOwner: ManifestOwner | null
+  /** The owner of the library the target names (`own-metadata`, `other-owner`), for the picker (#714). */
+  targetOwner?: ManifestOwner
+  /** Why a Videos-only library wasn't offered for a takeover (#714). */
+  separateReason?: string
+}
+
+export type ManifestOwner = SharedLibraryOwner | SharedLibraryTrackerOwner
+
+/** Who exports (#714). */
+export interface ClassifyWho {
+  /** Every connected account: a library any of them owns is this user's own. */
+  accounts: OwnerAccounts
+  /** The owner a new With metadata library gets (the pick), as written; null when none can be. */
+  owner: ManifestOwner | null
+  /**
+   * No explicit pick: an own library at the picked folder whose owner is one
+   * of these keeps that owner (the dialog preselects it), instead of `owner`.
+   */
+  keep?: readonly ManifestOwner[]
 }
 
 export interface ClassifyOptions {
@@ -395,6 +425,8 @@ export interface ClassifyOptions {
   mode?: ExportMode
   /** Whether this PC uses `libraryId` through a local claim (S7a #578's `attachedLibraries[id].claim`). */
   claimed?: (libraryId: string) => boolean
+  /** "Create a separate library instead" (#714): a Videos-only library is never taken over. */
+  sibling?: boolean
 }
 
 /**
@@ -404,7 +436,7 @@ export interface ClassifyOptions {
 export async function classifyTarget(
   dir: string,
   name: string,
-  shikimoriUserId: number | null,
+  who: ClassifyWho,
   pathExists: (p: string) => Promise<boolean>,
   opts: ClassifyOptions = {}
 ): Promise<ClassifiedTarget> {
@@ -414,61 +446,114 @@ export async function classifyTarget(
   const root = atDir ? dir : path.join(dir, libraryFolderName(libName))
   const read = await readLibrary(root)
   if (read.status === 'none') {
-    return { kind: 'new', mode, root, libraryName: libName, blocked: null, manifest: null }
+    return {
+      kind: 'new',
+      mode,
+      root,
+      libraryName: libName,
+      blocked: null,
+      manifest: null,
+      writeOwner: who.owner
+    }
   }
   const m = read.manifest
-  // This PC presents its Shikimori user only, so a v2 library is foreign (#713).
+  // Owned by any of this PC's accounts, by `(provider, userId)` (#714).
   const isOwn = (x: SharedLibraryManifest): boolean =>
-    x.mode === 'metadata' && isOwnedBy(x.owner, { shikimoriUserId, trackerAccounts: [] })
+    x.mode === 'metadata' && isOwnedBy(x.owner, who.accounts)
+  // With no explicit pick, an own library keeps its owner when it's offered.
+  const keeps = m !== null && isOwn(m) && (who.keep ?? []).some((k) => sameOwner(k, m.owner))
+  const pick = keeps ? m.owner : who.owner
+  // The picked account's library: the same owner in the same layout, so a
+  // hand-written v2 `provider: 'shikimori'` library is never a Shikimori pick's.
+  const isPicked = (x: SharedLibraryManifest): boolean =>
+    x.mode === 'metadata' && pick !== null && sameOwner(x.owner, pick)
+  // An AniList or MAL owner makes the library v2: a takeover rewrites it (#714).
+  const v2Pick = mode === 'metadata' && isTrackerOwner(pick)
+  // T13a's writer refuses a takeover that changes major from a newer v1 minor.
+  let newerMinor = false
+  const canTakeOver = (x: SharedLibraryManifest): boolean => {
+    const ok = !v2Pick || x.layoutVersion === 2 || x.layoutMinor <= LAYOUT_MINORS[x.layoutVersion]
+    if (!ok) newerMinor = true
+    return ok
+  }
   // A Videos-only library: added to in Videos only, taken over With metadata.
   const videosOnly: 'add' | 'upgrade' = mode === 'metadata' ? 'upgrade' : 'add'
-  if (m !== null && m.mode === 'metadata' && m.owner !== null && !isOwn(m)) {
-    // Claimed or foreign: never written. The siblings `<name>`, `<name> (2)`,
-    // … in order. The first Videos-only library among them is the one an
-    // earlier export made (anyone may add to a library with no owner), so a
-    // re-export adds to it (With metadata: takes it over) and `present`
-    // applies; With metadata, this user's own library there is the one an
-    // earlier export made too. A free name ends the search with a new
-    // library; anything else (another claimed or foreign library, a
-    // read-only one, or a plain folder) is skipped.
-    const kind = opts.claimed?.(m.libraryId) ? 'claimed' : 'foreign'
-    const ownerNickname = m.owner.nickname || 'another user'
-    const parent = atDir ? path.dirname(dir) : dir
+  const parent = atDir ? path.dirname(dir) : dir
+  const base = { mode, blocked: null, writeOwner: pick }
+
+  // The siblings `<name>`, `<name> (2)`, … in order. The first Videos-only
+  // library among them is the one an earlier export made (anyone may add to a
+  // library with no owner), so a re-export adds to it (With metadata: takes it
+  // over) and `present` applies, unless `skipVideos`; With metadata, the
+  // picked account's own library there is the one an earlier export made too.
+  // A free name ends the search with a new library; anything else (another
+  // account's, a claimed or foreign library, a read-only one, or a plain
+  // folder) is skipped.
+  async function siblings(
+    kind: ExportTargetKind,
+    extra: Pick<ClassifiedTarget, 'ownerNickname' | 'targetOwner'>,
+    skipVideos: boolean
+  ): Promise<ClassifiedTarget> {
     for (let n = 1; ; n++) {
       const sibling = path.join(parent, libraryFolderName(n === 1 ? libName : `${libName} (${n})`))
       if (!(await pathExists(sibling))) {
-        return {
-          kind,
-          mode,
-          root: sibling,
-          libraryName: libName,
-          ownerNickname,
-          blocked: null,
-          manifest: null
-        }
+        return { ...base, ...extra, kind, root: sibling, libraryName: libName, manifest: null }
       }
       const s = await readLibrary(sibling)
       if (s.status !== 'ok') continue
       const found = (k: ExportTargetKind): ClassifiedTarget => ({
+        ...base,
+        ...extra,
         kind: k,
-        mode,
         root: sibling,
         libraryName: s.manifest.name ?? path.basename(sibling),
-        ownerNickname,
-        blocked: null,
         manifest: s.manifest
       })
       if (s.manifest.mode === 'videos' && s.manifest.owner === null) {
-        return found(videosOnly)
+        if (!skipVideos && canTakeOver(s.manifest)) return found(videosOnly)
+        continue
       }
-      if (mode === 'metadata' && isOwn(s.manifest)) return found('own-metadata')
+      if (mode === 'metadata' && isPicked(s.manifest)) {
+        return { ...found('own-metadata'), targetOwner: s.manifest.owner! }
+      }
     }
+  }
+
+  // With a v2 pick the picked account's own sibling is looked for first, past
+  // every Videos-only one, so "separate" is found again on a re-export (#714).
+  async function search(
+    kind: ExportTargetKind,
+    extra: Pick<ClassifiedTarget, 'ownerNickname' | 'targetOwner'>
+  ): Promise<ClassifiedTarget> {
+    const separate = mode === 'metadata' && opts.sibling === true
+    if (v2Pick && !separate) {
+      const mine = await siblings(kind, extra, true)
+      if (mine.kind === 'own-metadata') return mine
+    }
+    const t = await siblings(kind, extra, separate)
+    return newerMinor ? { ...t, separateReason: SEPARATE_NEWER_MINOR } : t
+  }
+
+  if (m !== null && m.mode === 'metadata' && m.owner !== null && !isOwn(m)) {
+    // Claimed or foreign: never written.
+    const kind = opts.claimed?.(m.libraryId) ? 'claimed' : 'foreign'
+    return search(kind, { ownerNickname: m.owner.nickname || 'another user' })
+  }
+  if (m !== null && m.mode === 'metadata' && m.owner !== null && !isPicked(m)) {
+    // Another of this PC's accounts owns it (#714): never written, and its
+    // owner never changed; the export goes into a library next to it. Gated on
+    // the library, not the request: a Videos only export would otherwise be
+    // routed into it as `own-metadata`, and a v2 one written before #715.
+    return search('other-owner', {
+      ownerNickname: m.owner.nickname || 'another account',
+      targetOwner: m.owner
+    })
   }
   const existingName = m?.name ?? path.basename(root)
   if (read.status === 'read-only') {
     return {
+      ...base,
       kind: 'read-only',
-      mode,
       root,
       libraryName: existingName,
       blocked: read.message,
@@ -478,20 +563,32 @@ export async function classifyTarget(
   if (read.manifest.mode === 'metadata') {
     // A Videos only add is routed here: it would widen titles[] with no state.
     return {
+      ...base,
       kind: 'own-metadata',
       mode: 'metadata',
       root,
       libraryName: existingName,
-      blocked: null,
-      manifest: read.manifest
+      manifest: read.manifest,
+      ...(read.manifest.owner ? { targetOwner: read.manifest.owner } : {})
     }
   }
+  if (mode === 'metadata' && (v2Pick || opts.sibling === true)) {
+    // "Separate", or a takeover the writer would refuse: the picked account's
+    // library next to it, or a new one at the first free name, never this one.
+    if (opts.sibling === true || !canTakeOver(read.manifest)) {
+      const t = await siblings('new', {}, true)
+      return newerMinor ? { ...t, separateReason: SEPARATE_NEWER_MINOR } : t
+    }
+    // A v2 pick's own library next to it first; only without one, the
+    // takeover (with the v2 warning) or "separate".
+    const mine = await siblings('new', {}, true)
+    if (mine.kind === 'own-metadata') return mine
+  }
   return {
+    ...base,
     kind: videosOnly,
-    mode,
     root,
     libraryName: existingName,
-    blocked: null,
     manifest: read.manifest
   }
 }

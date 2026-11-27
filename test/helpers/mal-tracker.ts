@@ -13,12 +13,13 @@ import { createTrackerRates } from '../../src/main/services/trackers/rates'
 import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
 import { createMalClient } from '../../src/main/trackers/mal/client'
 import type { MalCredentials } from '../../src/main/trackers/mal/auth'
-import { createMalTracker } from '../../src/main/trackers/mal'
+import { createMalTracker, type MalTrackerDeps } from '../../src/main/trackers/mal'
 import { register as registerTrackers } from '../../src/main/ipc/trackers.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import type { QueuedTrackerUpdate } from '../../src/main/lib/shikimori-queue'
 import { InMemoryStorage } from './in-memory-storage'
 import { createFakeSafeStorage } from './fake-safe-storage'
+import { createGenericTracker } from './generic-tracker'
 
 export const MAL_USER = { id: 1234567, nickname: 'fake_mal_user', avatar: null }
 
@@ -40,17 +41,27 @@ export function queued(malId: number, queuedAt: number): QueuedTrackerUpdate {
   }
 }
 
+/** The AniList account the rig's mirror (#744) is signed in as. */
+export const MIRROR_USER = { id: 777, nickname: 'fake_anilist_user', avatar: null }
+
 export async function malTrackerRig(
   opts: {
     seed?: Record<string, unknown>
     creds?: MalCredentials | null
     registerPrimary?: boolean
+    /** The rig's offline flag at start; `offline.value` flips it later. */
+    offline?: boolean
+    /** MAL's smotret join, as `index.ts` passes its `lookupByMalIds`. */
+    lookupByMalIds?: MalTrackerDeps['lookupByMalIds']
+    /** An AniList mirror over `fake-tracker.ts`, signed in, with MAL the stored primary. */
+    mirror?: boolean
   } = {}
 ) {
   const store = new InMemoryStorage({
     ...(structuredClone(STORE_DEFAULTS) as Record<string, unknown>),
     myanimelistClientConfig: { clientId: 'cid-123' },
     myanimelistUser: MAL_USER,
+    ...(opts.mirror ? { anilistUser: MIRROR_USER, trackerPrimary: 'mal' } : {}),
     ...opts.seed
   })
   const safe = createFakeSafeStorage({ async: true })
@@ -59,7 +70,8 @@ export async function malTrackerRig(
   if (creds) vault.commit('myanimelistCredentials', await vault.encrypt(creds))
 
   const broadcast = vi.fn()
-  const isOffline = (): boolean => false
+  const offline = { value: opts.offline ?? false }
+  const isOffline = (): boolean => offline.value
   const lifecycle = createTrackerLifecycle({
     store,
     vault,
@@ -90,11 +102,16 @@ export async function malTrackerRig(
     queuedAfter: () => trackerRates.queuedAfter('mal'),
     port: 0,
     client: createMalClient({ spacingMs: 0, sleep: async () => {} }),
+    lookupByMalIds: opts.lookupByMalIds,
     detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
   })
+  const mirror = opts.mirror ? createGenericTracker('anilist', store, { isOffline }) : null
   const fan = createTrackerFanOut({
     store,
-    trackers: [{ sync: mal.sync as TrackerSyncService<unknown, unknown> }],
+    trackers: [
+      { sync: mal.sync as TrackerSyncService<unknown, unknown> },
+      ...(mirror ? [{ sync: mirror.sync }] : [])
+    ],
     primary: () => lifecycle.primary(),
     log: { warn: () => {} }
   })
@@ -126,11 +143,16 @@ export async function malTrackerRig(
       .map(([, p]) => p as TrackerAccountsState)
   const queue = (): QueuedTrackerUpdate[] =>
     store.get('myanimelistUpdateQueue') as QueuedTrackerUpdate[]
+  const mirrorQueue = (): QueuedTrackerUpdate[] =>
+    (store.get('anilistUpdateQueue') as QueuedTrackerUpdate[] | undefined) ?? []
 
   return {
     store,
     vault,
     broadcast,
+    offline,
+    mirror,
+    mirrorQueue,
     lifecycle,
     notify,
     mal,

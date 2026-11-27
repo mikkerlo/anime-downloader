@@ -231,6 +231,12 @@ export interface TrackerProvider<TSession, TNative, TRate = unknown> {
    * Each provider keeps its cache in its own shape and normalizes it here.
    */
   cachedDetails?(malId: number): TrackerDetails | null
+  /**
+   * Whether that cache entry is past its window and should be fetched again
+   * (#744). False on a miss, which `tracker:get-details` already fetches.
+   * Absent, nothing is stale (AniList's prefetch walk refetches on its own).
+   */
+  detailsStale?(malId: number): boolean
 }
 
 /** Each tracker's name in the sync service's strings (`Shikimori rate limit — will retry`). */

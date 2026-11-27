@@ -112,6 +112,7 @@ import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
 import { windowIconPath } from './window-icon'
+import { monitorEventLoopDelay, performance } from 'perf_hooks'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -127,6 +128,17 @@ export interface AutoDownloadSubscription {
   initialEpisodesAired?: number
 }
 
+// DIAGNOSTIC (#734 CI, dropped before merge): boot timings on stderr.
+const bootDelay = monitorEventLoopDelay({ resolution: 5 })
+bootDelay.enable()
+const bootMs = (): string => `${(process.uptime() * 1000).toFixed(0)}ms`
+const bootLog = (line: string): void => {
+  console.error(line)
+  const file = process.env.ANIME_DL_BOOT_TIMING_FILE
+  if (file) fs.appendFileSync(file, `${line}\n`)
+}
+const bootBodyStart = performance.now()
+bootLog(`[boot-timing] module body start at ${bootMs()}`)
 applyApiBaseOverrides(process.env, app.isPackaged)
 // The AniList and MyAnimeList cards (#703/#702): off in a packaged build until the flag lifts.
 const newTrackerCards = newTrackerCardsEnabled(app.isPackaged)
@@ -1003,6 +1015,8 @@ function createWindow(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  bootLog(`[boot-timing] whenReady → bootstrap at ${bootMs()}`)
+  const bootstrapStart = performance.now()
   // A getter, so the `safeStorage` module getter runs on the vault's first use.
   safeStorageHolder.attach(() => safeStorage)
   // Satisfy Shikimori's image hotlink protection so friend avatars (loaded by
@@ -1137,6 +1151,10 @@ async function bootstrap(): Promise<void> {
   registerIpcHandlers()
 
   createWindow()
+  bootLog(
+    `[boot-timing] window created at ${bootMs()}; bootstrap sync part ${(performance.now() - bootstrapStart).toFixed(0)}ms; event-loop delay max ${(bootDelay.max / 1e6).toFixed(0)}ms`
+  )
+  bootDelay.disable()
   const mainWin = BrowserWindow.getAllWindows()[0]
   // The availability poller (#581) starts once the startup read is in (its
   // first tick takes that read as current) and the window has loaded, so the
@@ -1268,6 +1286,9 @@ async function bootstrap(): Promise<void> {
   })
 }
 
+bootLog(
+  `[boot-timing] module body end at ${bootMs()} (body ${(performance.now() - bootBodyStart).toFixed(0)}ms)`
+)
 new App()
   .start({
     onReady: bootstrap,

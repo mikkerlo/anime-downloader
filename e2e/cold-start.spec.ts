@@ -1,3 +1,5 @@
+import * as fs from 'fs'
+import * as path from 'path'
 import { test, expect } from '@playwright/test'
 import { assertUserData, launchApp, makeProfile } from './helpers/profile'
 
@@ -16,10 +18,31 @@ import { assertUserData, launchApp, makeProfile } from './helpers/profile'
 test('cold start: IPC answers while first-launch binary downloads are pending', async () => {
   // The one spec that opts out of seeding (#562): the download is what it tests.
   const profile = makeProfile({ prefix: 'anime-dl-coldstart-', ffmpeg: 'none', fpcalc: 'none' })
-  const { app } = await launchApp(profile).catch((e: unknown) => {
+  // DIAGNOSTIC (#734 CI, dropped before merge): the main process's boot
+  // timings, and the raw CDP traffic of the first main-process evaluate.
+  const timingFile = path.join(profile.root, 'boot-timing.log')
+  type UtilsBundle = { debug: { enable(ns: string): void; disable(): string } }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const utilsBundle = require('playwright-core/lib/utilsBundle') as UtilsBundle
+  const pwDebug = utilsBundle.debug
+  const launchStart = Date.now()
+  const { app } = await launchApp(profile, {
+    env: { ANIME_DL_BOOT_TIMING_FILE: timingFile }
+  }).catch((e: unknown) => {
     profile.cleanup()
     throw e
   })
+  console.log(`[cold-start] launchApp resolved after ${Date.now() - launchStart}ms`)
+  pwDebug.enable('pw:protocol')
+  const firstEval = Date.now()
+  try {
+    await assertUserData(app, profile)
+  } finally {
+    pwDebug.disable()
+    console.log(`[cold-start] assertUserData took ${Date.now() - firstEval}ms`)
+    const timings = fs.existsSync(timingFile) ? fs.readFileSync(timingFile, 'utf8') : '(none)\n'
+    console.log(`[cold-start] boot timings:\n${timings}`)
+  }
   // The main process's output, printed when the test fails: a main process
   // that dies at boot otherwise reads only as "Execution context was destroyed".
   const mainLog: string[] = []

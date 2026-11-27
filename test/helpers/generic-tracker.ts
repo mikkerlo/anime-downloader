@@ -4,7 +4,8 @@
 // (#693's boot drain, online edge and Prepare rows).
 import {
   createTrackerSyncService,
-  type TrackerSyncService
+  type TrackerSyncService,
+  type TrackerSyncServiceDeps
 } from '../../src/main/services/trackers/sync'
 import { ANILIST_KEYS, MYANIMELIST_KEYS } from '../../src/main/trackers/keys'
 import type { TrackerRateCacheCodec } from '../../src/main/trackers/types'
@@ -108,6 +109,8 @@ export function createGenericTracker<P extends 'anilist' | 'mal'>(
     codec?: TrackerRateCacheCodec<unknown, unknown>
     /** Members laid over the fake provider (`hasTitle`, #715). */
     provider?: Record<string, unknown>
+    /** Laid over the defaults: a broadcast spy, #706's details channel and prefetch. */
+    deps?: Partial<TrackerSyncServiceDeps>
   } = {}
 ): { fake: FakeTracker<P>; sync: TrackerSyncService<unknown, unknown> } {
   const fake = opts.fake ?? createFakeTracker(id)
@@ -126,7 +129,8 @@ export function createGenericTracker<P extends 'anilist' | 'mal'>(
       offlineQueueChangedChannel: `${id}:queue`,
       rateUpdatedChannel: `${id}:rate`,
       ratesRefreshedChannel: `${id}:refreshed`,
-      isOffline: opts.isOffline
+      isOffline: opts.isOffline,
+      ...opts.deps
     }
   ) as TrackerSyncService<unknown, unknown>
   return { fake, sync }

@@ -96,6 +96,8 @@ function installApi(
     shikimoriGetFriendsRates: vi.fn(async () => []),
     shikimoriGetAnimeDetails: vi.fn(async () => null),
     shikimoriGetSyncStatus: vi.fn(async () => status()),
+    // A non-Shikimori details / airing source's details (#706): a miss.
+    trackerGetDetails: vi.fn(async () => null),
     ...opts.overrides
   }
   ;(globalThis as { window?: { api: unknown } }).window = {
@@ -112,6 +114,7 @@ function installApi(
       onTrackerRateUpdated: noop,
       onTrackerRatesRefreshed: noop,
       onTrackerSyncStatus: noop,
+      onTrackerDetailsUpdated: noop,
       onShikimoriProfileRefreshed: noop,
       onShikimoriFriendsRefreshed: noop,
       onShikimoriRecommendationsRefreshed: noop,

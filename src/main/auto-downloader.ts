@@ -3,7 +3,7 @@ import type { StorageService } from './store/types'
 import type { SmotretApi, EpisodeDetail, Translation } from './smotret-api'
 import type { DownloadManager, DownloadRequest } from './download-manager'
 import type { AutoDownloadSubscription } from './index'
-import type * as shikimori from './shikimori'
+import type { AiringDep } from './trackers/feature-source'
 
 export type AutoDlReason = 'startup' | 'timer' | 'rates-refreshed' | 'manual'
 
@@ -40,18 +40,16 @@ interface DownloadedEpisodeMeta {
   translationId: number
 }
 
-interface ShikiAnimeDetailsCacheEntry {
-  details: shikimori.ShikiAnimeDetails
-  fetchedAt: number
-}
-
 interface AutoDownloaderDeps {
   store: StorageService
   smotretApi: SmotretApi
   downloadManager: DownloadManager
   broadcast: (channel: string, ...args: unknown[]) => void
-  isShikimoriLoggedIn: () => boolean
-  refreshShikimoriDetails: (malId: number) => Promise<shikimori.ShikiAnimeDetails | null>
+  /**
+   * The resolved `airing` source (#706): the tick runs while it has
+   * credentials, and the aired count is its cache-first `getAiringInfo`.
+   */
+  airing: AiringDep
   /** While offline (#567) every tick returns before touching the network. */
   isOffline?: () => boolean
 }
@@ -59,7 +57,6 @@ interface AutoDownloaderDeps {
 const MAX_ENQUEUES_PER_TICK = 10
 const REENTRANCY_LOCK_MS = 60_000
 const TICK_INTERVAL_MS = 15 * 60 * 1000
-const DETAILS_FRESHNESS_MS = 6 * 60 * 60 * 1000
 
 let deps: AutoDownloaderDeps | null = null
 let lastTickResult: AutoDlTickResult | null = null
@@ -133,22 +130,20 @@ export async function setSubscription(
     if (!existing) return null
     return existing
   }
-  // Stamp lastEnqueuedEpisodeInt to the current episodes_aired so we never backfill.
-  // If the cache is missing or stale, inline-refresh first — otherwise an empty cache
-  // would leave the stamp at 0 and the next tick would download the entire show.
-  const cache = deps.store.get('shikimoriAnimeDetails') as Record<
-    string,
-    ShikiAnimeDetailsCacheEntry
-  >
-  let cacheEntry = cache[String(meta.malId)]
-  const cacheAge = cacheEntry ? Date.now() - cacheEntry.fetchedAt : Infinity
-  if (!cacheEntry || cacheAge > DETAILS_FRESHNESS_MS) {
-    const fresh = await deps.refreshShikimoriDetails(meta.malId)
-    if (fresh) {
-      cacheEntry = { details: fresh, fetchedAt: Date.now() }
-    }
+  // Stamp lastEnqueuedEpisodeInt to the `airing` source's aired count so we
+  // never backfill. `getAiringInfo` refreshes a missing or stale entry first —
+  // otherwise an empty cache would leave the stamp at 0 and the next tick would
+  // download the entire show.
+  // A read that throws is a refusal too, like a null one.
+  const source = deps.airing.source()
+  let info: Awaited<ReturnType<AiringDep['getAiringInfo']>> = null
+  try {
+    info = source ? await deps.airing.getAiringInfo(source, meta.malId) : null
+  } catch (err) {
+    console.warn('[auto-dl] airing read failed at subscribe:', err)
+    return null
   }
-  const aired = cacheEntry?.details?.episodes_aired ?? 0
+  const aired = info?.episodesAired ?? 0
   if (aired <= 0) {
     // Refuse rather than silently arming a backfill. Caller surfaces this to the user.
     return null
@@ -278,7 +273,10 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
       return result
     }
 
-    if (!deps.isShikimoriLoggedIn()) {
+    // The resolved source's own credentials, never "any tracker's": an expired
+    // Shikimori source keeps the tick closed whatever AniList holds.
+    const source = deps.airing.source()
+    if (!source || !deps.airing.hasCredentials(source)) {
       lastTickResult = result
       deps.broadcast(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, result)
       return result
@@ -293,20 +291,25 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
       sub.lastCheckedAt = Date.now()
       mapDirty = true
 
-      const detailsCache = deps.store.get('shikimoriAnimeDetails') as Record<
-        string,
-        ShikiAnimeDetailsCacheEntry
-      >
-      let cacheEntry = detailsCache[String(sub.malId)]
-      const cacheAge = cacheEntry ? Date.now() - cacheEntry.fetchedAt : Infinity
-      if (cacheAge > DETAILS_FRESHNESS_MS) {
-        const fresh = await deps.refreshShikimoriDetails(sub.malId)
-        if (fresh) {
-          cacheEntry = { details: fresh, fetchedAt: Date.now() }
-        }
+      // A provider's read can throw (AniList: a 429, a 5xx, a dropped network).
+      // That subscription reports `error`; the tick goes on to the next one.
+      let info: Awaited<ReturnType<AiringDep['getAiringInfo']>>
+      try {
+        info = await deps.airing.getAiringInfo(source, sub.malId)
+      } catch (err) {
+        result.errors += 1
+        result.details.push({
+          animeId: sub.animeId,
+          animeName: sub.animeName,
+          episodeInt: '',
+          outcome: 'error',
+          message: err instanceof Error ? err.message : String(err)
+        })
+        map[String(sub.animeId)] = sub
+        continue
       }
-      const aired = cacheEntry?.details?.episodes_aired ?? 0
-      const totalEpisodes = cacheEntry?.details?.episodes ?? 0
+      const aired = info?.episodesAired ?? 0
+      const totalEpisodes = info?.episodes ?? 0
       if (aired <= 0) {
         result.details.push({
           animeId: sub.animeId,

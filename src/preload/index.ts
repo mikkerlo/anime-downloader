@@ -505,6 +505,16 @@ const api = {
   onTrackerOfflineQueueChanged: subscribe<TrackerOfflineQueueChangedEvent>(
     EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
   ),
+  // Details (#706): `trackerId` defaults to the `details` source.
+  trackerGetDetails: (malId: number, trackerId?: TrackerId) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_GET_DETAILS,
+      malId,
+      trackerId
+    ) as Promise<TrackerDetails | null>,
+  onTrackerDetailsUpdated: subscribe<TrackerDetailsUpdatedEvent>(
+    EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
+  ),
   // Accounts, auth and logout (#695).
   trackerListAccounts: () =>
     ipcRenderer.invoke(CHANNELS.TRACKER_LIST_ACCOUNTS) as Promise<TrackerAccountsState>,

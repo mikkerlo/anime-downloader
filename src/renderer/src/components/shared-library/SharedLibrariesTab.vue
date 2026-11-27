@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { storeToRefs } from 'pinia';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 import AnimeCard from '../shared/AnimeCard.vue';
 import FfmpegMissingBanner from './FfmpegMissingBanner.vue';
 import ImportDialog from './ImportDialog.vue';
@@ -73,7 +74,7 @@ function playBlockedTitle(
         class="sl-btn"
         data-testid="sync-now"
         :disabled="syncing.includes('all')"
-        title="Merge watch state with every connected library you own or use as its owner, then Shikimori"
+        :title="`Merge watch state with every connected library you own or use as its owner, then ${TRACKER_LABELS.shikimori}`"
         @click="shared.syncNow()"
       >
         {{ syncing.includes('all') ? 'Syncing…' : 'Sync now' }}

@@ -72,7 +72,8 @@ describe('StartupNoticeBanner (#648)', () => {
     expect(text).toContain(
       "Anime DL couldn't read its settings file and started with default settings."
     )
-    expect(text).toContain('sign in to Shikimori again and re-open your Shared Libraries')
+    // After a reset no account is left to name, so the wording is neutral (#700).
+    expect(text).toContain('sign in to your trackers again and re-open your Shared Libraries')
     expect(text).toContain('The unreadable file was kept as config.corrupt-20261031-120000.json.')
     expect(text).not.toContain('Changes since then were lost.')
   })

@@ -21,6 +21,7 @@ function mountShell(pinia = createPinia()) {
         StorageTab: tabStub('storage'),
         PlayerTab: tabStub('player'),
         ConnectorsTab: tabStub('connectors'),
+        TrackersTab: tabStub('trackers'),
         MergingTab: tabStub('merging'),
         ShortcutsTab: tabStub('shortcuts'),
         WatchTogetherTab: tabStub('watch-together'),
@@ -28,6 +29,19 @@ function mountShell(pinia = createPinia()) {
       }
     }
   })
+}
+
+const NO_TRACKER_ACCOUNTS: TrackerAccountsState = {
+  accounts: [],
+  primary: null,
+  mirror: {},
+  featureSources: {}
+}
+
+function railButton(wrapper: VueWrapper, label: string) {
+  const found = wrapper.findAll('.settings-tab').find((t) => t.find('.st-label').text() === label)
+  if (!found) throw new Error(`no "${label}" rail button`)
+  return found
 }
 
 beforeEach(() => {
@@ -46,15 +60,16 @@ describe('SettingsShell', () => {
     expect(wrapper.find('.tab').exists()).toBe(false)
   })
 
-  it('renders one rail button per tab, all eight tabs', () => {
+  it('renders one rail button per tab, all nine tabs, Trackers right after Connectors', () => {
     const wrapper = mountShell()
     const tabs = wrapper.findAll('.settings-tab')
-    expect(tabs).toHaveLength(8)
+    expect(tabs).toHaveLength(9)
     expect(tabs.map((t) => t.find('.st-label').text())).toEqual([
       'General',
       'Storage',
       'Player',
       'Connectors',
+      'Trackers',
       'Merging',
       'Shortcuts',
       'Watch Together',
@@ -75,8 +90,7 @@ describe('SettingsShell', () => {
 
   it('moves the active marker and swaps the panel when another tab is clicked', async () => {
     const wrapper = mountShell()
-    const storageBtn = wrapper.findAll('.settings-tab')[1]
-    await storageBtn.trigger('click')
+    await railButton(wrapper, 'Storage').trigger('click')
 
     const active = wrapper.findAll('.settings-tab.active')
     expect(active).toHaveLength(1)
@@ -87,19 +101,21 @@ describe('SettingsShell', () => {
     expect(wrapper.find('.stub-storage').exists()).toBe(true)
   })
 
-  // The Shikimori "sign in again" affordances deep-link straight to Connectors
-  // (#244); the shell owns `activeTab` locally, so the target is parked on the
-  // library store and consumed here.
+  // The Shikimori "sign in again" affordances deep-link straight to the
+  // Shikimori card in Trackers (#244, #700); the shell owns `activeTab`
+  // locally, so the target is parked on the library store and consumed here.
+  // The shell consumes only the tab: the tracker id is the Trackers tab's.
   it('opens on the tab a deep link parked before mount, then forgets it', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const library = useLibraryStore()
-    library.navigateToSettingsTab('connectors')
+    library.navigateToSettingsTab('trackers', 'shikimori')
 
     const wrapper = mountShell(pinia)
 
-    expect(wrapper.find('.stub-connectors').exists()).toBe(true)
+    expect(wrapper.find('.stub-trackers').exists()).toBe(true)
     expect(library.pendingSettingsTab).toBeNull()
+    expect(library.pendingSettingsTrackerId).toBe('shikimori')
     // A later manual visit still opens on General.
     expect(mountShell(pinia).find('.stub-general').exists()).toBe(true)
   })
@@ -111,10 +127,12 @@ describe('SettingsShell', () => {
     const wrapper = mountShell(pinia)
     expect(wrapper.find('.stub-general').exists()).toBe(true)
 
-    library.navigateToSettingsTab('connectors')
+    library.navigateToSettingsTab('trackers', 'shikimori')
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('.stub-connectors').exists()).toBe(true)
+    expect(wrapper.find('.stub-trackers').exists()).toBe(true)
+    expect(library.pendingSettingsTab).toBeNull()
+    expect(library.pendingSettingsTrackerId).toBe('shikimori')
   })
 
   it('shows the in-development badge only on Watch Together', () => {
@@ -122,8 +140,7 @@ describe('SettingsShell', () => {
     const badges = wrapper.findAll('.st-badge')
     expect(badges).toHaveLength(1)
     expect(badges[0].text()).toBe('in development')
-    const wt = wrapper.findAll('.settings-tab')[6]
-    expect(wt.find('.st-badge').exists()).toBe(true)
+    expect(railButton(wrapper, 'Watch Together').find('.st-badge').exists()).toBe(true)
   })
 })
 
@@ -159,7 +176,9 @@ describe('StorageTab — clearing a stale storage root (#440)', () => {
     setSetting: vi.fn(async () => undefined),
     storageGetMissingRoot: vi.fn(async () => EMPTY_ROOTS),
     storageClearRoot: vi.fn(async () => EMPTY_ROOTS),
-    cleanupGetSnoozed: vi.fn(async () => ({}))
+    cleanupGetSnoozed: vi.fn(async () => ({})),
+    // The cleanup-prompt copy names the primary tracker (#700).
+    trackerListAccounts: vi.fn(async () => NO_TRACKER_ACCOUNTS)
   }
 
   const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
@@ -394,7 +413,9 @@ describe('StorageTab — switching storage mode (#443)', () => {
       refusedReason: null as string | null,
       roots: EMPTY_ROOTS
     })),
-    cleanupGetSnoozed: vi.fn(async () => ({}))
+    cleanupGetSnoozed: vi.fn(async () => ({})),
+    // The cleanup-prompt copy names the primary tracker (#700).
+    trackerListAccounts: vi.fn(async () => NO_TRACKER_ACCOUNTS)
   }
 
   const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
@@ -577,7 +598,9 @@ describe('StorageTab — refused folder picks (#447)', () => {
       refusedReason: null as string | null,
       roots: EMPTY_ROOTS
     })),
-    cleanupGetSnoozed: vi.fn(async () => ({}))
+    cleanupGetSnoozed: vi.fn(async () => ({})),
+    // The cleanup-prompt copy names the primary tracker (#700).
+    trackerListAccounts: vi.fn(async () => NO_TRACKER_ACCOUNTS)
   }
 
   const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
@@ -785,7 +808,9 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
     setSetting: vi.fn(async () => undefined),
     storageGetMissingRoot: vi.fn(async () => EMPTY_ROOTS),
     storageRebindRoot: vi.fn(async () => rebindResult()),
-    cleanupGetSnoozed: vi.fn(async () => ({}))
+    cleanupGetSnoozed: vi.fn(async () => ({})),
+    // The cleanup-prompt copy names the primary tracker (#700).
+    trackerListAccounts: vi.fn(async () => NO_TRACKER_ACCOUNTS)
   }
 
   const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {

@@ -7,6 +7,7 @@ import { useSyncStore } from '../../stores/sync';
 import GeneralTab from './GeneralTab.vue';
 import StorageTab from './StorageTab.vue';
 import ConnectorsTab from './ConnectorsTab.vue';
+import TrackersTab from './TrackersTab.vue';
 import MergingTab from './MergingTab.vue';
 import PlayerTab from './PlayerTab.vue';
 import ShortcutsTab from './ShortcutsTab.vue';
@@ -38,6 +39,11 @@ const TABS: TabDef[] = [
     id: 'connectors',
     label: 'Connectors',
     icon: 'M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244'
+  },
+  {
+    id: 'trackers',
+    label: 'Trackers',
+    icon: 'M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z'
   },
   {
     id: 'merging',
@@ -88,6 +94,8 @@ const activeComponent = computed(() => {
       return StorageTab;
     case 'connectors':
       return ConnectorsTab;
+    case 'trackers':
+      return TrackersTab;
     case 'merging':
       return MergingTab;
     case 'player':

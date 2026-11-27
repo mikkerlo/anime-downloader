@@ -173,7 +173,7 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
         <button
           type="button"
           class="shiki-expired-btn"
-          @click="libraryStore.navigateToSettingsTab('connectors')"
+          @click="libraryStore.navigateToSettingsTab('trackers', primary ?? undefined)"
         >
           Sign in again
         </button>

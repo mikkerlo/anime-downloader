@@ -84,6 +84,11 @@ test('settings tabs switch and the token round-trips through electron-store', as
   await page.getByRole('button', { name: 'Connectors' }).click()
 
   await expect(page.locator('#token-input')).toHaveValue(sample)
+
+  // The Shikimori account card lives in Trackers (#700), not in Connectors.
+  await expect(page.getByRole('button', { name: 'Connect Shikimori' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Trackers' }).click()
+  await expect(page.getByRole('button', { name: 'Connect Shikimori' })).toBeVisible()
 })
 
 test('Ctrl+F navigates to search and focuses the input', async () => {

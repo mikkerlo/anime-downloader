@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, onActivated, type Ref } from 'vue';
 import { ROOT_KEYS } from '@shared/storage-roots';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import { usePrimaryTrackerLabel } from '../../composables/use-primary-tracker-label';
 import { formatBytes } from '../../utils';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
@@ -18,6 +19,7 @@ const openShared = ref(false);
 const syncStore = useSyncStore();
 const libraryNav = useLibraryStore();
 const sharedLibraries = useSharedLibrariesStore();
+const primaryTrackerLabel = usePrimaryTrackerLabel();
 
 /** "Show in Library" after an open: Library → Shared Libraries (#578). */
 function showShared(): void {
@@ -940,7 +942,7 @@ watch(autoCleanupDays, (val) => {
 
     <SettingsGroup
       title="Cleanup prompts"
-      desc="When a Shikimori rate is flipped to «Completed», a prompt offers to delete the show's local files. Use «Don't ask for this show» on a prompt to silence it; manage silenced shows here."
+      :desc="`When a ${primaryTrackerLabel} rate is flipped to «Completed», a prompt offers to delete the show's local files. Use «Don't ask for this show» on a prompt to silence it; manage silenced shows here.`"
     >
       <SettingsRow stack>
         <div v-if="snoozedLoading" class="usage-meta-row">Loading…</div>

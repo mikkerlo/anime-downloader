@@ -206,7 +206,7 @@ const syncLabel = computed(() => {
               type="button"
               class="u-sync expired"
               title="Shikimori rejected the stored session — sign in again"
-              @click="libraryStore.navigateToSettingsTab('connectors')"
+              @click="libraryStore.navigateToSettingsTab('trackers', 'shikimori')"
             >
               <span class="dot"></span>{{ syncLabel }}
             </button>

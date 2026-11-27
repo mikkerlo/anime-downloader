@@ -186,6 +186,25 @@ describe('AnimeDetailView — Auto-download (#706)', () => {
     w.unmount()
   })
 
+  it('no account but a subscription: shown, and the tooltip names both airing trackers', async () => {
+    const api = installApi({ accounts: {} })
+    api.autoDlGetSubscription.mockResolvedValue({
+      animeId: 1,
+      malId: MAL_ID,
+      animeName: 'X',
+      subscribedAt: 0,
+      lastEnqueuedEpisodeInt: 3,
+      lastCheckedAt: 0,
+      initialEpisodesAired: 3
+    })
+    const w = await mountView()
+    expect(button(w).exists()).toBe(true)
+    expect(button(w).attributes('title')).toBe(
+      'Connect AniList or Shikimori to enable auto-download'
+    )
+    w.unmount()
+  })
+
   it('an unknown status counts as not finished: an AniList source with a details miss is enabled', async () => {
     installApi({ accounts: { anilist: 'active' } })
     const w = await mountView()

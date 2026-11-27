@@ -789,7 +789,10 @@ when that is no older than `AIRING_FRESHNESS_MS` (6 h), and makes a network
 call only when there is none that fresh. AniList answers an on-list title from
 `anilistUserRates`, with no request. It returns `{ episodesAired, episodes }`,
 `episodes` null meaning "no cap", or null when the tracker has no data for the
-title (the tick's `no-episodes-aired`). Shikimori's is the auto-downloader's
+title (the tick's `no-episodes-aired`). A read that throws (AniList's client on a
+429, a 5xx or a dropped network) is that subscription's `error` outcome: the
+tick goes on to the next one, saves `lastCheckedAt` and broadcasts its result,
+and `setSubscription` refuses (null). Shikimori's is the auto-downloader's
 read before #706, moved into the adapter: the `shikimoriAnimeDetails` entry,
 refreshed through `refreshDetails` (`refreshShikimoriDetailsForMalId`) when it
 is missing or older than 6 h.
@@ -823,10 +826,13 @@ generic sync service carries both halves:
   `onDetailsWritten`, called for each entry the prefetch or an on-list
   `getDetails` writes;
 - the deps `detailsUpdatedChannel` and `prefetchDetails`, which the AniList
-  construction in `index.ts` passes (the batched list prefetch). MyAnimeList's
-  construction passes them when #702 wires its provider, and its `getDetails`
-  write calls `broadcastDetails`. The Shikimori construction doesn't get the
-  channel, so its details are never double-emitted.
+  construction in `index.ts` passes (`requestPrefetch(malId)`: nothing for a
+  title off the list, which the list prefetch never fetches; the running
+  prefetch if there is one, so a miss never restarts the one Prepare for
+  offline awaits; else a new one). MyAnimeList's construction passes them
+  when #702 wires its provider, and its `getDetails` write calls
+  `broadcastDetails`. The Shikimori construction doesn't get the channel, so
+  its details are never double-emitted.
 
 **`tracker:accounts-changed`** carries the same `TrackerAccountsState` as
 `tracker:list-accounts`, built by the same `accountsState()`, so a field added
@@ -1212,8 +1218,10 @@ a title not on AniList throws; a mark-watched for one is null.
   the list (ToU clauses 2 and 3), returns early offline, and is abortable
   (`abortPrefetch`). It is the AniList entry's `prefetch` on the online edge
   and the third phase of the `anilist-rates` step, and a logout or a switch
-  aborts it. Each entry it writes, and an on-list `getDetails` write, is
-  broadcast as `tracker:details-updated` through `onDetailsWritten` (#706);
+  aborts it. A `tracker:get-details` miss goes through `requestPrefetch`,
+  which joins a running prefetch rather than restarting it. Each entry it
+  writes, and an on-list `getDetails` write, is broadcast as
+  `tracker:details-updated` through `onDetailsWritten` (#706);
   `cachedDetails(malId)` maps an entry's AniList status (`FINISHED` →
   `released`, `RELEASING` / `HIATUS` → `ongoing`, `NOT_YET_RELEASED` →
   `anons`, `CANCELLED` → unknown) and strips the description's markup.

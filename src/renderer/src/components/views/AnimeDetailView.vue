@@ -499,7 +499,7 @@ const showAutoDlUnavailable = computed(
 const autoDlTooltip = computed<string>(() => {
   if (!anime.value?.myAnimeListId) return 'Auto-download requires a Shikimori entry';
   if (airingUnavailable.value) return AIRING_UNAVAILABLE_HINT;
-  if (!trackersStore.canAutoDl) return 'Connect to Shikimori to enable auto-download';
+  if (!trackersStore.canAutoDl) return 'Connect AniList or Shikimori to enable auto-download';
   if (isShowFinished.value) return 'Show is fully aired — no new episodes to auto-download';
   if (autoDlSubscription.value) {
     const next = autoDlSubscription.value.lastEnqueuedEpisodeInt + 1;

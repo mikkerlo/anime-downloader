@@ -520,6 +520,54 @@ describe('the airing source (#706)', () => {
     expect(ctx.smotret.getAnime).not.toHaveBeenCalled()
   })
 
+  it('a throwing airing read is that subscription’s error: the others still run, lastCheckedAt is saved, the result broadcast', async () => {
+    const ctx = await bootCtx({
+      accounts: { anilist: 'active' },
+      initialStore: {
+        autoDownloadSubscriptions: {
+          ...sub({ animeId: 1, malId: 1, lastEnqueued: 5, name: 'Throws' }),
+          ...sub({ animeId: 2, malId: 2, lastEnqueued: 5, name: 'Fine' })
+        }
+      }
+    })
+    ctx.anilist.airing.set(2, AIRED_6)
+    const real = ctx.airing.getAiringInfo.getMockImplementation()!
+    // AniList's client throws on a 429 / 5xx, and the fetch on a dropped network.
+    ctx.airing.getAiringInfo.mockImplementation(async (id: TrackerId, malId: number) => {
+      if (malId === 1) throw new Error('AniList 429')
+      return real(id, malId)
+    })
+    serveEpisodes(ctx, [5, 6])
+
+    const result = await ctx.autoDl.runAutoDownloadTick('manual')
+    expect(result.errors).toBe(1)
+    expect(result.details).toContainEqual({
+      animeId: 1,
+      animeName: 'Throws',
+      episodeInt: '',
+      outcome: 'error',
+      message: 'AniList 429'
+    })
+    expect(result.enqueued).toBe(1)
+    expect(enqueuedEpisodes(ctx)).toEqual(['6'])
+    const saved = ctx.store.get('autoDownloadSubscriptions') as Record<
+      string,
+      { lastCheckedAt: number; lastEnqueuedEpisodeInt: number }
+    >
+    expect(saved['1'].lastCheckedAt).toBeGreaterThan(0)
+    expect(saved['1'].lastEnqueuedEpisodeInt).toBe(5)
+    expect(saved['2'].lastEnqueuedEpisodeInt).toBe(6)
+    expect(ctx.broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, result)
+  })
+
+  it('setSubscription refuses (null) when the airing read throws', async () => {
+    const ctx = await bootCtx({ accounts: { anilist: 'active' } })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ctx.airing.getAiringInfo.mockRejectedValue(new Error('AniList 503'))
+    expect(await ctx.autoDl.setSubscription(5, true, { malId: 1, animeName: 'X' })).toBeNull()
+    expect(ctx.store.get('autoDownloadSubscriptions')).toEqual({})
+  })
+
   it('a fresh on-list AniList title answers from the list cache: episode 6 only, no server read', async () => {
     const ctx = await bootCtx({
       accounts: { anilist: 'active' },

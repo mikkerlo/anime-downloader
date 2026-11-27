@@ -353,6 +353,11 @@ export interface AniListProvider extends TrackerSyncProvider<
   getFriendsActivity(session: AniListSession): Promise<unknown[]>
   /** The list titles' details, in batches of 50 at `prefetch`. Never beyond the list (ToU). */
   prefetchDetails(): Promise<void>
+  /**
+   * A `tracker:get-details` miss (#706): joins the running prefetch, else starts
+   * one; nothing for a title not on the list.
+   */
+  requestPrefetch(malId: number): Promise<void>
   /** Aborts a running prefetch; its queued requests leave the limiter. */
   abortPrefetch(): void
   /** `refreshRates` wrote `anilistUserRates`: the list cache's age for `getAiringInfo`. */
@@ -830,7 +835,28 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     return cached ? trackerDetailsOf(cached) : null
   }
 
-  async function prefetchDetails(): Promise<void> {
+  // The prefetch in flight, which a `tracker:get-details` miss joins (#706).
+  let prefetchRun: Promise<void> | null = null
+
+  function prefetchDetails(): Promise<void> {
+    const run = walkDetails()
+    prefetchRun = run
+    const clear = (): void => {
+      if (prefetchRun === run) prefetchRun = null
+    }
+    run.then(clear, clear)
+    return run
+  }
+
+  // A details miss (#706): nothing for a title off the list, which the
+  // prefetch never fetches (ToU); the running prefetch if there is one, so a
+  // miss never restarts it (Prepare-offline awaits it); else a new one.
+  function requestPrefetch(malId: number): Promise<void> {
+    if (!cachedRows().some((r) => malIdOfRow(r) === malId)) return Promise.resolve()
+    return prefetchRun ?? prefetchDetails()
+  }
+
+  async function walkDetails(): Promise<void> {
     if (deps.isOffline?.()) return
     prefetchController?.abort()
     const controller = new AbortController()
@@ -1015,6 +1041,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     getFriendsRates,
     getFriendsActivity,
     prefetchDetails,
+    requestPrefetch,
     abortPrefetch: () => prefetchController?.abort(),
     markRatesFetched: () => void (ratesFetched = now()),
     ratesFetchedAt: () => ratesFetched,

@@ -24,6 +24,7 @@ import {
   type AniListDetails
 } from '../../src/main/trackers/anilist/provider'
 import { createTickIfAiringSource } from '../../src/main/trackers/feature-source'
+import { createTrackerRatesStep } from '../../src/main/services/prepare-offline/steps/tracker-rates'
 import { createTrackerFanOut } from '../../src/main/services/trackers/fan-out'
 import { createTrackerRates } from '../../src/main/services/trackers/rates'
 import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
@@ -99,7 +100,7 @@ async function rig(
     rateUpdatedChannel: channels.rateUpdated,
     ratesRefreshedChannel: channels.ratesRefreshed,
     detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED,
-    prefetchDetails: () => void t.provider.prefetchDetails().catch(prefetchFailed),
+    prefetchDetails: (malId) => void t.provider.requestPrefetch(malId).catch(prefetchFailed),
     onRatesRefreshed: createTickIfAiringSource({ store: t.store, runTick })
   })
   late.sync = sync
@@ -171,6 +172,73 @@ describe("AniList's onRatesRefreshed ticks auto-download while it is the airing 
   })
 })
 
+describe('a tracker:get-details miss never restarts a running prefetch', () => {
+  /** The world's Details reply for `ids`, held until `release()`. */
+  function holdDetails(r: Awaited<ReturnType<typeof rig>>, ids: number[]) {
+    let release!: () => void
+    const held = new Promise<void>((res) => (release = res)).then(() => ({
+      body: {
+        data: {
+          Page: {
+            media: ids.map((mal) => ({
+              id: 100 + mal,
+              idMal: mal,
+              description: `About #${mal}`,
+              genres: ['Drama'],
+              format: 'TV',
+              episodes: 12,
+              status: 'RELEASING',
+              nextAiringEpisode: { episode: 5 }
+            }))
+          }
+        }
+      }
+    }))
+    r.world.inject('Details', held as never)
+    return () => release()
+  }
+
+  const step = (r: Awaited<ReturnType<typeof rig>>) =>
+    createTrackerRatesStep('anilist', {
+      isConnected: () => true,
+      drain: async () => {},
+      refreshRates: async () => ({ entries: [], waitingMalIds: [] }) as never,
+      prefetch: () => r.t.provider.prefetchDetails(),
+      abortPrefetch: () => r.t.provider.abortPrefetch()
+    })
+
+  it('Prepare-offline’s details phase survives a detail-page miss: one walk, every list title cached', async () => {
+    const r = await rig({ seed: { anilistUserRates: listRows(1, 3) }, media: { 3: [103] } })
+    const release = holdDetails(r, [1, 3])
+    const progress: string[] = []
+    const run = step(r).run({
+      signal: new AbortController().signal,
+      progress: (p) => void (p.message && progress.push(p.message)),
+      isOffline: () => false
+    })
+    await vi.waitFor(() => expect(r.world.server.of('Details')).toHaveLength(1))
+    expect(progress).toContain('Caching AniList details')
+
+    // A detail page for a list title mounts mid-phase.
+    expect(await r.getDetails(1, 'anilist')).toBeNull()
+    release()
+    const result = await run
+
+    expect(result.status).toBe('ok')
+    expect(Object.keys(r.t.store.get('anilistAnimeDetails') as object).sort()).toEqual(['1', '3'])
+    // Joined, not restarted: the step's walk was the only one.
+    expect(r.world.server.of('Details')).toHaveLength(1)
+    expect(r.prefetchFailed).not.toHaveBeenCalled()
+  })
+
+  it('a miss for a title off the list starts no prefetch (it could never answer it)', async () => {
+    const r = await rig({ seed: { anilistUserRates: listRows(1) } })
+    expect(await r.getDetails(2, 'anilist')).toBeNull()
+    await new Promise((res) => setTimeout(res, 20))
+    expect(r.world.server.of('Details')).toHaveLength(0)
+  })
+})
+
 describe('the details emit (tracker:details-updated)', () => {
   it('a tracker:get-details miss is null and kicks the list prefetch, whose writes arrive normalized', async () => {
     const r = await rig({ seed: { anilistUserRates: listRows(1, 3) }, media: { 3: [103] } })
@@ -234,7 +302,7 @@ describe('the AniList construction in src/main/index.ts (source pin)', () => {
       'onDetailsWritten: (malId, details) => anilistSync.broadcastDetails(malId, details)'
     )
     expect(construction).toContain('detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED')
-    expect(construction).toContain('.prefetchDetails()')
+    expect(construction).toContain('.requestPrefetch(malId)')
     expect(construction).toContain(
       "onRatesRefreshed: createTickIfAiringSource({\n    store,\n    runTick: () => runAutoDownloadTick('rates-refreshed')\n  })"
     )

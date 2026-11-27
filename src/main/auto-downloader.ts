@@ -134,8 +134,15 @@ export async function setSubscription(
   // never backfill. `getAiringInfo` refreshes a missing or stale entry first —
   // otherwise an empty cache would leave the stamp at 0 and the next tick would
   // download the entire show.
+  // A read that throws is a refusal too, like a null one.
   const source = deps.airing.source()
-  const info = source ? await deps.airing.getAiringInfo(source, meta.malId) : null
+  let info: Awaited<ReturnType<AiringDep['getAiringInfo']>> = null
+  try {
+    info = source ? await deps.airing.getAiringInfo(source, meta.malId) : null
+  } catch (err) {
+    console.warn('[auto-dl] airing read failed at subscribe:', err)
+    return null
+  }
   const aired = info?.episodesAired ?? 0
   if (aired <= 0) {
     // Refuse rather than silently arming a backfill. Caller surfaces this to the user.
@@ -284,7 +291,23 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
       sub.lastCheckedAt = Date.now()
       mapDirty = true
 
-      const info = await deps.airing.getAiringInfo(source, sub.malId)
+      // A provider's read can throw (AniList: a 429, a 5xx, a dropped network).
+      // That subscription reports `error`; the tick goes on to the next one.
+      let info: Awaited<ReturnType<AiringDep['getAiringInfo']>>
+      try {
+        info = await deps.airing.getAiringInfo(source, sub.malId)
+      } catch (err) {
+        result.errors += 1
+        result.details.push({
+          animeId: sub.animeId,
+          animeName: sub.animeName,
+          episodeInt: '',
+          outcome: 'error',
+          message: err instanceof Error ? err.message : String(err)
+        })
+        map[String(sub.animeId)] = sub
+        continue
+      }
       const aired = info?.episodesAired ?? 0
       const totalEpisodes = info?.episodes ?? 0
       if (aired <= 0) {

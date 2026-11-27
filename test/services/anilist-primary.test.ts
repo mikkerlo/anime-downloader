@@ -5,6 +5,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   ALICE,
+  anilistFixture,
   createAniListWorld,
   createTestAniList,
   type AniListWorld,
@@ -203,6 +204,33 @@ describe('AniList as the primary', () => {
       })
     ])
   })
+
+  it.each([
+    ['an HTTP 400 Invalid token', { status: 400, body: anilistFixture('invalid-token-400') }],
+    ['an HTTP 401', { status: 401, body: anilistFixture('invalid-token-401') }]
+  ] as const)(
+    'a cold cache whose live read finds the token refused (%s): the create rule, queued, not thrown (#740)',
+    async (_name, reply) => {
+      const r = await primaryRig()
+      r.world.inject('MediaList', reply)
+      const out = await r.fan.applyChange(
+        1,
+        { kind: 'set', values: v(8, 9) },
+        { target: 'anilist', cause: 'user' }
+      )
+      expect(out).toMatchObject({ kind: 'primary', after: v(8, 9) })
+      expect(r.world.server.of('MediaList')).toHaveLength(1)
+      expect(queue(r.t)).toEqual([
+        expect.objectContaining({
+          malId: 1,
+          rateId: null,
+          after: v(8, 9),
+          fields: ['episodes', 'status', 'score', 'rewatches']
+        })
+      ])
+      await vi.waitFor(() => expect(r.t.store.get('anilistSessionExpired')).toBe(true))
+    }
+  )
 
   it('a switch during the cold read parks the change for the account it was made on', async () => {
     const r = await primaryRig()

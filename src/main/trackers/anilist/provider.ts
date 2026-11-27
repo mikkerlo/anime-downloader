@@ -600,6 +600,12 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     } catch (err) {
       // "Not found" comes through `errors`: the drain takes its create branch.
       if (isNotFound(err)) return null
+      // A refused token (a 400 or 401 `Invalid token`, an `errors[].status`
+      // 401, the limiter's dead-token rejection) is the session gone, so
+      // `tracker:get-rate` and the cold-cache read answer as they do once the
+      // credential is cleared (#740). `onTokenRejected` clears it on its own.
+      if (classifyAnilistError(err) === 'auth')
+        throw new AniListSessionError(undefined, { cause: err })
       throw err
     }
     return data?.MediaList ? toEntry(ref.malId, data.MediaList) : null

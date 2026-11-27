@@ -20,6 +20,7 @@ import {
 import { nextWatchedRate, type RateValues } from '../../src/main/lib/shikimori-rate'
 import { TrackerApiError } from '../../src/main/trackers/errors'
 import { classifyMalError } from '../../src/main/trackers/mal/classify'
+import { DETAILS_STALE_MS } from '../../src/main/trackers/details-freshness'
 
 const USER = { id: 1234567, nickname: 'fake_mal_user', avatar: null }
 const TOKEN = 'fake-access-token-mal-1'
@@ -198,6 +199,59 @@ describe('getEntry', () => {
     fake.on('GET', api('/anime/52991'), { json: malFixture('anime-entry-not-listed.json') })
     const r = rig()
     expect(await r.provider.getEntry(r.session, { malId: 52991, remoteId: null })).toBeNull()
+  })
+})
+
+// #744: the entry read with the title's total kept, for the mark's clamp.
+describe('readEntry', () => {
+  it('is getEntry’s entry plus num_episodes, from the same request', async () => {
+    fake.on('GET', api('/anime/5114'), { json: malFixture('anime-entry.json') })
+    const r = rig()
+    const read = await r.provider.readEntry(r.session, { malId: 5114, remoteId: 5114 })
+    const viaGetEntry = await r.provider.getEntry(r.session, { malId: 5114, remoteId: 5114 })
+    expect(read).toEqual({ entry: viaGetEntry, numEpisodes: 64 })
+    const [a, b] = fake.callsTo('GET', api('/anime/5114'))
+    expect(fake.calls).toHaveLength(2)
+    expect(a.url.href).toBe(b.url.href)
+    expect(a.url.searchParams.get('fields')).toBe(
+      'my_list_status{status,score,num_episodes_watched,is_rewatching,num_times_rewatched,updated_at},num_episodes,status'
+    )
+  })
+
+  it('a title off the list still has its total', async () => {
+    fake.on('GET', api('/anime/52991'), { json: malFixture('anime-entry-not-listed.json') })
+    const r = rig()
+    expect(await r.provider.readEntry(r.session, { malId: 52991, remoteId: null })).toEqual({
+      entry: null,
+      numEpisodes: 28
+    })
+  })
+
+  it('num_episodes 0 (MAL’s unknown) is no total', async () => {
+    fake.on('GET', api('/anime/5114'), {
+      json: { ...malFixture<object>('anime-entry.json'), num_episodes: 0 }
+    })
+    const r = rig()
+    expect(
+      (await r.provider.readEntry(r.session, { malId: 5114, remoteId: 5114 })).numEpisodes
+    ).toBe(null)
+  })
+})
+
+// #744 (3): `myanimelistAnimeDetails[id].fetchedAt` against the shared window.
+describe('detailsStale', () => {
+  const seed = (r: ReturnType<typeof rig>, entry: object) =>
+    r.store.set('myanimelistAnimeDetails', { '5114': entry })
+
+  it('a miss is not stale; past DETAILS_STALE_MS is; inside it is not; no fetchedAt is', () => {
+    const r = rig()
+    expect(r.provider.detailsStale!(5114)).toBe(false)
+    seed(r, { details: {}, fetchedAt: Date.now() - DETAILS_STALE_MS - 1000 })
+    expect(r.provider.detailsStale!(5114)).toBe(true)
+    seed(r, { details: {}, fetchedAt: Date.now() - DETAILS_STALE_MS + 60_000 })
+    expect(r.provider.detailsStale!(5114)).toBe(false)
+    seed(r, { details: {} })
+    expect(r.provider.detailsStale!(5114)).toBe(true)
   })
 })
 

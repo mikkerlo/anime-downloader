@@ -7,7 +7,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { CHANNELS } from '../../src/shared/ipc/channels'
 import type { QueuedTrackerUpdate } from '../../src/main/lib/shikimori-queue'
-import { installFakeMal, malFixtureText, type FakeMal, type MalCall } from '../helpers/fake-mal'
+import {
+  installFakeMal,
+  malFixture,
+  malFixtureText,
+  type FakeMal,
+  type MalCall
+} from '../helpers/fake-mal'
 import { malTrackerRig } from '../helpers/mal-tracker'
 
 let fake: FakeMal
@@ -23,16 +29,23 @@ afterEach(() => {
 const SMOTRET = { id: 4242, title: 'Frieren on smotret', myAnimeListId: 52991 }
 
 /** MAL's list row for 52991, cached with its smotret join. */
-const cachedRow = (status: 'watching' | 'completed', episodes: number) => ({
-  node: { id: 52991, title: 'Sousou no Frieren', num_episodes: 28, status: 'finished_airing' },
+const cachedRow = (status: 'watching' | 'completed', episodes: number, numEpisodes = 28) => ({
+  node: {
+    id: 52991,
+    title: 'Sousou no Frieren',
+    num_episodes: numEpisodes,
+    status: 'finished_airing'
+  },
   list_status: { status, score: 0, num_episodes_watched: episodes, is_rewatching: false },
   smotretAnime: SMOTRET
 })
 
-function serveEntry(episodes: number, status = 'watching'): void {
+/** The entry read answers `episodes` watched; `numEpisodes` is the title's total when given. */
+function serveEntry(episodes: number, status = 'watching', numEpisodes?: number): void {
   fake.on('GET', '/v2/anime/52991', {
     json: {
       id: 52991,
+      ...(numEpisodes === undefined ? {} : { num_episodes: numEpisodes }),
       my_list_status: {
         status,
         score: 0,
@@ -194,5 +207,130 @@ describe('MyAnimeList as the primary', () => {
     await expect(
       r.fan.applyChange(52991, set(4), { target: 'mal', cause: 'user' })
     ).rejects.toThrow('MyAnimeList has no primary write path')
+  })
+})
+
+// #744 (1): MAL stores at most the title's total, so a mark past it is clamped
+// before `nextWatchedRate`, before `send` and before `queue`. Red on main: main
+// sends, queues and resolves the 13 MAL never stores.
+describe('a mark past the episode total', () => {
+  const PATCH_PATH = '/v2/anime/52991/my_list_status'
+  const mark = (r: Awaited<ReturnType<typeof rig>>, episode: number) =>
+    r.invoke(CHANNELS.TRACKER_MARK_EPISODE_WATCHED, 52991, episode)
+  const cached = (r: Awaited<ReturnType<typeof rig>>) =>
+    (r.store.get('myanimelistUserRates') as ReturnType<typeof cachedRow>[])[0]
+  const offlineEntry = () =>
+    fake.on('GET', '/v2/anime/52991', () => {
+      throw new TypeError('fetch failed')
+    })
+
+  it('watching 12/12 of 12, mark 13: null, no PATCH, nothing queued on MAL or a mirror', async () => {
+    serveEntry(12, 'watching', 12)
+    const r = await rig({
+      mirror: true,
+      seed: { myanimelistUserRates: [cachedRow('watching', 12, 12)] }
+    })
+    expect(r.lifecycle.primary()).toBe('mal')
+    expect(await mark(r, 13)).toBeNull()
+    expect(fake.callsTo('PATCH', PATCH_PATH)).toHaveLength(0)
+    expect(r.queue()).toEqual([])
+    expect(r.mirrorQueue()).toEqual([])
+  })
+
+  it('watching 10 of 12, mark 13: one PATCH at 12, and it resolves 12; the mirror keeps the user’s 13', async () => {
+    serveEntry(10, 'watching', 12)
+    const r = await rig({
+      mirror: true,
+      seed: { myanimelistUserRates: [cachedRow('watching', 10, 12)] }
+    })
+    expect(await mark(r, 13)).toEqual({ episodes: 12, status: 'watching', score: 0, rewatches: 0 })
+    expect(fake.callsTo('PATCH', PATCH_PATH).map((c) => c.form)).toEqual([
+      { num_watched_episodes: '12' }
+    ])
+    expect(cached(r).list_status.num_episodes_watched).toBe(12)
+    // MAL-local by design: the mirror's value is `nextWatchedRate(before, 13)`, not MAL's total.
+    expect(r.mirrorQueue().map((q) => q.after.episodes)).toEqual([13])
+  })
+
+  it('completed 12/12 of 12, mark 13: null, no PATCH, no rewatch', async () => {
+    serveEntry(12, 'completed', 12)
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('completed', 12, 12)] } })
+    expect(await mark(r, 13)).toBeNull()
+    expect(fake.callsTo('PATCH', PATCH_PATH)).toHaveLength(0)
+    expect(r.queue()).toEqual([])
+    expect(cached(r).list_status).toEqual(cachedRow('completed', 12, 12).list_status)
+  })
+
+  it('a title off the list (total 28), mark 30: the create PATCH is at 28, watching', async () => {
+    serveEntry(0)
+    // Later routes win: the entry read is the fixture's `{ num_episodes: 28, my_list_status: null }`.
+    fake.on('GET', '/v2/anime/52991', { json: malFixture('anime-entry-not-listed.json') })
+    // The refresh a title new to the list runs.
+    fake.on('GET', '/v2/users/@me/animelist', { json: { data: [] } })
+    const r = await rig({ seed: { myanimelistUserRates: [] } })
+    expect(await mark(r, 30)).toMatchObject({ episodes: 28, status: 'watching' })
+    const patch = fake.callsTo('PATCH', PATCH_PATH)
+    expect(patch).toHaveLength(1)
+    expect(patch[0].form).toMatchObject({
+      num_watched_episodes: '28',
+      status: 'watching',
+      is_rewatching: 'false'
+    })
+  })
+
+  it('a queueable PATCH failure queues the clamped 12', async () => {
+    serveEntry(10, 'watching', 12)
+    fake.on('PATCH', /my_list_status$/, { status: 503, text: '' })
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('watching', 10, 12)] } })
+    expect(await mark(r, 13)).toMatchObject({ episodes: 12 })
+    expect(r.queue().map((q) => q.after.episodes)).toEqual([12])
+  })
+
+  it('offline, cached watching 10 of 12, mark 13: one queued entry at 12', async () => {
+    offlineEntry()
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('watching', 10, 12)] } })
+    expect(await mark(r, 13)).toMatchObject({ episodes: 12, status: 'watching' })
+    expect(r.queue()).toHaveLength(1)
+    expect(r.queue()[0].after.episodes).toBe(12)
+  })
+
+  it('offline, cached watching 12/12 of 12, mark 13: null, nothing queued', async () => {
+    offlineEntry()
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('watching', 12, 12)] } })
+    expect(await mark(r, 13)).toBeNull()
+    expect(r.queue()).toEqual([])
+  })
+
+  // Guards: green on main, each red under the mutation named.
+  it('guard: num_episodes 0 (MAL’s unknown) never clamps: PATCH 13, resolves 13', async () => {
+    serveEntry(12, 'watching', 0)
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('watching', 12, 0)] } })
+    expect(await mark(r, 13)).toMatchObject({ episodes: 13 })
+    expect(fake.callsTo('PATCH', PATCH_PATH).map((c) => c.form)).toEqual([
+      { num_watched_episodes: '13' }
+    ])
+  })
+
+  it('guard: offline, a cached num_episodes 0 never clamps: 13 is queued', async () => {
+    offlineEntry()
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('watching', 12, 0)] } })
+    expect(await mark(r, 13)).toMatchObject({ episodes: 13 })
+    expect(r.queue().map((q) => q.after.episodes)).toEqual([13])
+  })
+
+  it('guard: offline with no cached row has no total: 13 is queued unclamped', async () => {
+    offlineEntry()
+    const r = await rig({ seed: { myanimelistUserRates: [] } })
+    expect(await mark(r, 13)).toMatchObject({ episodes: 13 })
+    expect(r.queue().map((q) => q.after.episodes)).toEqual([13])
+  })
+
+  it('guard: completed 12/12 of 12, mark 12 (at the total) starts the rewatch at 12 as before', async () => {
+    serveEntry(12, 'completed', 12)
+    const r = await rig({ seed: { myanimelistUserRates: [cachedRow('completed', 12, 12)] } })
+    expect(await mark(r, 12)).toMatchObject({ episodes: 12, status: 'rewatching' })
+    const patch = fake.callsTo('PATCH', PATCH_PATH)
+    expect(patch).toHaveLength(1)
+    expect(patch[0].form).toMatchObject({ status: 'watching', is_rewatching: 'true' })
   })
 })

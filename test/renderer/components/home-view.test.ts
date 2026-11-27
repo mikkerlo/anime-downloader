@@ -1,9 +1,14 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import HomeView from '../../../src/renderer/src/components/views/HomeView.vue'
-import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
+import {
+  accountsState,
+  trackerEntry,
+  trackersApi,
+  type TrackersApi
+} from '../../helpers/trackers-api'
 
 const resumeEntry: ContinueWatchingEntry = {
   kind: 'resume',
@@ -28,11 +33,13 @@ const nextEntry: ContinueWatchingEntry = {
 
 function stubApi(
   entries: ContinueWatchingEntry[],
-  dismissed: string[] = []
+  dismissed: string[] = [],
+  trackers: TrackersApi = trackersApi()
 ): Record<string, ReturnType<typeof vi.fn>> {
   // Real methods HomeView calls; any other access (store `on*` subscriptions)
   // falls back to a no-op returning a no-op unsubscribe handle.
   const real: Record<string, ReturnType<typeof vi.fn>> = {
+    ...(trackers.api as unknown as Record<string, ReturnType<typeof vi.fn>>),
     homeGetContinueWatching: vi.fn().mockResolvedValue(entries),
     shikimoriGetAnimeRates: vi.fn().mockResolvedValue([]),
     libraryHas: vi.fn().mockResolvedValue(false),
@@ -94,14 +101,7 @@ describe('HomeView', () => {
   })
 
   it('renders a "Recently added" grid from recent Watching/Planned Shikimori rates', async () => {
-    stubApi([])
-    const shiki = useShikimoriStore()
-    shiki.rates = [
-      rate(10, 'planned', '2026-05-20T00:00:00Z'),
-      rate(11, 'watching', '2026-05-29T00:00:00Z'),
-      rate(12, 'completed', '2026-05-30T00:00:00Z'), // excluded — not an active status
-      rate(13, 'planned', '2026-05-10T00:00:00Z', /* no smotret */ true)
-    ] as unknown as typeof shiki.rates
+    stubApi([], [], shikimoriPrimary(SHIKI_RATES))
 
     const wrapper = mount(HomeView)
     await flushPromises()
@@ -109,6 +109,7 @@ describe('HomeView', () => {
     const cards = wrapper.findAll('.poster-grid .acard')
     expect(cards).toHaveLength(2) // completed + no-smotret entries excluded
     expect(wrapper.find('.section-head h3').text()).toBe('Recently added to your list')
+    expect(wrapper.find('.section-head.spaced .muted').text()).toBe('From Shikimori')
     // Most-recently-updated (id 11) sorts first.
     expect(cards[0].find('.acard-title').text()).toContain('Show 11')
   })
@@ -186,19 +187,22 @@ describe('HomeView', () => {
   it('resurfaces a dismissed show once its episode advances', async () => {
     // Keyed on animeId:episodeInt, not animeId — so when a refresh returns a NEWER
     // episode for the same anime (key never dismissed), the show comes back.
-    const api = stubApi([resumeEntry, nextEntry], ['1:12'])
-    const shiki = useShikimoriStore()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const trackers = shikimoriPrimary(SHIKI_RATES)
+    const api = stubApi([resumeEntry, nextEntry], ['1:12'], trackers)
     const wrapper = mount(HomeView)
     await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
     expect(wrapper.findAll('.cw-title').map((t) => t.text())).toEqual(['Cowboy Bebop'])
 
     // Episode advances: anime 1 now resumes at ep 13. Re-fetch is driven by the
-    // store's deep rates watcher calling refresh().
+    // store's primary rates watcher, debounced.
     api.homeGetContinueWatching.mockResolvedValue([
       { ...resumeEntry, episodeInt: '13', episodeLabel: 'Episode 13', updatedAt: 3 },
       nextEntry
     ])
-    shiki.rates = [] as unknown as typeof shiki.rates
+    trackers.emitQueueChanged({ trackerId: 'shikimori', length: 0, queuedAfter: {} })
+    await vi.advanceTimersByTimeAsync(1000)
     await flushPromises()
 
     const titles = wrapper.findAll('.cw-title').map((t) => t.text())
@@ -207,30 +211,197 @@ describe('HomeView', () => {
   })
 })
 
-function rate(
-  id: number,
-  status: string,
-  updatedAt: string,
-  noSmotret = false
-): Record<string, unknown> {
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+function smotret(id: number): AnimeSearchResult {
   return {
-    rate: { id, score: 0, status, episodes: 0, rewatches: 0, updated_at: updatedAt, target_id: id },
-    shikiAnime: { id, name: `Show ${id}` },
-    smotretAnime: noSmotret
-      ? null
-      : {
-          id,
-          title: `Show ${id}`,
-          titles: {},
-          posterUrlSmall: 'p.jpg',
-          numberOfEpisodes: 12,
-          type: 'tv',
-          typeTitle: 'TV',
-          year: 2020,
-          season: 'spring'
-        }
+    id,
+    title: `Show ${id}`,
+    titles: {},
+    posterUrlSmall: 'p.jpg',
+    numberOfEpisodes: 12,
+    type: 'tv',
+    typeTitle: 'TV',
+    year: 2020,
+    season: 'spring'
   }
 }
+
+function rate(
+  trackerId: TrackerId,
+  id: number,
+  status: ShikiUserRateStatus,
+  updatedAt: string | null,
+  noSmotret = false
+): TrackerRateEntry {
+  return trackerEntry(trackerId, id, status, {
+    updatedAt: updatedAt === null ? null : Date.parse(updatedAt),
+    smotretAnime: noSmotret ? null : smotret(id)
+  })
+}
+
+const SHIKI_RATES = [
+  rate('shikimori', 10, 'planned', '2026-05-20T00:00:00Z'),
+  rate('shikimori', 11, 'watching', '2026-05-29T00:00:00Z'),
+  rate('shikimori', 12, 'completed', '2026-05-30T00:00:00Z'), // excluded — not an active status
+  rate('shikimori', 13, 'planned', '2026-05-10T00:00:00Z', /* no smotret */ true)
+]
+
+/** A signed-in Shikimori as the primary, its list answering `trackerGetRates`. */
+function shikimoriPrimary(entries: TrackerRateEntry[]): TrackersApi {
+  return trackersApi({ accounts: accountsState(['shikimori']), rates: { shikimori: entries } })
+}
+
+// #698: the Home rail reads the primary tracker, whichever it is.
+describe('HomeView — the primary tracker (#698)', () => {
+  const AL_RATES = [
+    rate('anilist', 20, 'watching', '2026-06-01T00:00:00Z'),
+    rate('anilist', 21, 'rewatching', '2026-06-03T00:00:00Z'),
+    rate('anilist', 22, 'planned', '2026-06-02T00:00:00Z'),
+    rate('anilist', 23, 'dropped', '2026-06-04T00:00:00Z'),
+    rate('anilist', 24, 'watching', '2026-06-05T00:00:00Z', /* no smotret */ true)
+  ]
+
+  function cardTitles(wrapper: ReturnType<typeof mount>): string[] {
+    return wrapper.findAll('.poster-grid .acard .acard-title').map((t) => t.text())
+  }
+
+  it('only AniList connected: the AniList titles with a smotret match, newest first, from AniList', async () => {
+    stubApi(
+      [],
+      [],
+      trackersApi({ accounts: accountsState(['anilist']), rates: { anilist: AL_RATES } })
+    )
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    expect(cardTitles(wrapper)).toEqual(['Show 21', 'Show 22', 'Show 20'])
+    expect(wrapper.find('.section-head.spaced .muted').text()).toBe('From AniList')
+  })
+
+  it('a null updatedAt sorts as NaN, as a missing updated_at did', async () => {
+    // NaN makes the comparator 0 against every row: these keep the input order.
+    const rates = [
+      rate('shikimori', 30, 'watching', null),
+      rate('shikimori', 31, 'watching', '2026-06-01T00:00:00Z'),
+      rate('shikimori', 32, 'watching', null)
+    ]
+    stubApi([], [], shikimoriPrimary(rates))
+    const wrapper = mount(HomeView)
+    await flushPromises()
+    expect(cardTitles(wrapper)).toEqual(['Show 30', 'Show 31', 'Show 32'])
+  })
+
+  it("the refresh kick refreshes the primary's rates through the store", async () => {
+    const trackers = trackersApi({
+      accounts: accountsState(['anilist']),
+      rates: { anilist: AL_RATES }
+    })
+    stubApi([], [], trackers)
+    const wrapper = mount(HomeView)
+    await flushPromises()
+    trackers.api.trackerGetRates.mockClear()
+
+    await wrapper.find('.refresh-btn').trigger('click')
+    await flushPromises()
+    expect(trackers.api.trackerGetRates.mock.calls).toEqual([['anilist']])
+  })
+
+  it('with no primary the refresh kick asks for no rates', async () => {
+    const trackers = trackersApi()
+    const api = stubApi([], [], trackers)
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    await wrapper.find('.refresh-btn').trigger('click')
+    await flushPromises()
+    expect(trackers.api.trackerGetRates).not.toHaveBeenCalled()
+    expect(api.shikimoriGetAnimeRates).not.toHaveBeenCalled()
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(2)
+  })
+
+  it('a primary switch refetches the rail and flips the header to AniList', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const trackers = trackersApi({
+      accounts: accountsState(['shikimori', 'anilist'], 'shikimori'),
+      rates: { shikimori: SHIKI_RATES, anilist: AL_RATES }
+    })
+    const api = stubApi([], [], trackers)
+    const wrapper = mount(HomeView)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.find('.section-head.spaced .muted').text()).toBe('From Shikimori')
+    expect(cardTitles(wrapper)).toEqual(['Show 11', 'Show 10'])
+    const before = api.homeGetContinueWatching.mock.calls.length
+
+    trackers.emitAccounts(accountsState(['shikimori', 'anilist'], 'anilist'))
+    await flushPromises()
+    expect(wrapper.find('.section-head.spaced .muted').text()).toBe('From AniList')
+    expect(cardTitles(wrapper)).toEqual(['Show 21', 'Show 22', 'Show 20'])
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before + 1)
+  })
+
+  it("a drain's burst of queue events for the primary refetches once, after the debounce", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const trackers = trackersApi({
+      accounts: accountsState(['anilist']),
+      rates: { anilist: AL_RATES }
+    })
+    const api = stubApi([], [], trackers)
+    mount(HomeView)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    const before = api.homeGetContinueWatching.mock.calls.length
+
+    for (let n = 5; n > 0; n--) {
+      trackers.emitQueueChanged({
+        trackerId: 'anilist',
+        length: n,
+        queuedAfter: { 20: { episodes: 6 - n, status: 'watching', score: 0, rewatches: 0 } }
+      })
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before + 1)
+  })
+
+  it("a mirror's events never refetch the rail; the primary's own still do", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const trackers = trackersApi({
+      accounts: accountsState(['shikimori', 'anilist'], 'shikimori'),
+      rates: { shikimori: SHIKI_RATES, anilist: AL_RATES }
+    })
+    const api = stubApi([], [], trackers)
+    mount(HomeView)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    const before = api.homeGetContinueWatching.mock.calls.length
+
+    // AniList is a mirror here: its refresh and its queue are not the rail's list.
+    trackers.emitRatesRefreshed({ trackerId: 'anilist', entries: AL_RATES.slice(1) })
+    trackers.emitQueueChanged({
+      trackerId: 'anilist',
+      length: 1,
+      queuedAfter: { 20: { episodes: 2, status: 'watching', score: 0, rewatches: 0 } }
+    })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before)
+
+    // The primary's own refresh still refetches.
+    trackers.emitRatesRefreshed({ trackerId: 'shikimori', entries: SHIKI_RATES.slice(1) })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(api.homeGetContinueWatching).toHaveBeenCalledTimes(before + 1)
+  })
+})
 
 // #570: continue-watching cards keep their poster offline from main's cache.
 describe('HomeView — cached posters (#570)', () => {

@@ -1,8 +1,7 @@
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary } from '../smotret-api'
 import type { AnimeCacheEntry } from '../services/anime-cache'
-import { SHIKIMORI_ORIGIN } from '../../shared/shikimori'
+import type { TrackerRateEntry } from '../trackers/types'
 
-const SHIKI_BASE = SHIKIMORI_ORIGIN
 const RESUME_POSITION_GATE_SECONDS = 5
 const RESUME_COMPLETION_GATE = 0.95
 const MAX_ENTRIES = 24
@@ -14,26 +13,16 @@ export interface WatchProgressEntry {
   watched?: boolean
 }
 
-export interface CachedShikiRate {
-  rate: {
-    target_id: number
-    episodes: number
-    status: string
-    updated_at?: string
-  }
-  shikiAnime?: {
-    id: number
-    name?: string
-    russian?: string
-    image?: { preview?: string; x96?: string; original?: string }
-    episodes_aired?: number
-  }
-  smotretAnime?: AnimeSearchResult | null
-}
+/** What continue-watching reads of a primary tracker's entry (#698). */
+export type ContinueWatchingRate = Pick<
+  TrackerRateEntry<unknown>,
+  'trackerId' | 'malId' | 'values' | 'updatedAt' | 'anime' | 'smotretAnime' | 'native'
+>
 
 export interface ContinueWatchingInputs {
   watchProgress: Record<string, WatchProgressEntry>
-  rates: CachedShikiRate[]
+  /** The primary tracker's entries, `native` included. */
+  rates: ContinueWatchingRate[]
   library: Record<string, AnimeSearchResult>
   downloaded: Record<string, AnimeSearchResult>
   recent: Record<string, AnimeSearchResult>
@@ -55,8 +44,8 @@ export interface ContinueWatchingEntry {
 }
 
 export interface ContinueWatchingDraftEntry extends ContinueWatchingEntry {
-  shikiPosterFallback?: string
-  shikiNameFallback?: string
+  posterFallback?: string
+  nameFallback?: string
 }
 
 export interface ContinueWatchingDraft {
@@ -98,6 +87,17 @@ function entryToNamePoster(
   }
 }
 
+/**
+ * The MAL id the malIdMap joins and the emitted `malId` read. A Shikimori row
+ * keeps its own `rate.target_id`, missing or null on a row cached by an older
+ * version, where the entry's `malId` would fall back to `shikiAnime.id` and
+ * join a title that never joined before (#698).
+ */
+function joinMalIdOf(r: ContinueWatchingRate): number | null | undefined {
+  if (r.trackerId !== 'shikimori') return r.malId
+  return (r.native as { rate?: { target_id?: number | null } } | undefined)?.rate?.target_id
+}
+
 function episodeLabelFor(
   animeId: number,
   episodeInt: string,
@@ -111,8 +111,8 @@ function episodeLabelFor(
 }
 
 /**
- * Pure first pass: collapse `watchProgress` + `shikimoriUserRates` into the
- * draft list of resume and next-episode entries the Home view shows. Returns
+ * Pure first pass: collapse `watchProgress` + the primary tracker's entries
+ * into the draft list of resume and next-episode entries the Home view shows. Returns
  * `unresolvedIds` for the caller to fetch via `smotretApi.getAnime` before
  * calling {@link finalizeContinueWatchingEntries}.
  *
@@ -165,20 +165,17 @@ export function buildContinueWatchingEntries(state: ContinueWatchingInputs): Con
     })
   }
 
-  // Map smotret-anime id -> Shikimori rate.updated_at (ms). Used to override
-  // Resume rows' sort key with the Shikimori clock so the Home view orders
-  // entries the same way as the Shikimori "To Watch" tab.
+  // Map smotret-anime id -> the tracker entry's update time (ms). Used to
+  // override Resume rows' sort key with the tracker's clock so the Home view
+  // orders entries the same way as the tracker's "To Watch" list.
   const rateUpdatedByAnimeId = new Map<number, number>()
   const statusByAnimeId = new Map<number, string>()
   for (const r of state.rates) {
-    const animeId =
-      r.smotretAnime?.id ??
-      (r.rate.target_id ? state.malMap[String(r.rate.target_id)]?.id : undefined)
+    const malId = joinMalIdOf(r)
+    const animeId = r.smotretAnime?.id ?? (malId ? state.malMap[String(malId)]?.id : undefined)
     if (!animeId) continue
-    statusByAnimeId.set(animeId, r.rate.status)
-    if (!r.rate.updated_at) continue
-    const ms = Date.parse(r.rate.updated_at)
-    if (Number.isFinite(ms)) rateUpdatedByAnimeId.set(animeId, ms)
+    statusByAnimeId.set(animeId, r.values.status)
+    if (r.updatedAt !== null) rateUpdatedByAnimeId.set(animeId, r.updatedAt)
   }
   for (const e of entries) {
     if (e.kind !== 'resume') continue
@@ -186,7 +183,7 @@ export function buildContinueWatchingEntries(state: ContinueWatchingInputs): Con
     if (ms) e.updatedAt = ms
   }
 
-  // Hide stale "Resume" rows when Shikimori says the show is completed —
+  // Hide stale "Resume" rows when the tracker says the show is completed —
   // their watch is done, lingering local progress shouldn't drag them back
   // into Continue Watching.
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -199,28 +196,27 @@ export function buildContinueWatchingEntries(state: ContinueWatchingInputs): Con
   }
 
   for (const r of state.rates) {
-    const status = r.rate.status
+    const status = r.values.status
     if (status !== 'watching' && status !== 'rewatching') continue
-    const malId = r.rate.target_id
-    const watched = r.rate.episodes
-    const aired = r.shikiAnime?.episodes_aired ?? 0
+    const malId = joinMalIdOf(r) as number
+    const watched = r.values.episodes
+    // Null (AniList's long-running shows) is no upper bound, like 0.
+    const aired = r.anime.episodesAired ?? 0
     const next = watched + 1
     if (aired > 0 && next > aired) continue
     const smotret = r.smotretAnime || (malId ? state.malMap[String(malId)] : null)
     const animeId = smotret?.id ?? 0
     if (animeId && resumeKeys.has(String(animeId))) continue
-    const fallbackName = r.shikiAnime?.russian || r.shikiAnime?.name || ''
+    const fallbackName = r.anime.title
     const resolved = entryToNamePoster(
       animeId ? localResolve(animeId, state, malId) : null,
       fallbackName
     )
+    // The tracker's poster, already absolute (the codec's pick).
     let poster = resolved.poster
-    if (!poster && r.shikiAnime?.image) {
-      const img =
-        r.shikiAnime.image.preview || r.shikiAnime.image.x96 || r.shikiAnime.image.original || ''
-      poster = img && (img.startsWith('http') ? img : `${SHIKI_BASE}${img}`)
-    }
-    const updatedAt = r.rate.updated_at ? Date.parse(r.rate.updated_at) || Date.now() : Date.now()
+    if (!poster && r.anime.poster) poster = r.anime.poster
+    // Falsy (missing, unparseable or the epoch) takes now.
+    const updatedAt = r.updatedAt || Date.now()
     entries.push({
       kind: 'next',
       animeId,
@@ -232,8 +228,8 @@ export function buildContinueWatchingEntries(state: ContinueWatchingInputs): Con
         : `Episode ${next}`,
       updatedAt,
       malId,
-      shikiPosterFallback: poster,
-      shikiNameFallback: fallbackName
+      posterFallback: poster,
+      nameFallback: fallbackName
     })
   }
 
@@ -249,10 +245,11 @@ export function buildContinueWatchingEntries(state: ContinueWatchingInputs): Con
           if (state.recent[String(e.animeId)]) return false
           if (!e.animeName) return true
           if (!e.posterUrl) return true
-          // Poster is only the Shikimori fallback (which can be a 'missing'
-          // placeholder when smotret-anime's bulk lookup didn't return one).
-          // The detail endpoint usually does — so try.
-          if (e.shikiPosterFallback && e.posterUrl === e.shikiPosterFallback) return true
+          // A next-up row's poster is still the one it was built with: the
+          // local smotret poster or, without one, the tracker's (which can be
+          // a 'missing' placeholder when smotret-anime's bulk lookup didn't
+          // return one). The detail endpoint usually has a fresher one — so try.
+          if (e.posterFallback && e.posterUrl === e.posterFallback) return true
           return false
         })
         .map((e) => e.animeId)
@@ -264,7 +261,7 @@ export function buildContinueWatchingEntries(state: ContinueWatchingInputs): Con
 
 /**
  * Pure second pass: apply the metadata fetched for `unresolvedIds`, strip the
- * Shikimori fallback fields, drop rows that are still nameless, sort by
+ * draft fallback fields, drop rows that are still nameless, sort by
  * `updatedAt` desc, and cap at 24 rows.
  */
 export function finalizeContinueWatchingEntries(
@@ -276,16 +273,15 @@ export function finalizeContinueWatchingEntries(
     const meta = fetched[e.animeId]
     if (!meta) continue
     if (!e.animeName) {
-      e.animeName =
-        meta.titles?.ru || meta.titles?.romaji || meta.title || e.shikiNameFallback || ''
+      e.animeName = meta.titles?.ru || meta.titles?.romaji || meta.title || e.nameFallback || ''
     }
     // Always prefer a smotret-anime poster when we have one — it overrides
-    // the (potentially broken) Shikimori fallback.
+    // the (potentially broken) tracker fallback.
     const fetchedPoster = meta.posterUrlSmall || meta.posterUrl
     if (fetchedPoster) {
       e.posterUrl = fetchedPoster
     } else if (!e.posterUrl) {
-      e.posterUrl = e.shikiPosterFallback || ''
+      e.posterUrl = e.posterFallback || ''
     }
     if (e.episodeLabel.startsWith('Episode ')) {
       const ep = meta.episodes?.find((ep) => ep.episodeInt === e.episodeInt && isContentEpisode(ep))
@@ -294,7 +290,7 @@ export function finalizeContinueWatchingEntries(
   }
 
   return draft
-    .map(({ shikiPosterFallback: _p, shikiNameFallback: _n, ...rest }) => rest)
+    .map(({ posterFallback: _p, nameFallback: _n, ...rest }) => rest)
     .filter((e) => e.animeId && e.animeName)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_ENTRIES)

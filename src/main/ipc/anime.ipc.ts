@@ -12,7 +12,8 @@ export function register({
   rememberAnimeMeta,
   offlineService,
   recentWatch,
-  attachedLibraryService
+  attachedLibraryService,
+  primaryEntries
 }: AppDeps): void {
   // Shared cache read for the cache-first channel + the network-first
   // error-fallback (#196) so the two reads can't drift: id → cached episode
@@ -44,9 +45,9 @@ export function register({
         library: store.get('library') as LocalSearchSnapshot['library'],
         downloadedAnime: store.get('downloadedAnime') as LocalSearchSnapshot['downloadedAnime'],
         animeCache: store.get('animeCache') as LocalSearchSnapshot['animeCache'],
-        shikimoriUserRates: store.get(
-          'shikimoriUserRates'
-        ) as LocalSearchSnapshot['shikimoriUserRates'],
+        // `listStatus` is the primary tracker's (#698); `airingStatus` stays
+        // Shikimori's details cache until the `details` source (#706).
+        rates: primaryEntries(),
         shikimoriAnimeDetails: store.get(
           'shikimoriAnimeDetails'
         ) as LocalSearchSnapshot['shikimoriAnimeDetails'],

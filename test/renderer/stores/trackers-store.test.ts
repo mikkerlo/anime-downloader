@@ -881,3 +881,106 @@ describe('useTrackersStore — feature sources and details (#706)', () => {
     expect(none.canAutoDl).toBe(false)
   })
 })
+
+describe('useTrackersStore — multi-account controls (#701)', () => {
+  it('secondTrackerEnabled and primaryCapable come from the payload; absent reads as off and none', async () => {
+    installApi({ accounts: accountsState([account('shikimori', 1)]) })
+    const bare = await makeStore()
+    expect(bare.secondTrackerEnabled).toBe(false)
+    expect(bare.primaryCapable).toEqual([])
+
+    installApi({
+      accounts: {
+        ...accountsState([account('shikimori', 1)]),
+        secondTrackerEnabled: true,
+        primaryCapable: ['shikimori', 'anilist']
+      }
+    })
+    const store = await makeStore()
+    expect(store.secondTrackerEnabled).toBe(true)
+    expect(store.primaryCapable).toEqual(['shikimori', 'anilist'])
+    emit.accountsChanged({
+      ...accountsState([account('shikimori', 1)]),
+      primaryCapable: ['shikimori']
+    })
+    expect(store.secondTrackerEnabled).toBe(false)
+    expect(store.primaryCapable).toEqual(['shikimori'])
+  })
+
+  it('multiAccount needs two connected accounts, an expired one included', async () => {
+    installApi({ accounts: accountsState([account('shikimori', 1)]) })
+    expect((await makeStore()).multiAccount).toBe(false)
+    installApi({
+      accounts: accountsState([
+        account('shikimori', 1),
+        account('anilist', 2, { hasCredentials: false })
+      ])
+    })
+    expect((await makeStore()).multiAccount).toBe(true)
+  })
+
+  it("defaultFeatureSource resolves with that feature's own override left out", async () => {
+    const two = [account('shikimori', 1), account('anilist', 2)]
+    installApi({
+      accounts: {
+        ...accountsState(two, 'shikimori'),
+        featureSources: { chronology: 'anilist', details: 'anilist' }
+      }
+    })
+    const store = await makeStore()
+    expect(store.featureSource('chronology')).toBe('anilist')
+    expect(store.defaultFeatureSource('chronology')).toBe('shikimori')
+    emit.accountsChanged({
+      ...accountsState(two, 'anilist'),
+      featureSources: { chronology: 'anilist', details: 'anilist' }
+    })
+    expect(store.defaultFeatureSource('chronology')).toBe('anilist')
+    // MAL can't be the airing source, even as the primary.
+    emit.accountsChanged(accountsState([account('anilist', 2), account('mal', 3)], 'mal'))
+    expect(store.defaultFeatureSource('airing')).toBe('anilist')
+  })
+
+  it('the setters call main and never set-setting; openReconcile starts unset', async () => {
+    const store = await makeStore()
+    const w = window as unknown as { api: Record<string, unknown> }
+    const setSetting = vi.fn()
+    const trackerSetPrimary = vi.fn(async () => accountsState([]))
+    const trackerSetMirror = vi.fn(async () => ({ applied: false, pendingMirrorChanges: 2 }))
+    const trackerSetFeatureSource = vi.fn(async () => accountsState([]))
+    Object.assign(w.api, {
+      setSetting,
+      trackerSetPrimary,
+      trackerSetMirror,
+      trackerSetFeatureSource
+    })
+
+    await store.setPrimary('anilist')
+    expect(await store.setMirror('anilist', false)).toEqual({
+      applied: false,
+      pendingMirrorChanges: 2
+    })
+    await store.setMirror('anilist', false, { confirm: true })
+    await store.setFeatureSource('details', null)
+
+    expect(trackerSetPrimary.mock.calls).toEqual([['anilist']])
+    expect(trackerSetMirror.mock.calls).toEqual([
+      ['anilist', false],
+      ['anilist', false, { confirm: true }]
+    ])
+    expect(trackerSetFeatureSource.mock.calls).toEqual([['details', null]])
+    expect(setSetting).not.toHaveBeenCalled()
+    expect(store.openReconcile).toBeNull()
+  })
+
+  it('mirrorOn: a missing entry is on', async () => {
+    installApi({
+      accounts: {
+        ...accountsState([account('shikimori', 1), account('anilist', 2)]),
+        mirror: { mal: false }
+      }
+    })
+    const store = await makeStore()
+    expect(store.mirrorOn('anilist')).toBe(true)
+    expect(store.mirrorOn('mal')).toBe(false)
+  })
+})

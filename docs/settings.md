@@ -8,6 +8,15 @@ kept-changes Discard go through the tracker channels, which write
 `shikimoriCredentials`, `shikimoriUser`, `shikimoriUpdateQueue` and
 `shikimoriParkedQueues` ([Trackers](trackers.md#settings--trackers)).
 
+With two or more trackers connected, Trackers also holds the primary radio,
+a mirror toggle per non-primary tracker and a Feature sources group (#701,
+[Trackers](trackers.md#multi-account-controls)). They write `trackerPrimary`,
+`trackerMirror` and `trackerFeatureSource` through `tracker:set-primary`,
+`tracker:set-mirror` and `tracker:set-feature-source` (#696), never through
+`set-setting`, which refuses all three keys. Switching a mirror off asks
+first; on confirm main writes the toggle off first and then discards that
+tracker's mirrored queue entries, both under the tracker's queue lock.
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `token` | string | `''` | Anime 365 (smotret-anime.app) API token |

@@ -206,7 +206,9 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
     trackerRates,
     cancelAttempt: (id) => auth.cancel(id),
     broadcast,
-    accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED
+    accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED,
+    // Connecting a second tracker (#701); its refusals are trackers-second-tracker-flag.test.ts.
+    secondTrackerEnabled: true
   })
   const providers = {
     shikimori: { ...createShikimoriProvider({ store }), capabilities: CAPS.shikimori },
@@ -239,6 +241,7 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
     trackerAuth: auth,
     trackerChoices: choices,
     newTrackerCardsEnabled: true,
+    secondTrackerEnabled: true,
     coldStorageService: { getDownloadDir: () => '/dl' },
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => {}),

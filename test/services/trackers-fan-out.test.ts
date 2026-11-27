@@ -495,6 +495,73 @@ describe('clocks, the prompt and failure isolation', () => {
   })
 })
 
+// #699 §4: the prompt's smotret title is the primary's own cache row. The
+// spy stands in for `maybeBroadcastCleanupPrompt` (`src/main/index.ts`), so
+// its first argument is what reaches `resolveSmotretFromMalId` before any of
+// its fallbacks (the `malIdMap`, `lookupByMalIds`) could run: a regression
+// that passes null shows here as null, whatever the fallback would find.
+describe('the cleanup prompt follows the primary’s entry (#699)', () => {
+  const SMOTRET = { id: 501, title: 'Frieren' }
+  const completedRow = (malId: number, v: RateValues) => ({
+    ...shikiRow(malId, v),
+    smotretAnime: SMOTRET
+  })
+
+  it('a user change to completed, sent: the prompt gets the cache row’s smotretAnime, once', async () => {
+    const r = rig()
+    server.set(1, { episodes: 11, status: 'watching' })
+    r.store.set('shikimoriUserRates', [completedRow(1, rv(11))])
+    r.alCache([1, rv(11)])
+
+    await r.set('shikimori', 1, rv(12, 7, 'completed'))
+
+    expect(r.cleanup).toHaveBeenCalledTimes(1)
+    expect(r.cleanup).toHaveBeenCalledWith(SMOTRET, 1, 'completed', 'watching')
+    expect((r.cleanup.mock.calls[0] as unknown[])[0]).toMatchObject({ id: 501 })
+  })
+
+  it('a user change to completed, queued offline: the same row, once', async () => {
+    const r = rig()
+    server.set(1, { episodes: 11, status: 'watching' })
+    r.store.set('shikimoriUserRates', [completedRow(1, rv(11))])
+    offlineOnce()
+
+    await r.set('shikimori', 1, rv(12, 7, 'completed'))
+
+    expect(r.queueOf('shikimori')).toHaveLength(1)
+    expect(r.cleanup).toHaveBeenCalledTimes(1)
+    expect(r.cleanup).toHaveBeenCalledWith(SMOTRET, 1, 'completed', 'watching')
+  })
+
+  it('a mirror reaching completed prompts nothing: not on the fan-out, not on its drain', async () => {
+    const r = rig()
+    server.set(1, { episodes: 11, status: 'watching' })
+    r.store.set('shikimoriUserRates', [completedRow(1, rv(11))])
+    r.alFake.set(1, rv(11))
+    r.alCache([1, rv(11)])
+    r.offline.anilist = false
+
+    // A score-only primary edit: the primary stays watching, and no prompt.
+    await r.set('shikimori', 1, rv(11, 9))
+    expect(r.cleanup).toHaveBeenCalledTimes(1)
+    expect(r.cleanup).toHaveBeenLastCalledWith(SMOTRET, 1, 'watching', 'watching')
+
+    // A 'mirror' change takes AniList to completed and drains it.
+    await r.fan.applyChange(
+      1,
+      { kind: 'set', values: rv(12, 9, 'completed'), fields: ['episodes', 'status'] },
+      { target: 'anilist', cause: 'mirror' }
+    )
+    // The score entry's kicked drain is still running when this one queues.
+    await drain(r.anilist)
+    await drain(r.anilist)
+    expect(r.queueOf('anilist')).toEqual([])
+    expect(r.alFake.upserts.at(-1)?.values).toMatchObject({ status: 'completed' })
+    expect(r.cleanup).toHaveBeenCalledTimes(1)
+    r.anilist.stopSyncTimer()
+  })
+})
+
 describe('the projection (§ 3)', () => {
   it('two offline edits to an AniList mirror (episode 8, then score 9) both arrive', async () => {
     const r = rig()

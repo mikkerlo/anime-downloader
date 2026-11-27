@@ -791,6 +791,18 @@ the reply, as `projectRate` does: a switch or a mount with a change still queued
 shows that change, and a Save can't write the remote value back over it. The
 AniList "Open ↗" link needs the result's `mediaId` and is hidden without it.
 
+**The sidebar, the player and Watch Together** (#699). The sidebar's footer
+chip shows when `anyAccount`, with the primary account's nickname and avatar,
+and reads `aggregateSyncState`. With one tracker it is the chip it always was;
+with two or more it opens a per-tracker popover (`TRACKER_LABELS` names). The
+player calls `tracker:mark-episode-watched` and reads no tracker state: main
+decides who to mark, and with nothing connected the call resolves `null`. The
+Watch Together nickname is the primary's, seeded only into an empty username:
+the Settings tab reads the store, while the view and `useSyncplayClient` read
+`tracker:list-accounts` once at connect. The cleanup prompt stays in each
+tracker's primary branch, so its smotret title is the primary's own cache row
+(Shikimori's today; AniList's and MAL's primary branches must pass theirs).
+
 **Emit order is a contract.** A drain broadcasts the cache update
 (`tracker:rate-updated`) before the queue change
 (`tracker:offline-queue-changed`). The two are separate IPC messages, and the

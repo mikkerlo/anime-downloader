@@ -24,10 +24,17 @@ const api = {
   syncplaySetPassword: vi.fn(async (_password: string) => undefined),
   syncplayConnect: vi.fn(async (_cfg: SyncplayConnectConfig) => undefined),
   syncplayDisconnect: vi.fn(async () => undefined),
-  onSyncplayConnectionStatus: vi.fn(() => () => {})
+  onSyncplayConnectionStatus: vi.fn(() => () => {}),
+  // The trackers store's first read, awaited at setup (#699).
+  trackerListAccounts: vi.fn(async () => ({
+    accounts: [],
+    primary: null,
+    mirror: {},
+    featureSources: {}
+  }))
 }
 
-// The tab pulls in useShikimoriStore, which eagerly subscribes to unrelated
+// The tab pulls in useTrackersStore, which eagerly subscribes to unrelated
 // channels; everything we don't assert on falls through to a no-op subscriber.
 const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
   get: (target, prop) => (prop in target ? target[prop as string] : () => () => {})

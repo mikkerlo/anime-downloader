@@ -46,7 +46,7 @@ watch(
 </script>
 
 <template>
-  <div ref="root">
+  <div ref="root" class="trackers-tab">
     <TrackerAccountCard
       tracker-id="shikimori"
       desc="Connect your Shikimori account to sync watch progress."
@@ -60,3 +60,11 @@ watch(
     />
   </div>
 </template>
+
+<style scoped>
+.trackers-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+</style>

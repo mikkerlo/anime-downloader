@@ -18,7 +18,7 @@ type Api = {
   syncplaySendLocalSnapshot: (state: { paused: boolean; position: number }) => void
   syncplayPlayerClosed: (playerSessionId?: string) => void
   syncplaySetReady: (ready: boolean) => Promise<void>
-  shikimoriGetUser: () => Promise<{ nickname?: string } | null>
+  trackerListAccounts: () => Promise<TrackerAccountsState>
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
   onSyncplayConnectionStatus: (cb: (s: SyncplayStatus) => void) => Unsubscribe
@@ -51,7 +51,7 @@ const DEFAULT_API: Partial<Api> = {
   // default surface rather than in the one case that asserts on it.
   syncplayPlayerClosed: vi.fn(),
   syncplaySetReady: vi.fn().mockResolvedValue(undefined),
-  shikimoriGetUser: vi.fn().mockResolvedValue({ nickname: '' }),
+  trackerListAccounts: vi.fn().mockResolvedValue(accountsState({}, null)),
   getSetting: vi.fn().mockResolvedValue(null),
   setSetting: vi.fn().mockResolvedValue(undefined),
   onSyncplayConnectionStatus: noopSub,
@@ -515,6 +515,29 @@ describe('useSyncplayClient — onVideoSeeked / onVideoWaiting', () => {
   })
 })
 
+// `tracker:list-accounts` with the given trackers connected (#699). Declared
+// here, below the anchors other files cite in this file; hoisted for
+// `DEFAULT_API`.
+function accountsState(
+  connected: Partial<Record<TrackerId, string>>,
+  primary: TrackerId | null
+): TrackerAccountsState {
+  return {
+    accounts: (['shikimori', 'anilist', 'mal'] as TrackerId[]).map((trackerId) => ({
+      trackerId,
+      user: connected[trackerId] ? { id: 1, nickname: connected[trackerId], avatar: null } : null,
+      hasCredentials: !!connected[trackerId],
+      sessionExpired: false,
+      needsSetup: false,
+      credentialState: connected[trackerId] ? 'ok' : 'none'
+    })),
+    primary,
+    mirror: {},
+    featureSources: {},
+    newTrackerCardsEnabled: false
+  }
+}
+
 describe('useSyncplayClient — toggleSyncplayConnection', () => {
   it('disconnects when state is ready', async () => {
     const disconnect = vi.fn().mockResolvedValue(undefined)
@@ -535,14 +558,20 @@ describe('useSyncplayClient — toggleSyncplayConnection', () => {
     expect(s.syncplayToast.value).toMatch(/room/i)
   })
 
-  it('toasts when username is missing + shiki has no nickname', async () => {
+  it('toasts when username is missing and no tracker is connected', async () => {
+    const connect = vi.fn().mockResolvedValue(undefined)
+    const setSetting = vi.fn().mockResolvedValue(undefined)
     setApi({
+      syncplayConnect: connect,
+      setSetting,
       getSetting: vi.fn().mockResolvedValue({ lastRoom: 'r1' }),
-      shikimoriGetUser: vi.fn().mockResolvedValue(null)
+      trackerListAccounts: vi.fn().mockResolvedValue(accountsState({}, null))
     })
     const s = useSyncplayClient(makeDeps())
     await s.toggleSyncplayConnection()
-    expect(s.syncplayToast.value).toMatch(/username/i)
+    expect(s.syncplayToast.value).toBe('Set a username in Settings → Watch Together')
+    expect(connect).not.toHaveBeenCalled()
+    expect(setSetting).not.toHaveBeenCalled()
   })
 
   it('connects with stored host/port/room/username/autoReconnect', async () => {
@@ -568,22 +597,73 @@ describe('useSyncplayClient — toggleSyncplayConnection', () => {
     })
   })
 
-  it('falls back to shikimori nickname when username is missing', async () => {
+  it('falls back to the Shikimori primary nickname when username is missing', async () => {
     const connect = vi.fn().mockResolvedValue(undefined)
     const setSetting = vi.fn().mockResolvedValue(undefined)
     setApi({
       syncplayConnect: connect,
       setSetting,
       getSetting: vi.fn().mockResolvedValue({ lastRoom: 'r1' }),
-      shikimoriGetUser: vi.fn().mockResolvedValue({ nickname: 'shiki-user' })
+      trackerListAccounts: vi
+        .fn()
+        .mockResolvedValue(accountsState({ shikimori: 'shiki-user' }, 'shikimori'))
     })
     const s = useSyncplayClient(makeDeps())
     await s.toggleSyncplayConnection()
     expect(connect).toHaveBeenCalledWith(expect.objectContaining({ username: 'shiki-user' }))
-    expect(setSetting).toHaveBeenCalledWith(
-      'syncplay',
-      expect.objectContaining({ username: 'shiki-user' })
-    )
+    expect(setSetting).toHaveBeenCalledWith('syncplay', { lastRoom: 'r1', username: 'shiki-user' })
+  })
+
+  // #699 — without Shikimori: the primary is AniList.
+  it('without Shikimori: an empty username connects with and persists the AniList nickname', async () => {
+    const connect = vi.fn().mockResolvedValue(undefined)
+    const setSetting = vi.fn().mockResolvedValue(undefined)
+    // The stub has no `shikimoriGetUser`: a call to it would throw here.
+    setApi({
+      syncplayConnect: connect,
+      setSetting,
+      getSetting: vi.fn().mockResolvedValue({ lastRoom: 'r1' }),
+      trackerListAccounts: vi
+        .fn()
+        .mockResolvedValue(accountsState({ anilist: 'ani-fan' }, 'anilist'))
+    })
+    const s = useSyncplayClient(makeDeps())
+    await s.toggleSyncplayConnection()
+    expect(connect).toHaveBeenCalledWith(expect.objectContaining({ username: 'ani-fan' }))
+    expect(setSetting).toHaveBeenCalledWith('syncplay', { lastRoom: 'r1', username: 'ani-fan' })
+  })
+
+  it('takes the primary nickname, not the first connected tracker', async () => {
+    const connect = vi.fn().mockResolvedValue(undefined)
+    setApi({
+      syncplayConnect: connect,
+      getSetting: vi.fn().mockResolvedValue({ lastRoom: 'r1' }),
+      trackerListAccounts: vi
+        .fn()
+        .mockResolvedValue(
+          accountsState({ shikimori: 'shiki-user', anilist: 'ani-fan' }, 'anilist')
+        )
+    })
+    const s = useSyncplayClient(makeDeps())
+    await s.toggleSyncplayConnection()
+    expect(connect).toHaveBeenCalledWith(expect.objectContaining({ username: 'ani-fan' }))
+  })
+
+  it('without Shikimori: a set username is never overwritten by the AniList nickname', async () => {
+    const connect = vi.fn().mockResolvedValue(undefined)
+    const setSetting = vi.fn().mockResolvedValue(undefined)
+    const listAccounts = vi.fn().mockResolvedValue(accountsState({ anilist: 'ani-fan' }, 'anilist'))
+    setApi({
+      syncplayConnect: connect,
+      setSetting,
+      getSetting: vi.fn().mockResolvedValue({ lastRoom: 'r1', username: 'me' }),
+      trackerListAccounts: listAccounts
+    })
+    const s = useSyncplayClient(makeDeps())
+    await s.toggleSyncplayConnection()
+    expect(connect).toHaveBeenCalledWith(expect.objectContaining({ username: 'me' }))
+    expect(listAccounts).not.toHaveBeenCalled()
+    expect(setSetting).not.toHaveBeenCalled()
   })
 })
 

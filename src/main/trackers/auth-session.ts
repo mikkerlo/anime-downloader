@@ -202,8 +202,8 @@ export function createTrackerAuthSessions(deps: TrackerAuthSessionsDeps): Tracke
 
   async function bindLoopback(a: Attempt, port: number, path: string): Promise<Loopback> {
     const servers: http.Server[] = []
-    // `close()` alone waits for keep-alive sockets to end, which would keep
-    // the port held after the attempt is gone.
+    // `close()` alone leaves a connection that is mid-request (and on some
+    // platforms its kept-alive sockets) outliving the attempt.
     const close = (): void => {
       for (const s of servers) {
         s.closeAllConnections()

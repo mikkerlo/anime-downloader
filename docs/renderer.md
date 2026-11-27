@@ -28,7 +28,12 @@ src/renderer/src/
       CleanupModal.vue
       OfflineNotice.vue         The one offline empty state (#568): icon, props { reason, compact? }, and a
                                 button that turns Work offline off (manual) or probes now (auto, "Retry")
-      Sidebar.vue
+      Sidebar.vue               Nav + footer chip (#699): the primary account's nickname/avatar (initial fallback),
+                                shown when `anyAccount`; the label is `aggregateSyncState`. One tracker: today's
+                                chip (expired or needs setup = a Settings button). 2+: the chip opens a
+                                per-tracker popover (state, pending, a Settings `<button>` on expired / needs-setup
+                                rows; Esc or an outside click closes it and focus returns to the chip). Every
+                                Settings link is `navigateToSettingsTab('trackers', trackerId)`: that tracker's card
       SidebarUpdateBanner.vue   Update prompt pinned above the profile chip (reads settings store updateStatus)
       StartupNoticeBanner.vue   App.vue's top-of-content banner when config.json was restored or reset (#648);
                                 pulls getStartupNotice() on mount; Show file / Dismiss (renderer-local)

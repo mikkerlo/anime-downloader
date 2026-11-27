@@ -78,7 +78,7 @@ function summaryOf(status: TrackerSyncStatus, queueLength: number): TrackerSyncS
   return 'synced'
 }
 
-function labelOf(state: TrackerSyncSummaryState, queueLength: number): string {
+export function labelOf(state: TrackerSyncSummaryState, queueLength: number): string {
   switch (state) {
     case 'session-expired':
       return 'Session expired'

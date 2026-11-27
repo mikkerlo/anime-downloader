@@ -80,7 +80,7 @@ useKeyboardShortcuts({
   }
 });
 
-// Cleanup prompt (Shikimori "completed" transition)
+// Cleanup prompt (the primary tracker's "completed" transition, user changes only)
 const cleanupToast = ref<{
   animeId: number;
   animeName: string;

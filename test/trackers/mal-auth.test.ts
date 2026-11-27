@@ -364,8 +364,10 @@ describe('the PKCE / loopback handshake', () => {
   )
 
   // On Linux the port frees on `close()` even with a kept-alive socket open,
-  // so the rebind alone can't tell; the header and the socket close are what
-  // each half of the fix guarantees (mutation: drop either and its line reds).
+  // and `close()` already drops idle sockets, so neither the rebind nor an idle
+  // socket can tell. The header, and a connection mid-request (headers not
+  // finished, so not idle), are what each half of the fix guarantees
+  // (mutation: drop either and its line reds).
   it('rebinding the fixed port after a keep-alive callback: Connection: close, the sockets closed, no port-busy', async () => {
     serveSignIn()
     const fixed = await freePort()
@@ -374,18 +376,20 @@ describe('the PKCE / loopback handshake', () => {
     const agent = new http.Agent({ keepAlive: true })
     const reply = await hit(fixed, 'code=c&state=wrong', { agent })
     expect(reply.connection).toBe('close')
-    // An idle connection that never sent a request.
-    const idle = net.connect(fixed, '127.0.0.1')
-    sockets.push(idle)
-    idle.on('error', () => {})
-    await new Promise<void>((resolve) => idle.once('connect', () => resolve()))
-    const idleClosed = new Promise<boolean>((resolve) => {
-      idle.once('close', () => resolve(true))
+    // A browser connection still sending its request: `close()` alone leaves it.
+    const busy = net.connect(fixed, '127.0.0.1')
+    sockets.push(busy)
+    busy.on('error', () => {})
+    await new Promise<void>((resolve) => busy.once('connect', () => resolve()))
+    busy.write('GET /callback?code=c HTTP/1.1\r\nHost: localhost\r\n')
+    await new Promise((res) => setTimeout(res, 20))
+    const busyClosed = new Promise<boolean>((resolve) => {
+      busy.once('close', () => resolve(true))
       setTimeout(() => resolve(false), 1000)
     })
     r.sessions.cancel('mal')
     await result
-    expect(await idleClosed).toBe(true)
+    expect(await busyClosed).toBe(true)
     const again = r.sessions.begin('mal')
     await vi.waitFor(() => expect(r.openExternal).toHaveBeenCalledTimes(2))
     expect(new URL(r.openExternal.mock.calls[1][0]).searchParams.get('redirect_uri')).toBe(

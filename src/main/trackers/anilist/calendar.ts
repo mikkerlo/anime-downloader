@@ -18,7 +18,12 @@ import type { AnimeSearchResult } from '../../smotret-api'
 import type { StorageService } from '../../store/types'
 import type { CalendarEntry } from '../../services/shikimori-sync'
 import type { TrackerSyncServiceDeps } from '../../services/trackers/sync'
-import { createDisplaySnapshots, serveCalendar, type CalendarSnapshot } from '../display-snapshots'
+import {
+  createCalendarCache,
+  createDisplaySnapshots,
+  serveCalendar,
+  type CalendarSnapshot
+} from '../display-snapshots'
 import { appStatusFromAnilist } from '../scores'
 import { titleOf, type AniListCachedRow, type AniListMedia, type AniListUser } from './provider'
 
@@ -166,19 +171,11 @@ export function createAniListCalendar(deps: AniListCalendarDeps): AniListCalenda
     revive: { calendar: (stored, userId) => ({ ...stored, userId, invalidated: true }) }
   })
 
-  function setCached(data: CalendarEntry[], userId: number | null): AniListCachedCalendar {
-    const snapshot: AniListCachedCalendar = {
-      data,
-      fetchedAt: Date.now(),
-      userId,
-      invalidated: false
-    }
-    // A fetch that outlived an account switch must not evict the new user's snapshot.
-    snapshots.put('calendar', snapshot)
-    return snapshot
-  }
+  const cache = createCalendarCache(snapshots)
 
   async function fetchCalendar(): Promise<AniListCachedCalendar> {
+    // Before the rates read: an invalidation from here on marks what this stores (#747).
+    const since = cache.begin()
     const userId = currentUserId() ?? null
     let rows = cachedRows()
     if (rows.length === 0) {
@@ -190,27 +187,27 @@ export function createAniListCalendar(deps: AniListCalendarDeps): AniListCalenda
       }
     }
     const tracked = trackedCalendarTitles(rows)
-    if (tracked.size === 0) return setCached([], userId)
+    if (tracked.size === 0) return cache.put([], userId, since)
     const media = (await deps.getCalendar({ ids: [...tracked.keys()] })) as AniListCalendarMedia[]
     const kept = calendarRows(tracked, media, storedUser()?.displayAdultContent === true)
     const malIds = [...new Set(kept.map((r) => r.media.idMal))]
     const smotret = malIds.length > 0 ? await deps.lookupByMalIds(malIds) : {}
-    return setCached(toCalendarEntries(kept, smotret), userId)
+    return cache.put(toCalendarEntries(kept, smotret), userId, since)
   }
 
   return {
     get: (force = false) =>
       serveCalendar({
-        cached: () => snapshots.get('calendar'),
+        cached: () => cache.get(),
         isOffline: deps.isOffline,
         fetch: fetchCalendar,
         force,
         ttlMs: ANILIST_CALENDAR_TTL_MS,
         label: '[anilist]'
       }),
-    invalidate: () => snapshots.update('calendar', (c) => ({ ...c, invalidated: true })),
+    invalidate: () => cache.invalidate(),
     clear: () => snapshots.clear(),
-    cached: () => snapshots.get('calendar')
+    cached: () => cache.get()
   }
 }
 

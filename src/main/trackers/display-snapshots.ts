@@ -152,6 +152,56 @@ export interface CalendarSnapshot<E> extends SnapshotRecord<E[]> {
   invalidated: boolean
 }
 
+/**
+ * A provider's calendar section (#747). Every `invalidate()` bumps a counter,
+ * with or without a record; `fetchCalendar` takes `begin()` before it reads the
+ * rates and hands it to `put` as `since`, so a fetch an invalidation overlapped
+ * stores its result already invalidated, the very first fetch included. A fetch
+ * that begins after an invalidation reads the post-edit rates: every
+ * invalidation fires after its `store.set` of the rates (the sync instance's
+ * `onRateUpdated` and `onRatesRefreshed`, and the Shikimori primary's direct
+ * edit paths). The empty-rates self-fill (`fetchAndCacheRates`) fires neither
+ * hook, so it bumps nothing.
+ */
+export interface CalendarCache<E> {
+  /** The signed-in user's snapshot, or null. */
+  get(): CalendarSnapshot<E> | null
+  /** Marks the snapshot invalidated and bumps the counter. */
+  invalidate(): void
+  /** The counter now: a fetch's `since`. */
+  begin(): number
+  /**
+   * Stores (for the signed-in user only) and returns the snapshot; it is
+   * invalidated when `since` is given and an `invalidate()` came after it.
+   */
+  put(data: E[], userId: number | null, since?: number): CalendarSnapshot<E>
+}
+
+export function createCalendarCache<E>(
+  snapshots: DisplaySnapshots<{ calendar: CalendarSnapshot<E> }>
+): CalendarCache<E> {
+  let invalidations = 0
+  return {
+    get: () => snapshots.get('calendar'),
+    invalidate: () => {
+      invalidations++
+      snapshots.update('calendar', (c) => ({ ...c, invalidated: true }))
+    },
+    begin: () => invalidations,
+    put: (data, userId, since) => {
+      const snapshot: CalendarSnapshot<E> = {
+        data,
+        fetchedAt: Date.now(),
+        userId,
+        invalidated: since !== undefined && since !== invalidations
+      }
+      // A fetch that outlived an account switch must not evict the new user's snapshot.
+      snapshots.put('calendar', snapshot)
+      return snapshot
+    }
+  }
+}
+
 export function freshResult<T>(snapshot: { data: T; fetchedAt: number }): ShikiSnapshotResult<T> {
   return { data: snapshot.data, fetchedAt: snapshot.fetchedAt, stale: false }
 }

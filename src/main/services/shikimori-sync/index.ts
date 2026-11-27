@@ -6,6 +6,7 @@ import type { AnimeSearchResult } from '../../smotret-api'
 import { SHIKIMORI_KEYS } from '../../trackers/keys'
 import { createShikimoriProvider } from '../../trackers/shikimori.provider'
 import {
+  createCalendarCache,
   createDisplaySnapshots,
   type CalendarSnapshot,
   type SnapshotRecord
@@ -102,8 +103,13 @@ export interface ShikimoriSyncService {
   abortPrefetch(): void
   invalidateCalendarCache(): void
   getCachedCalendar(): CachedCalendar | null
-  /** `userId` defaults to the signed-in user; stored only while that user is signed in. */
-  setCachedCalendar(data: CalendarEntry[], userId?: number | null): CachedCalendar
+  /**
+   * `userId` defaults to the signed-in user; stored only while that user is
+   * signed in. With `since`, invalidated if an invalidation came after it (#747).
+   */
+  setCachedCalendar(data: CalendarEntry[], userId?: number | null, since?: number): CachedCalendar
+  /** Taken as a calendar fetch begins; the value goes back to `setCachedCalendar` as `since`. */
+  beginCalendarFetch(): number
   getCachedFriendsActivity(): CachedFriendsActivity | null
   setCachedFriendsActivity(userId: number, data: ShikiFriendActivityEntry[]): CachedFriendsActivity
   /** Drops both snapshots and their file: logout and account switch. */
@@ -205,6 +211,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       friendsActivity: (stored, userId) => ({ ...stored, userId })
     }
   })
+  const calendarCache = createCalendarCache(snapshots)
 
   function getStaleOrMissingMalIds(): number[] {
     const rates = store.get('shikimoriUserRates') as {
@@ -351,7 +358,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   }
 
   function invalidateCalendarCache(): void {
-    snapshots.update('calendar', (c) => ({ ...c, invalidated: true }))
+    calendarCache.invalidate()
   }
 
   // A rate change shifts the taste signal, so the cached feed is stale. Clear it
@@ -362,17 +369,19 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   }
 
   function getCachedCalendar(): CachedCalendar | null {
-    return snapshots.get('calendar')
+    return calendarCache.get()
   }
 
   function setCachedCalendar(
     data: CalendarEntry[],
-    userId: number | null = currentUserId() ?? null
+    userId: number | null = currentUserId() ?? null,
+    since?: number
   ): CachedCalendar {
-    const snapshot: CachedCalendar = { data, fetchedAt: Date.now(), userId, invalidated: false }
-    // A fetch that outlived an account switch must not evict the new user's snapshot.
-    snapshots.put('calendar', snapshot)
-    return snapshot
+    return calendarCache.put(data, userId, since)
+  }
+
+  function beginCalendarFetch(): number {
+    return calendarCache.begin()
   }
 
   function getCachedFriendsActivity(): CachedFriendsActivity | null {
@@ -407,6 +416,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     invalidateCalendarCache,
     getCachedCalendar,
     setCachedCalendar,
+    beginCalendarFetch,
     getCachedFriendsActivity,
     setCachedFriendsActivity,
     clearOfflineSnapshots,

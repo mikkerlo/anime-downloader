@@ -193,6 +193,12 @@ export const useTrackersStore = defineStore('trackers', () => {
     await window.api.trackerSetFeatureSource(feature, id)
   }
 
+  // "Copy from primary" (#705): main builds the values from the primary's
+  // projection. The held title's refetch follows the queue event it emits.
+  function copyFromPrimary(id: TrackerId, malId: number): Promise<TrackerRateValues | null> {
+    return window.api.trackerCopyFromPrimary(id, malId)
+  }
+
   // The account half of the Auto-download gate: the `airing` source resolves,
   // and it resolves only to a tracker with a user. The per-title half (a MAL
   // id, a show not finished) stays in the view.
@@ -514,6 +520,7 @@ export const useTrackersStore = defineStore('trackers', () => {
     setPrimary,
     setMirror,
     setFeatureSource,
+    copyFromPrimary,
     defaultFeatureSource,
     ratesByTracker,
     queuedAfterByTracker,

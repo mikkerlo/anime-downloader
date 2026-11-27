@@ -485,6 +485,12 @@ const api = {
       malId,
       epNum
     ) as Promise<TrackerRateValues | null>,
+  trackerCopyFromPrimary: (trackerId: TrackerId, malId: number) =>
+    ipcRenderer.invoke(
+      CHANNELS.TRACKER_COPY_FROM_PRIMARY,
+      trackerId,
+      malId
+    ) as Promise<TrackerRateValues | null>,
   trackerGetSyncStatus: (trackerId: TrackerId) =>
     ipcRenderer.invoke(CHANNELS.TRACKER_GET_SYNC_STATUS, trackerId) as Promise<TrackerSyncStatus>,
   trackerGetOfflineQueueLength: (trackerId: TrackerId) =>

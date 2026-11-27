@@ -350,6 +350,8 @@ interface Api {
     opts?: TrackerUpdateRateOptions
   ) => Promise<TrackerRateValues>
   trackerMarkEpisodeWatched: (malId: number, epNum: number) => Promise<TrackerRateValues | null>
+  // "Copy from primary" (#705): resolves that tracker's projection afterwards.
+  trackerCopyFromPrimary: (trackerId: TrackerId, malId: number) => Promise<TrackerRateValues | null>
   trackerGetSyncStatus: (trackerId: TrackerId) => Promise<TrackerSyncStatus>
   trackerGetOfflineQueueLength: (trackerId: TrackerId) => Promise<number>
   trackerTriggerSync: (trackerId?: TrackerId) => Promise<void>

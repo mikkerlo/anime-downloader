@@ -148,6 +148,11 @@ const USER_KEY = 'anilistUser'
 const RATES_KEY = 'anilistUserRates'
 const DETAILS_KEY = 'anilistAnimeDetails'
 const MAX_LIST_CHUNKS = 100
+
+/** The AniList user's `scoreFormat` as `anilistUser` caches it, `POINT_10` before the first read. */
+export function storedAnilistScoreFormat(store: { get(key: string): unknown }): AnilistScoreFormat {
+  return (store.get(USER_KEY) as AniListUser | null | undefined)?.scoreFormat ?? 'POINT_10'
+}
 const MAX_FRIEND_PAGES = 5
 
 const CAPABILITIES: TrackerCapabilities = {
@@ -388,7 +393,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
   const idMap = createAniListIdMap({ store, client, listMediaIds, now })
   const storedUser = (): AniListUser | null =>
     (store.get(USER_KEY) as AniListUser | null | undefined) ?? null
-  const scoreFormat = (): AnilistScoreFormat => storedUser()?.scoreFormat ?? 'POINT_10'
+  const scoreFormat = (): AnilistScoreFormat => storedAnilistScoreFormat(store)
   const showAdult = (): boolean => storedUser()?.displayAdultContent === true
 
   let ratesFetched = 0

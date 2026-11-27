@@ -21,7 +21,9 @@ import {
 } from '../../lib/shikimori-queue'
 import { rateValues, type RateValues } from '../../lib/shikimori-rate'
 import type { StorageService } from '../../store/types'
+import { storedAnilistScoreFormat } from '../../trackers/anilist/provider'
 import { TRACKER_KEYS } from '../../trackers/keys'
+import { rateDiff } from '../../trackers/rate-diff'
 import { TRACKER_LABELS, type TrackerEntry, type TrackerRateEntry } from '../../trackers/types'
 import type { ApplyOutcome, PrimaryResults, TrackerFanOut } from './fan-out'
 import type { TrackerDrainStatus, TrackerSyncService } from './sync'
@@ -54,6 +56,16 @@ export interface ParkedBucketSummary {
 
 /** A tracker's status with its "Needs setup". */
 export type TrackerStatus = TrackerDrainStatus & { needsSetup: boolean }
+
+/** `tracker:get-rate`'s per-title fields (#705), from main's own state: no network. */
+export interface TitleSignals {
+  /** That tracker's live queue holds an entry for the title. */
+  queued: boolean
+  /** A fresh negative id-map entry: the tracker can't hold the title (AniList's only). */
+  unmapped: boolean
+  /** Where its projection differs from the primary's (`rateDiff`); [] for the primary. */
+  differs: SyncRateField[]
+}
 
 /** The tail a tracker adds to the shared rate refreshes (Shikimori's router sets its own). */
 export interface TrackerRefreshHooks {
@@ -120,6 +132,20 @@ export interface TrackerRates {
     epNum: number,
     target: K | null
   ): Promise<ApplyOutcome<PrimaryResults[K]> | null>
+  /**
+   * The title's signals on that tracker (#705 § 1). `differs` is [] for the
+   * primary, with no primary, for an unmapped title, and when the primary has
+   * no row, cached or queued.
+   */
+  titleSignals(trackerId: TrackerId, malId: number): TitleSignals
+  /**
+   * "Copy from primary" (#705 § 3): the primary's projection, as a `'user'`
+   * set to that tracker alone (`applyChange`'s non-primary branch, queued
+   * with `via: 'copy'`). Refuses the primary, a tracker that isn't connected,
+   * an unmapped title and a primary with no row; calls nothing when nothing
+   * differs. Resolves the target's projection afterwards.
+   */
+  copyFromPrimary(trackerId: TrackerId, malId: number): Promise<RateValues | null>
   /** The instance's status, or with no instance the default idle one from the store keys. */
   getSyncStatus(trackerId: TrackerId): TrackerStatus
   /** The tracker's queue store key's length. */
@@ -262,6 +288,47 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
     )
   }
 
+  // The one evaluation point of the difference rule for the chips and the
+  // copy, so the chip never offers a copy the handler then skips.
+  function differsFromPrimary(id: TrackerId, malId: number, p: TrackerId | null): SyncRateField[] {
+    if (p === null || p === id || !instance(p)) return []
+    return rateDiff(
+      { trackerId: p, values: trackers.projection(p, malId) },
+      { trackerId: id, values: trackers.projection(id, malId) },
+      storedAnilistScoreFormat(store)
+    )
+  }
+
+  function titleSignals(id: TrackerId, malId: number): TitleSignals {
+    const t = instance(id)
+    const queued = liveQueue(id).some((q) => q.malId === malId)
+    // The provider's `hasTitle` is false only for a fresh negative entry: a
+    // cold map is mappable.
+    const unmapped = t ? !t.hasTitle(malId) : false
+    const differs = !t || unmapped ? [] : differsFromPrimary(id, malId, trackers.primary())
+    return { queued, unmapped, differs }
+  }
+
+  async function copyFromPrimary(id: TrackerId, malId: number): Promise<RateValues | null> {
+    const t = instance(id)
+    if (!t || userIdOf(id) === undefined) throw new Error(`Not logged in to ${TRACKER_LABELS[id]}`)
+    const p = trackers.primary()
+    if (p === null) throw new Error('No tracker is the primary')
+    if (p === id) throw new Error(`${TRACKER_LABELS[id]} is the primary`)
+    if (!t.hasTitle(malId)) throw new Error(`This title is not on ${TRACKER_LABELS[id]}`)
+    const source = trackers.projection(p, malId)
+    // Copying "nothing" would be a delete, which only the reconcile offers.
+    if (!source) throw new Error(`${TRACKER_LABELS[p]} has no entry for this title`)
+    if (differsFromPrimary(id, malId, p).length > 0) {
+      await trackers.applyChange(
+        malId,
+        { kind: 'set', values: rateValues(source) },
+        { target: id, cause: 'user' }
+      )
+    }
+    return trackers.projection(id, malId)
+  }
+
   function getSyncStatus(id: TrackerId): TrackerStatus {
     const t = instance(id)
     if (t) return { ...t.getSyncStatus(), needsSetup: t.needsSetup() }
@@ -311,6 +378,8 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
     writeTarget,
     updateRate,
     markEpisodeWatched,
+    titleSignals,
+    copyFromPrimary,
     getSyncStatus,
     getOfflineQueueLength: (id) => liveQueue(id).length,
     triggerSync,

@@ -10,14 +10,16 @@ import { describe, it, expect, beforeAll, afterAll, vi, type Mock } from 'vitest
 import { ipcMain } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
-import { CHANNELS } from '../../src/shared/ipc/channels'
+import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { register as registerHome } from '../../src/main/ipc/home.ipc'
 import { register as registerAnime } from '../../src/main/ipc/anime.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { createRecentWatchIndex } from '../../src/main/lib/recent-watch'
 import type { AttachedSnapshot } from '../../src/main/lib/local-search'
+import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import type { AnimeDetail } from '../../src/main/smotret-api'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
+import { shikimoriOnlyTrackers } from '../helpers/tracker-fan-out'
 
 const DIR = path.resolve(__dirname, '../fixtures/t4b-golden')
 const RECORD = process.env.T4B_GOLDEN_RECORD === '1'
@@ -86,8 +88,20 @@ function harness(): { handler: (channel: string) => Handler; getAnimeCalls: numb
     readWatchProgress: () => store.get('watchProgress') as Record<string, { updatedAt: number }>,
     now: () => fixture.now
   })
+  // The production reader over the Shikimori instance, as `index.ts` wires it.
+  const sync = createShikimoriSyncService({
+    store: store as never,
+    broadcast: () => {},
+    syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
+    offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
+    rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+    animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
+    ratesRefreshedChannel: EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED
+  })
+  const { trackerRates } = shikimoriOnlyTrackers(store as never, sync)
   const deps = {
     store,
+    primaryEntries: () => trackerRates.primaryEntries(),
     smotretApi: {
       getAnime: (id: number) => {
         getAnimeCalls.push(id)

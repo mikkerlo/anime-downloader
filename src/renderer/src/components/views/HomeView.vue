@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
+import { storeToRefs } from 'pinia';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 import { useLibraryStore } from '../../stores/library';
-import { useShikimoriStore } from '../../stores/shikimori';
+import { useTrackersStore } from '../../stores/trackers';
 import AnimeCard from '../shared/AnimeCard.vue';
 import { getPosterSrc, POSTER_SCHEME } from '../../utils';
 
 const libraryStore = useLibraryStore();
-const shikimoriStore = useShikimoriStore();
+// The primary tracker's list (#698), whichever tracker it is.
+const trackersStore = useTrackersStore();
+const { primary, primaryRates } = storeToRefs(trackersStore);
+const primaryLabel = computed(() => (primary.value ? TRACKER_LABELS[primary.value] : ''));
 
 const entries = ref<ContinueWatchingEntry[]>([]);
 const loading = ref(true);
@@ -56,14 +61,15 @@ async function pruneDismissed(): Promise<void> {
 }
 
 // "Recently added to your list" — the most recently updated Watching /
-// Rewatching / Planned entries from the Shikimori list (already in the store),
-// mapped to the resolved smotret-anime entry so they render as AnimeCards.
+// Rewatching / Planned entries from the primary tracker's list (already in the
+// store), mapped to the resolved smotret-anime entry so they render as
+// AnimeCards. A null `updatedAt` sorts as NaN, as a missing `updated_at` did.
 const RECENT_STATUSES: ShikiUserRateStatus[] = ['watching', 'rewatching', 'planned'];
 const recentlyAdded = computed<AnimeSearchResult[]>(() =>
-  shikimoriStore.rates
-    .filter((e) => e.smotretAnime && RECENT_STATUSES.includes(e.rate.status))
+  primaryRates.value
+    .filter((e) => e.smotretAnime && RECENT_STATUSES.includes(e.values.status))
     .slice()
-    .sort((a, b) => new Date(b.rate.updated_at).getTime() - new Date(a.rate.updated_at).getTime())
+    .sort((a, b) => (b.updatedAt ?? NaN) - (a.updatedAt ?? NaN))
     .slice(0, 12)
     .map((e) => e.smotretAnime as AnimeSearchResult)
 );
@@ -178,14 +184,16 @@ async function refresh(): Promise<void> {
 
 async function manualRefresh(): Promise<void> {
   loading.value = true;
-  // Kick a Shikimori rates refresh — returns cached instantly and triggers a
-  // background fetch. When the fetch completes the `rates-refreshed` broadcast
-  // re-fires `refresh()` via our existing listener, picking up anything newly
-  // added on Shikimori.
-  try {
-    void window.api.shikimoriGetAnimeRates();
-  } catch (err) {
-    console.error('Failed to trigger Shikimori refresh:', err);
+  // Kick the primary tracker's rates refresh — returns cached instantly and
+  // triggers a background fetch. When the fetch completes the
+  // `rates-refreshed` broadcast moves `primaryRates`, and the watcher below
+  // re-fetches, picking up anything newly added on the tracker. With no
+  // primary there is no list to refresh.
+  const id = primary.value;
+  if (id) {
+    trackersStore
+      .refreshRates(id)
+      .catch((err) => console.error(`Failed to trigger ${TRACKER_LABELS[id]} refresh:`, err));
   }
   await refresh();
 }
@@ -209,13 +217,11 @@ function onClick(entry: ContinueWatchingEntry): void {
   libraryStore.openAnime(entry.animeId, entry.episodeInt);
 }
 
-// Rate changes from the Shikimori store (broadcast-driven) re-fetch the
-// continue-watching list since it merges main-process Shikimori state.
-watch(
-  () => shikimoriStore.rates,
-  () => void refresh(),
-  { deep: true }
-);
+// The primary's rates (broadcast-driven) re-fetch the continue-watching list,
+// since main builds it from the same list; a primary switch moves them too.
+// Debounced: `primaryRates` also carries the queued overlay, so a drain moves
+// it once per item, and each fetch can start smotret lookups in main.
+watch(primaryRates, () => debouncedRefresh());
 
 onMounted(async () => {
   try {
@@ -328,7 +334,7 @@ onUnmounted(() => {
         <template v-if="recentlyAdded.length > 0">
           <div class="section-head spaced">
             <h3>Recently added to your list</h3>
-            <span class="muted">From Shikimori</span>
+            <span class="muted">From {{ primaryLabel }}</span>
           </div>
           <div class="poster-grid">
             <AnimeCard

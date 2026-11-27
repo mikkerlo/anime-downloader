@@ -7,7 +7,7 @@ import SharedLibrariesTab from '../shared-library/SharedLibrariesTab.vue';
 import OpenLibraryDialog from '../shared-library/OpenLibraryDialog.vue';
 import { getAnimeName } from '../../utils';
 import { useLibraryStore } from '../../stores/library';
-import { useShikimoriStore } from '../../stores/shikimori';
+import { useTrackersStore } from '../../stores/trackers';
 import { useSharedLibrariesStore } from '../../stores/shared-libraries';
 import { useImportStore } from '../../stores/import';
 import { useSyncStore } from '../../stores/sync';
@@ -15,8 +15,9 @@ import { useSyncStore } from '../../stores/sync';
 const libraryStore = useLibraryStore();
 // Held merge conflicts (#585): the count badge on the Shared Libraries tab.
 const { conflictCount } = storeToRefs(useSyncStore());
-const shikimoriStore = useShikimoriStore();
-const { rates } = storeToRefs(shikimoriStore);
+// The primary tracker's list (#698), whichever tracker it is.
+const trackersStore = useTrackersStore();
+const { primary, primaryRates, anyAccount } = storeToRefs(trackersStore);
 const sharedStore = useSharedLibrariesStore();
 const { attachedCount, librariesByAnimeId, focusTab } = storeToRefs(sharedStore);
 const openDialog = ref(false);
@@ -26,20 +27,20 @@ const starredIds = ref(new Set<number>());
 const downloadedIds = ref(new Set<number>());
 // Local priority list: ordered smotret-anime ids (promote order), plus a
 // derived rank map so the Priority tab can render as a queue. Purely local —
-// it has no Shikimori dependency and survives logout.
+// it has no tracker dependency and survives logout.
 const priorityIds = ref<number[]>([]);
 
-// Join Shikimori rates onto library entries by smotret-anime id, so the
-// status tabs can filter the saved library by watch status.
+// Join the primary tracker's rates onto library entries by smotret-anime id,
+// so the status tabs can filter the saved library by watch status.
 const statusBySmotretId = computed(() => {
   const map = new Map<number, ShikiUserRateStatus>();
-  for (const e of rates.value) {
-    if (e.smotretAnime) map.set(e.smotretAnime.id, e.rate.status);
+  for (const e of primaryRates.value) {
+    if (e.smotretAnime) map.set(e.smotretAnime.id, e.values.status);
   }
   return map;
 });
 // Only show the status tabs when at least one *library* entry has a resolved
-// Shikimori status — not merely when the user has any tracked rates (which
+// tracker status — not merely when the user has any tracked rates (which
 // would surface tabs whose non-"All" options are all empty).
 const hasStatuses = computed(() => library.value.some((a) => statusBySmotretId.value.has(a.id)));
 
@@ -55,7 +56,7 @@ const statusFilter = ref('all');
 
 // Built dynamically: "All" always, "Priority" whenever the list is non-empty
 // *or* the user is standing on it (so demoting the last entry cannot strand
-// `statusFilter` on a tab that just vanished), the three Shikimori status
+// `statusFilter` on a tab that just vanished), the three tracker status
 // pills only when a library entry actually resolved to a status, and "Shared
 // Libraries" (#578) while one is attached or the user is standing on it.
 const statusTabs = computed<{ id: string; label: string }[]>(() => {
@@ -131,11 +132,14 @@ onMounted(async () => {
   // Both reads in flight together; the cards wait for the poster ids, so a
   // cached poster is their first src (#570).
   await loadLibrary(libraryStore.loadPosterIds());
-  // Hydrate Shikimori rates (cache-first) so the status tabs have data.
-  if (shikimoriStore.loggedIn && rates.value.length === 0) {
-    shikimoriStore
-      .refreshRates()
-      .catch((err) => console.error('Failed to hydrate Shikimori rates for Library:', err));
+  // Hydrate the primary's rates (cache-first) so the status tabs have data.
+  // Through the store's action: a cold cache answers with no broadcast, and
+  // a load already in flight (the store's own first pull) is reused.
+  const id = primary.value;
+  if (anyAccount.value && id && primaryRates.value.length === 0) {
+    trackersStore
+      .refreshRates(id)
+      .catch((err) => console.error('Failed to hydrate tracker rates for Library:', err));
   }
 });
 

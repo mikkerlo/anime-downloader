@@ -4,6 +4,7 @@ import type { StorageService } from '../store/types'
 import type { CredentialVault } from '../trackers/credential-vault'
 import type { TrackerLifecycle } from '../trackers/lifecycle'
 import type { TrackerAuthSessions } from '../trackers/auth-session'
+import type { TrackerRateEntry } from '../trackers/types'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
 import type { ColdStorageService } from '../services/cold-storage'
@@ -114,6 +115,12 @@ export interface AppDeps {
    * (#694), shared with their `shikimori:*` aliases.
    */
   trackerRates: TrackerRates
+  /**
+   * The primary tracker's cached entries, read-side normalized with `native`
+   * kept (#698): what the Home rail and local search read. `[]` with no
+   * account. `index.ts` passes `trackerRates.primaryEntries`.
+   */
+  primaryEntries: () => TrackerRateEntry<unknown>[]
   /**
    * The account lifecycle per tracker (#695): login, switch and logout with
    * #588's park/restore, the session generation, and the accounts state. The

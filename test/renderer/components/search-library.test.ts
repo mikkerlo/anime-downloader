@@ -4,8 +4,13 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SearchView from '../../../src/renderer/src/components/views/SearchView.vue'
 import LibraryView from '../../../src/renderer/src/components/views/LibraryView.vue'
-import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
 import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
+import {
+  accountsState,
+  trackerEntry,
+  trackersApi,
+  type TrackersApi
+} from '../../helpers/trackers-api'
 
 function anime(id: number, typeTitle: string): AnimeSearchResult {
   return {
@@ -21,9 +26,14 @@ function anime(id: number, typeTitle: string): AnimeSearchResult {
   }
 }
 
-function stubApi(overrides: Record<string, unknown>, offline: OfflineApi = offlineApi()): void {
+function stubApi(
+  overrides: Record<string, unknown>,
+  offline: OfflineApi = offlineApi(),
+  trackers: TrackersApi = trackersApi()
+): void {
   const target = {
     ...offline.api,
+    ...trackers.api,
     searchLocal: vi.fn().mockResolvedValue({ results: [], corpusSize: 0 }),
     getCachedPosterIds: vi.fn().mockResolvedValue([]),
     ...overrides
@@ -175,31 +185,29 @@ describe('SearchView — offline (#568)', () => {
   })
 })
 
-describe('LibraryView', () => {
-  function rate(smotretId: number, status: string): Record<string, unknown> {
-    return {
-      rate: {
-        id: smotretId,
-        score: 0,
-        status,
-        episodes: 0,
-        rewatches: 0,
-        updated_at: '',
-        target_id: smotretId
-      },
-      shikiAnime: { id: smotretId, name: `Anime ${smotretId}` },
+// The status tabs read the primary tracker (#698): the same cases for a
+// Shikimori-only and an AniList-only user.
+describe.each(['shikimori', 'anilist'] as const)('LibraryView — %s primary', (trackerId) => {
+  function rate(smotretId: number, status: ShikiUserRateStatus): TrackerRateEntry {
+    return trackerEntry(trackerId, smotretId + 5000, status, {
       smotretAnime: anime(smotretId, 'TV')
-    }
+    })
   }
 
-  it('renders the saved library and filters by Shikimori status', async () => {
-    stubApi({
-      libraryGet: vi.fn().mockResolvedValue([anime(1, 'TV'), anime(2, 'TV'), anime(3, 'TV')]),
-      libraryGetStatus: vi.fn().mockResolvedValue({ 1: { starred: true, downloaded: true } }),
-      libraryGetPriority: vi.fn().mockResolvedValue([])
-    })
-    const shiki = useShikimoriStore()
-    shiki.rates = [rate(1, 'watching'), rate(2, 'completed')] as unknown as typeof shiki.rates
+  function onlyThisTracker(rates: TrackerRateEntry[]): TrackersApi {
+    return trackersApi({ accounts: accountsState([trackerId]), rates: { [trackerId]: rates } })
+  }
+
+  it('renders the saved library and filters by tracker status', async () => {
+    stubApi(
+      {
+        libraryGet: vi.fn().mockResolvedValue([anime(1, 'TV'), anime(2, 'TV'), anime(3, 'TV')]),
+        libraryGetStatus: vi.fn().mockResolvedValue({ 1: { starred: true, downloaded: true } }),
+        libraryGetPriority: vi.fn().mockResolvedValue([])
+      },
+      offlineApi(),
+      onlyThisTracker([rate(1, 'watching'), rate(2, 'completed')])
+    )
 
     const wrapper = mount(LibraryView)
     await flushPromises()
@@ -216,21 +224,26 @@ describe('LibraryView', () => {
     expect(wrapper.findAll('.poster-grid .acard')).toHaveLength(1)
   })
 
-  it('hides the status tabs when no library entry has a Shikimori status', async () => {
-    stubApi({
-      libraryGet: vi.fn().mockResolvedValue([anime(9, 'TV')]),
-      libraryGetStatus: vi.fn().mockResolvedValue({}),
-      // Empty priority list, so this case still isolates the Shikimori gate.
-      libraryGetPriority: vi.fn().mockResolvedValue([])
-    })
+  it('hides the status tabs when no library entry has a tracker status', async () => {
     // Rates exist but for a show NOT in the library — tabs must stay hidden
     // (regression: gating on rate count alone showed empty non-"All" tabs).
-    const shiki = useShikimoriStore()
-    shiki.rates = [rate(1234, 'watching')] as unknown as typeof shiki.rates
+    const trackers = onlyThisTracker([rate(1234, 'watching')])
+    stubApi(
+      {
+        libraryGet: vi.fn().mockResolvedValue([anime(9, 'TV')]),
+        libraryGetStatus: vi.fn().mockResolvedValue({}),
+        // Empty priority list, so this case still isolates the tracker gate.
+        libraryGetPriority: vi.fn().mockResolvedValue([])
+      },
+      offlineApi(),
+      trackers
+    )
 
     const wrapper = mount(LibraryView)
     await flushPromises()
 
+    // The rates did load: the tabs are hidden by the join, not by an empty list.
+    expect(trackers.api.trackerGetRates).toHaveBeenCalledWith(trackerId)
     expect(wrapper.find('.pill-tabs').exists()).toBe(false)
     expect(wrapper.findAll('.poster-grid .acard')).toHaveLength(1)
   })

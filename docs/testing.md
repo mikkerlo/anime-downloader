@@ -1134,6 +1134,17 @@ later slice keeps green.
   of `ipc/shikimori.ipc.ts` by #692), a renamed `shikimori-rates`
   step id or label, one changed byte in the manifest the v1 writer emits, and a
   new `STORE_DEFAULTS` key without the allow-list.
+- **The T4b replies** (#698). 6.0.21's session doesn't capture the
+  `home:get-continue-watching` or `search:local` replies, so T4b recorded them
+  itself, in its first commit and against the unmodified readers:
+  `test/ipc/t4b-golden.test.ts` replays both routers over the fixed profile in
+  `test/fixtures/t4b-golden/store.json` (in `.prettierignore`), with the legacy
+  rows (no `target_id`, a null one, no `updated_at`, an unparseable one and the
+  epoch), a fixed `Date.now()` and a stubbed `smotretApi.getAnime`, and compares
+  the replies' `JSON.stringify` with the recorded bytes. `T4B_GOLDEN_RECORD=1`
+  rewrites them; no later commit does. Proved red on feeding the entry's `malId`
+  into continue-watching's joins, on putting the codec's `original` poster first,
+  on `?? Date.now()` for a next-up clock and on dropping the reader's `native`.
 - **The `STORE_DEFAULTS` dump.** `STORE_DEFAULTS` moved out of
   `src/main/index.ts` into `src/main/store/defaults.ts` so the session can open
   the real store (`index.ts` boots the app when imported). A golden captured

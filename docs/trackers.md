@@ -76,6 +76,30 @@ kind, episodes, episodesAired, status }, smotretAnime, native }`.
   refresh does it today; null for a title the catalog doesn't have.
 - **Shikimori's `anime.title` is `russian || name`**, the app's display rule;
   `name` stays available as `native.anime.name`.
+- **`anime.poster` is an absolute URL, or null.** Shikimori's is the Home
+  rail's pick (#698): `preview`, then `x96`, then `original`, with a relative
+  path prefixed with `SHIKIMORI_ORIGIN`. AniList's and MAL's are absolute
+  already, so continue-watching uses the poster as it is.
+
+### The primary's entries: `primaryEntries()`
+
+`trackerRates.primaryEntries()` (#698, `services/trackers/rates.ts`, passed to
+the routers as `AppDeps.primaryEntries`) is what the Home rail
+(`home:get-continue-watching`) and local search (`search:local`) read: the
+primary's rate cache, each row through its codec's `entryOf`, with the cached
+row itself as `native`. It writes nothing, and it is `[]` with no primary or
+for a primary whose instance hasn't landed. For a Shikimori primary it reads
+`shikimoriUserRates`, and both replies stay byte-identical to 6.x's, legacy
+rows included (`test/ipc/t4b-golden.test.ts`).
+
+- **Continue-watching keeps Shikimori's own `malId` pick.** For a
+  `trackerId: 'shikimori'` entry its two `malIdMap` joins, the name lookup and
+  the emitted `malId` read `native.rate.target_id`, which a row cached by an
+  older version can lack. Every other tracker uses the entry's `malId`.
+- **Local search uses the entry's `malId`**, which for Shikimori is
+  `target_id ?? shikiAnime.id`, the fallback it applied itself before.
+- **Missing clocks.** Continue-watching treats a `null` or `0` `updatedAt` as
+  missing, as 6.x's truthiness checks did.
 
 ### The Shikimori adapter
 
@@ -717,7 +741,9 @@ subscribes to a `tracker:*` broadcast; [Renderer](./renderer.md) lists the
 store's state. `useShikimoriStore` stays as a facade for the views not moved
 yet: it takes rates, the queue length and the sync status from the `tracker:*`
 twins filtered to `trackerId: 'shikimori'`, never also from the `shikimori:*`
-events, so a double-emitted change is applied once.
+events, so a double-emitted change is applied once. Home and Library read
+`primaryRates` and load through `refreshRates(primary)` (#698; [Renderer](./renderer.md)
+has the details).
 
 - **Connected** means the account's `user` is set. An expired session keeps
   its user, so it stays connected and in `aggregateSyncState`. A changed

@@ -51,7 +51,13 @@ export interface TrackerRateEntry<TNative> {
   updatedAt: number | null
   anime: {
     title: string
+    /** The Home rail's pick (#698): a small image first. */
     poster: string | null
+    /**
+     * The provider's largest image, absolute, for the list page (#707);
+     * absent or null when the provider has none beyond `poster`.
+     */
+    posterOriginal?: string | null
     kind: string | null
     episodes: number | null
     episodesAired: number | null

@@ -286,6 +286,8 @@ describe('listEntries', () => {
         title: 'Стальной алхимик: Братство',
         // The Home rail's pick (#698): preview first, absolute on the Shikimori origin.
         poster: `${SHIKIMORI_ORIGIN}/system/animes/preview/5114.jpg`,
+        // The list page's pick (#707): original, as 6.0.21's ShikimoriView.
+        posterOriginal: `${SHIKIMORI_ORIGIN}/system/animes/original/5114.jpg`,
         kind: 'tv',
         episodes: 64,
         episodesAired: 64,
@@ -295,6 +297,30 @@ describe('listEntries', () => {
       native: ROWS[0]
     })
     expect(fma.native).toBe(ROWS[0])
+  })
+
+  // #707: the list page keeps 6.0.21's `image.original` rule while `poster`
+  // stays the Home rail's preview-first pick.
+  it('posterOriginal is image.original, made absolute only when relative, null when empty', async () => {
+    const absolute = {
+      ...ROWS[1],
+      anime: {
+        ...ROWS[1].anime,
+        image: { ...ROWS[1].anime.image, original: 'https://cdn.example/o.jpg' }
+      }
+    }
+    const empty = {
+      ...ROWS[1],
+      anime: { ...ROWS[1].anime, image: { ...ROWS[1].anime.image, original: '' } }
+    }
+    api.getUserAnimeRates.mockResolvedValueOnce([ROWS[0], absolute, empty])
+    const entries = await provider().listEntries(session)
+    expect(entries.map((e) => e.anime.posterOriginal)).toEqual([
+      `${SHIKIMORI_ORIGIN}/system/animes/original/5114.jpg`,
+      'https://cdn.example/o.jpg',
+      null
+    ])
+    expect(entries[0].anime.poster).toBe(`${SHIKIMORI_ORIGIN}/system/animes/preview/5114.jpg`)
   })
 
   it('the title is russian, or name when russian is empty', async () => {

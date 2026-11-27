@@ -54,7 +54,7 @@ Anime rates are persisted in `shikimoriUserRates` (electron-store). `shikimori:g
 
 ## Profile Dashboard (#178)
 
-The ShikimoriView is a profile dashboard (Refined Dark). `shikimori:get-profile` returns a cached `ShikimoriProfile` instantly when available + kicks a background refresh (broadcast `shikimori:profile-refreshed`), persisted in `shikimoriProfile` (electron-store) and cleared on logout — same cache-first pattern as the rate cache. The payload is **assembled in the main process** from three sources:
+The list page (`TrackerListView`, #707) shows a profile dashboard (Refined Dark) while Shikimori is the selected tracker. `shikimori:get-profile` returns a cached `ShikimoriProfile` instantly when available + kicks a background refresh (broadcast `shikimori:profile-refreshed`), persisted in `shikimoriProfile` (electron-store) and cleared on logout — same cache-first pattern as the rate cache. The payload is **assembled in the main process** from three sources:
 
 - **`shikimori.getUserStats(token, userId)`** → `GET /api/users/:id`, which (unlike `/whoami`) carries a `stats` block. We parse only the two fields the API reliably backs: the anime **status breakdown** (`stats.statuses.anime` → `lists`) and the **score distribution** (`stats.scores.anime`, normalized to a 10-slot array indexed 1..10).
 - **Cached `shikimoriUserRates`** → derives `titles` (count), `episodes` (Σ `rate.episodes`), `mean` (from the score distribution), and `daysWatched` (≈ episodes × 24 min).

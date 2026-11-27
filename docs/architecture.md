@@ -141,7 +141,7 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | `src/renderer/src/components/detail/keys.ts` | Typed `InjectionKey` symbols (`TrackerKey`, `SkipDetectionKey`, `EpisodeListKey`, `EpisodeDownloadsKey`) the parent uses to `provide` composable instances to deeply-nested detail panels |
 | `src/renderer/src/components/detail/translation-types.ts` | Shared `TRANSLATION_TYPES` array (5 types: subRu/subEn/voiceRu/voiceEn/raw, each with `label`/`short`/`color`) + `typeChip(type)` helper. Used by the parent controls bar + EpisodeRow |
 | `src/renderer/src/components/views/DownloadsView.vue` | Real-time download queue with progress, merge controls |
-| `src/renderer/src/components/views/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
+| `src/renderer/src/components/views/TrackerListView.vue` | One tracker's anime list (#707): the primary's, or another connected tracker's picked in the header (2+ trackers); status filter, recent activity, and the Shikimori profile dashboard while Shikimori is selected |
 | `src/renderer/src/components/views/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
 | `src/renderer/src/components/views/CalendarView.vue` | Mon–Sun grid of upcoming episodes for tracked airing shows (Watching/Rewatching/Planned); week/month modes |
 | `src/renderer/src/components/views/PlayerView.vue` | Built-in video player coordinator. After Phase 5 slice 5e the template is a thin shell: `PlayerTitleBar` (top bar) + the controls bar's bottom dropdowns (`TranslationMenu`, `QualityMenu`, `Anime4KMenu`, `SyncplayMenu`) live as child components in `components/player/` |

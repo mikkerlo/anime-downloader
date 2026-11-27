@@ -1,14 +1,54 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+// One tracker's list (#707): the primary's, or another connected tracker's
+// picked in the header (2+ trackers only). The Shikimori profile dashboard
+// shows only while Shikimori is the selected tracker.
+import { ref, computed, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
 import AnimeCard from '../shared/AnimeCard.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { useTrackersStore } from '../../stores/trackers';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
-const { rates: entries, profile } = storeToRefs(shikimoriStore);
+const trackersStore = useTrackersStore();
+const { profile } = storeToRefs(shikimoriStore);
+const { accounts, connected, primary, anyAccount, ratesByTracker, queuedAfterByTracker } =
+  storeToRefs(trackersStore);
+
+// The header's pick. Component state: it resets when the primary changes, and
+// a disconnected pick falls back to the primary.
+const picked = ref<TrackerId | null>(null);
+const selected = computed<TrackerId | null>(() => {
+  if (picked.value && connected.value.includes(picked.value)) return picked.value;
+  return primary.value ?? connected.value[0] ?? null;
+});
+watch(primary, () => {
+  picked.value = null;
+});
+watch(connected, (ids) => {
+  if (picked.value && !ids.includes(picked.value)) picked.value = null;
+});
+
+const isShikimori = computed(() => selected.value === 'shikimori');
+// The Shikimori dashboard keys on the selected tracker, not on `profile`:
+// with Shikimori + AniList, `profile` stays set while AniList is selected.
+const dashboard = computed(() => (isShikimori.value ? profile.value : null));
+const trackerName = computed(() => (selected.value ? TRACKER_LABELS[selected.value] : 'Lists'));
+const selectedUser = computed(
+  () => accounts.value.find((a) => a.trackerId === selected.value)?.user ?? null
+);
+
+function onPick(event: Event): void {
+  picked.value = (event.target as HTMLSelectElement).value as TrackerId;
+}
+
+// Projected with the tracker's last queued `after`, as Home and Library read.
+const entries = computed<TrackerRateEntry[]>(() =>
+  selected.value ? trackersStore.ratesFor(selected.value) : []
+);
 
 const loading = ref(false);
 const error = ref('');
@@ -17,7 +57,7 @@ const starredIds = ref(new Set<number>());
 const priorityIds = ref(new Set<number>());
 const refreshing = ref(false);
 
-// Presentation for the Shikimori list statuses — labels + swatch colors for the
+// Presentation for the list statuses — labels + swatch colors for the
 // breakdown bar/legend and the recent-activity chips. Keyed on the raw status
 // names the Shikimori stats block returns.
 const LIST_META: Record<string, { label: string; color: string; chip: string }> = {
@@ -36,21 +76,27 @@ function listColor(status: string): string {
   return LIST_META[status]?.color ?? 'var(--text-3)';
 }
 
-const visibleLists = computed(() => (profile.value?.lists ?? []).filter((l) => l.n > 0));
+const visibleLists = computed(() => (dashboard.value?.lists ?? []).filter((l) => l.n > 0));
 const totalTitles = computed(() => visibleLists.value.reduce((s, l) => s + l.n, 0));
-const maxScore = computed(() => Math.max(1, ...(profile.value?.scores ?? [0])));
-const maxGenre = computed(() => Math.max(1, ...(profile.value?.genres ?? []).map((g) => g.n)));
-const profileNickname = computed(
+const maxScore = computed(() => Math.max(1, ...(dashboard.value?.scores ?? [0])));
+const maxGenre = computed(() => Math.max(1, ...(dashboard.value?.genres ?? []).map((g) => g.n)));
+// The dashboard's own name, as before #707.
+const dashboardNickname = computed(
   () => profile.value?.nickname ?? shikimoriStore.user?.nickname ?? ''
 );
-const avatarInitial = computed(() => profileNickname.value.charAt(0).toUpperCase() || '?');
+const avatarInitial = computed(() => dashboardNickname.value.charAt(0).toUpperCase() || '?');
+// The header sub-label and "Open profile": the selected tracker's account.
+const profileNickname = computed(() => selectedUser.value?.nickname ?? '');
+
+// A missing timestamp sorts as NaN, as `new Date(undefined)` did before #707.
+const updatedMs = (e: TrackerRateEntry): number => e.updatedAt ?? NaN;
 
 // Recent activity — the most recently updated rate entries, surfaced as a small
 // feed. Derived from the cached rate list (no extra fetch).
 const recentActivity = computed(() =>
   entries.value
     .slice()
-    .sort((a, b) => new Date(b.rate.updated_at).getTime() - new Date(a.rate.updated_at).getTime())
+    .sort((a, b) => updatedMs(b) - updatedMs(a))
     .slice(0, 8)
 );
 
@@ -59,11 +105,9 @@ const filteredEntries = computed(() => {
   if (statusFilter.value === 'to_watch') {
     list = list.filter((e) => hasUnwatched(e));
   } else if (statusFilter.value) {
-    list = list.filter((e) => e.rate.status === statusFilter.value);
+    list = list.filter((e) => e.values.status === statusFilter.value);
   }
-  return list.slice().sort((a, b) => {
-    return new Date(b.rate.updated_at).getTime() - new Date(a.rate.updated_at).getTime();
-  });
+  return list.slice().sort((a, b) => updatedMs(b) - updatedMs(a));
 });
 
 const statusOptions = [
@@ -80,7 +124,7 @@ const statusOptions = [
 const statusCounts = computed(() => {
   const counts: Record<string, number> = {};
   for (const e of entries.value) {
-    counts[e.rate.status] = (counts[e.rate.status] || 0) + 1;
+    counts[e.values.status] = (counts[e.values.status] || 0) + 1;
     if (hasUnwatched(e)) {
       counts['to_watch'] = (counts['to_watch'] || 0) + 1;
     }
@@ -88,7 +132,7 @@ const statusCounts = computed(() => {
   return counts;
 });
 
-async function refreshStarredFromEntries(list: ShikiAnimeRateEntry[]): Promise<void> {
+async function refreshStarredFromEntries(list: TrackerRateEntry[]): Promise<void> {
   const ids = list.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id);
   if (ids.length === 0) return;
   const [statuses, priority] = await Promise.all([
@@ -103,21 +147,30 @@ async function refreshStarredFromEntries(list: ShikiAnimeRateEntry[]): Promise<v
   priorityIds.value = new Set(priority.map(Number));
 }
 
+// "Sync now", and the first read of each selected tracker: its rates through
+// `tracker:get-rates`, plus the profile when it is Shikimori.
+// A switch mid-load leaves the older load's outcome unapplied.
+let loadSeq = 0;
 async function loadRates(): Promise<void> {
-  if (!shikimoriStore.loggedIn) {
-    await shikimoriStore.refreshUser();
-    if (!shikimoriStore.loggedIn) return;
-  }
+  const id = selected.value;
+  if (!id) return;
+  const seq = ++loadSeq;
   loading.value = true;
   error.value = '';
   try {
-    await Promise.all([shikimoriStore.refreshRates(), shikimoriStore.refreshProfile()]);
+    await Promise.all([
+      trackersStore.refreshRates(id),
+      id === 'shikimori' ? shikimoriStore.refreshProfile() : undefined
+    ]);
+    if (seq !== loadSeq) return;
     await refreshStarredFromEntries(entries.value);
     if (entries.value.length > 0) refreshing.value = true;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load anime list';
+    if (seq === loadSeq) {
+      error.value = err instanceof Error ? err.message : 'Failed to load anime list';
+    }
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -152,41 +205,50 @@ function selectList(status: string): void {
   statusFilter.value = status;
 }
 
+// Each tracker's public profile page, by the account's name.
+const PROFILE_URL: Record<TrackerId, (name: string) => string> = {
+  shikimori: (name) => `${SHIKIMORI_ORIGIN}/@${name}`,
+  anilist: (name) => `https://anilist.co/user/${name}`,
+  mal: (name) => `https://myanimelist.net/profile/${name}`
+};
+
 function openProfile(): void {
-  if (profileNickname.value) {
-    void window.api.shellOpenExternal(`${SHIKIMORI_ORIGIN}/@${profileNickname.value}`);
+  if (profileNickname.value && selected.value) {
+    void window.api.shellOpenExternal(PROFILE_URL[selected.value](profileNickname.value));
   }
 }
 
-function openActivity(entry: ShikiAnimeRateEntry): void {
+// The tracker's own row id, as `rate.id` was; the type allows a null one.
+function entryKey(entry: TrackerRateEntry): number | string {
+  return entry.remoteId ?? `mal:${entry.malId}`;
+}
+
+function openActivity(entry: TrackerRateEntry): void {
   if (entry.smotretAnime) libraryStore.openAnime(entry.smotretAnime.id);
 }
 
-function getEpisodeLabel(entry: ShikiAnimeRateEntry): string {
-  const watched = entry.rate.episodes;
-  const total = entry.shikiAnime.episodes || entry.shikiAnime.episodes_aired || '?';
+function getEpisodeLabel(entry: TrackerRateEntry): string {
+  const watched = entry.values.episodes;
+  const total = entry.anime.episodes || entry.anime.episodesAired || '?';
   return `${watched}/${total}`;
 }
 
-function hasUnwatched(entry: ShikiAnimeRateEntry): boolean {
-  return entry.rate.status === 'watching' && entry.shikiAnime.episodes_aired > entry.rate.episodes;
+// An unknown aired count (an airing MAL title) is never "unwatched".
+function hasUnwatched(entry: TrackerRateEntry): boolean {
+  const aired = entry.anime.episodesAired;
+  return entry.values.status === 'watching' && aired !== null && aired > entry.values.episodes;
 }
 
-function shikiPosterUrl(entry: ShikiAnimeRateEntry): string {
-  // Prefer smotret-anime's poster — Shikimori's image URL can be a 'missing'
+function posterUrl(entry: TrackerRateEntry): string {
+  // Prefer smotret-anime's poster — a tracker's image URL can be a 'missing'
   // placeholder for newly-listed anime. The main process already enriches
   // smotret entries via `enrichMissingPosters`, so this is normally non-empty.
   if (entry.smotretAnime?.posterUrlSmall) return entry.smotretAnime.posterUrlSmall;
-  const img = entry.shikiAnime.image.original;
-  return img.startsWith('http') ? img : `${SHIKIMORI_ORIGIN}${img}`;
+  return entry.anime.posterOriginal ?? entry.anime.poster ?? '';
 }
 
-function shikiTitle(entry: ShikiAnimeRateEntry): string {
-  return entry.shikiAnime.russian || entry.shikiAnime.name;
-}
-
-function timeAgo(iso: string): string {
-  const then = new Date(iso).getTime();
+function timeAgo(ms: number | null): string {
+  const then = ms ?? 0;
   if (!then) return '';
   const s = Math.floor((Date.now() - then) / 1000);
   if (s < 60) return 'just now';
@@ -203,26 +265,45 @@ function timeAgo(iso: string): string {
   return `${Math.floor(d / 365)}y`;
 }
 
-// When the store-owned rates broadcast updates, refresh the local starred-anime
-// overlay (re-check libraryGetStatus for newly-added entries).
+// When the selected tracker's rates or queue move, refresh the local
+// starred-anime overlay (re-check libraryGetStatus for newly-added entries).
+// Watched on its own slots, so another tracker's events don't re-run it.
 watch(
-  () => entries.value,
-  (newEntries) => {
+  [
+    () => (selected.value ? ratesByTracker.value[selected.value] : undefined),
+    () => (selected.value ? queuedAfterByTracker.value[selected.value] : undefined)
+  ],
+  () => {
     refreshing.value = false;
-    void refreshStarredFromEntries(newEntries);
-  },
-  { deep: false }
+    void refreshStarredFromEntries(entries.value);
+  }
 );
 
-onMounted(() => {
-  loadRates();
-});
+// The first read, and each newly selected tracker's. `v-show` keeps the view
+// mounted, so this also runs when accounts load after it mounted.
+watch(
+  selected,
+  (id) => {
+    if (id) void loadRates();
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
-  <main class="shikimori-view">
+  <main class="tracker-list-view">
     <header class="topbar">
-      <h2>Shikimori</h2>
+      <h2>{{ trackerName }}</h2>
+      <div v-if="connected.length >= 2" class="select-wrap tracker-pick">
+        <select :value="selected" aria-label="Tracker" @change="onPick">
+          <option v-for="id in connected" :key="id" :value="id">
+            {{ TRACKER_LABELS[id] }}{{ id === primary ? ' (primary)' : '' }}
+          </option>
+        </select>
+        <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+        </svg>
+      </div>
       <span v-if="profileNickname" class="sub">· @{{ profileNickname }}</span>
       <span class="topbar-spacer"></span>
       <button v-if="profileNickname" class="hdr-btn ghost" @click="openProfile">
@@ -255,7 +336,7 @@ onMounted(() => {
 
     <div class="body">
       <!-- Logged out -->
-      <div v-if="!shikimoriStore.loggedIn && !loading" class="empty-state">
+      <div v-if="!anyAccount && !loading" class="empty-state">
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
             <path
@@ -265,60 +346,64 @@ onMounted(() => {
             />
           </svg>
         </div>
-        <p>Connect your Shikimori account in Settings to see your profile.</p>
-        <button class="cta-btn" @click="libraryStore.navigate('settings')">Open Settings</button>
+        <p>Connect a tracker in Settings to see your list.</p>
+        <button class="cta-btn" @click="libraryStore.navigateToSettingsTab('trackers')">
+          Open Settings
+        </button>
       </div>
 
-      <div v-else-if="loading && !profile" class="status-text">Loading your profile…</div>
-      <div v-else-if="error && !profile" class="status-text error-text">{{ error }}</div>
+      <div v-else-if="loading && !dashboard" class="status-text">
+        {{ isShikimori ? 'Loading your profile…' : 'Loading your list…' }}
+      </div>
+      <div v-else-if="error && !dashboard" class="status-text error-text">{{ error }}</div>
 
       <template v-else>
-        <!-- Profile header -->
-        <section v-if="profile" class="sk-profile">
+        <!-- Profile header: the Shikimori dashboard, only while Shikimori is selected -->
+        <section v-if="dashboard" class="sk-profile">
           <div class="sk-avatar">{{ avatarInitial }}</div>
           <div class="sk-id">
             <div class="sk-name">
-              {{ profileNickname }}<span class="sk-handle">@{{ profileNickname }}</span>
+              {{ dashboardNickname }}<span class="sk-handle">@{{ dashboardNickname }}</span>
             </div>
             <div class="sk-chips">
               <span class="chip green"><span class="dot"></span>Connected</span>
             </div>
             <div class="sk-id-meta">
               <span
-                ><strong>{{ profile.friendsCount }}</strong> friends</span
+                ><strong>{{ dashboard.friendsCount }}</strong> friends</span
               >
               <span
-                ><strong class="mono">{{ profile.stats.titles }}</strong> titles</span
+                ><strong class="mono">{{ dashboard.stats.titles }}</strong> titles</span
               >
             </div>
           </div>
         </section>
 
         <!-- Headline stats -->
-        <section v-if="profile" class="sk-bigstats">
+        <section v-if="dashboard" class="sk-bigstats">
           <div class="sk-big">
-            <div class="v mono">{{ profile.stats.titles }}</div>
+            <div class="v mono">{{ dashboard.stats.titles }}</div>
             <div class="l">Titles</div>
           </div>
           <div class="sk-big">
-            <div class="v mono">{{ profile.stats.episodes.toLocaleString() }}</div>
+            <div class="v mono">{{ dashboard.stats.episodes.toLocaleString() }}</div>
             <div class="l">Episodes</div>
           </div>
           <div class="sk-big">
             <div class="v mono">
-              {{ profile.stats.daysWatched.toFixed(1) }}<span class="suf">d</span>
+              {{ dashboard.stats.daysWatched.toFixed(1) }}<span class="suf">d</span>
             </div>
             <div class="l">Days watched</div>
           </div>
           <div class="sk-big">
-            <div class="v mono">{{ profile.stats.mean.toFixed(2) }}</div>
+            <div class="v mono">{{ dashboard.stats.mean.toFixed(2) }}</div>
             <div class="l">Mean score</div>
           </div>
         </section>
 
-        <!-- Panels -->
-        <div v-if="profile" class="sk-cols">
-          <div class="sk-stack">
+        <!-- Panels. Another tracker gets "Recent activity" alone. -->
+        <div v-if="dashboard || !isShikimori" :class="dashboard ? 'sk-cols' : 'solo-activity'">
+          <div v-if="dashboard" class="sk-stack">
             <div class="panel">
               <h4>
                 List breakdown<span class="muted">{{ totalTitles }} titles</span>
@@ -351,12 +436,12 @@ onMounted(() => {
             <div class="panel">
               <h4>
                 Score distribution<span class="muted"
-                  >mean {{ profile.stats.mean.toFixed(2) }}</span
+                  >mean {{ dashboard.stats.mean.toFixed(2) }}</span
                 >
               </h4>
               <div class="sk-hist">
                 <div
-                  v-for="(n, i) in profile.scores"
+                  v-for="(n, i) in dashboard.scores"
                   :key="i"
                   class="sk-hbar"
                   :title="`${n} titles rated ${i + 1}`"
@@ -374,10 +459,10 @@ onMounted(() => {
           </div>
 
           <div class="sk-stack">
-            <div v-if="profile.genres.length" class="panel">
+            <div v-if="dashboard && dashboard.genres.length" class="panel">
               <h4>Favorite genres</h4>
               <div class="genre-list">
-                <div v-for="g in profile.genres" :key="g.name" class="genre-row">
+                <div v-for="g in dashboard.genres" :key="g.name" class="genre-row">
                   <span class="gn">{{ g.name }}</span>
                   <div class="gbar">
                     <span :style="{ width: (g.n / maxGenre) * 100 + '%' }"></span>
@@ -392,11 +477,11 @@ onMounted(() => {
               <div v-if="recentActivity.length" class="act-list">
                 <button
                   v-for="entry in recentActivity"
-                  :key="entry.rate.id"
+                  :key="entryKey(entry)"
                   class="act-row"
                   @click="openActivity(entry)"
                 >
-                  <span class="act-ico" :class="LIST_META[entry.rate.status]?.chip ?? 'neutral'">
+                  <span class="act-ico" :class="LIST_META[entry.values.status]?.chip ?? 'neutral'">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path
                         stroke-linecap="round"
@@ -406,18 +491,20 @@ onMounted(() => {
                     </svg>
                   </span>
                   <div class="act-poster">
-                    <img :src="shikiPosterUrl(entry)" :alt="shikiTitle(entry)" loading="lazy" />
+                    <img :src="posterUrl(entry)" :alt="entry.anime.title" loading="lazy" />
                   </div>
                   <div class="act-body">
-                    <div class="act-title">{{ shikiTitle(entry) }}</div>
+                    <div class="act-title">{{ entry.anime.title }}</div>
                     <div class="act-detail">
-                      <span class="chip" :class="LIST_META[entry.rate.status]?.chip ?? 'neutral'">{{
-                        listLabel(entry.rate.status)
-                      }}</span>
+                      <span
+                        class="chip"
+                        :class="LIST_META[entry.values.status]?.chip ?? 'neutral'"
+                        >{{ listLabel(entry.values.status) }}</span
+                      >
                       <span class="mono">EP {{ getEpisodeLabel(entry) }}</span>
                     </div>
                   </div>
-                  <span class="act-when mono">{{ timeAgo(entry.rate.updated_at) }}</span>
+                  <span class="act-when mono">{{ timeAgo(entry.updatedAt) }}</span>
                 </button>
               </div>
               <p v-else class="panel-empty">No recent activity yet.</p>
@@ -454,11 +541,13 @@ onMounted(() => {
 
         <div v-if="filteredEntries.length === 0" class="status-text">
           {{
-            entries.length === 0 ? 'No anime in your Shikimori list.' : 'No anime with this status.'
+            entries.length === 0
+              ? `No anime in your ${trackerName} list.`
+              : 'No anime with this status.'
           }}
         </div>
         <div v-else class="results-grid">
-          <div v-for="entry in filteredEntries" :key="entry.rate.id" class="card-wrap">
+          <div v-for="entry in filteredEntries" :key="entryKey(entry)" class="card-wrap">
             <template v-if="entry.smotretAnime">
               <AnimeCard
                 :anime="entry.smotretAnime"
@@ -473,20 +562,18 @@ onMounted(() => {
               <div class="acard fallback-card">
                 <div class="poster-wrap">
                   <img
-                    :src="shikiPosterUrl(entry)"
-                    :alt="shikiTitle(entry)"
+                    :src="posterUrl(entry)"
+                    :alt="entry.anime.title"
                     class="poster"
                     loading="lazy"
                   />
                   <div class="unavailable-badge">Not available</div>
                 </div>
                 <div class="acard-info">
-                  <div class="acard-title" :title="shikiTitle(entry)">{{ shikiTitle(entry) }}</div>
+                  <div class="acard-title" :title="entry.anime.title">{{ entry.anime.title }}</div>
                   <div class="acard-meta">
-                    <span v-if="entry.shikiAnime.kind">{{ entry.shikiAnime.kind }}</span>
-                    <span v-if="entry.shikiAnime.episodes"
-                      >· {{ entry.shikiAnime.episodes }} ep</span
-                    >
+                    <span v-if="entry.anime.kind">{{ entry.anime.kind }}</span>
+                    <span v-if="entry.anime.episodes">· {{ entry.anime.episodes }} ep</span>
                   </div>
                 </div>
               </div>
@@ -495,13 +582,13 @@ onMounted(() => {
               <div class="episode-badge" :class="{ unwatched: hasUnwatched(entry) }">
                 {{ getEpisodeLabel(entry) }} ep
               </div>
-              <div v-if="entry.rate.score > 0" class="score-badge">
+              <div v-if="entry.values.score > 0" class="score-badge">
                 <svg viewBox="0 0 24 24" fill="currentColor" width="10" height="10">
                   <path
                     d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
                   />
                 </svg>
-                {{ entry.rate.score }}
+                {{ entry.values.score }}
               </div>
             </div>
           </div>
@@ -512,7 +599,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.shikimori-view {
+.tracker-list-view {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -775,6 +862,10 @@ onMounted(() => {
   .sk-cols {
     grid-template-columns: 1fr;
   }
+}
+
+.solo-activity {
+  margin-top: var(--gap);
 }
 
 .sk-stack {

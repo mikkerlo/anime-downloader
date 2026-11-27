@@ -153,6 +153,10 @@ function posterOf(
   image: shikimori.ShikiAnimeRateEntry['anime']['image'] | undefined
 ): string | null {
   const img = image?.preview || image?.x96 || image?.original || ''
+  return absolute(img)
+}
+
+function absolute(img: string | undefined): string | null {
   if (!img) return null
   return img.startsWith('http') ? img : `${SHIKIMORI_ORIGIN}${img}`
 }
@@ -165,6 +169,8 @@ function animeOf(
     // The app's display rule: the Russian title, else the romaji name.
     title: anime?.russian || anime?.name || '',
     poster: posterOf(anime?.image),
+    // The list page's pick (#707): `original`, as 6.0.21's ShikimoriView showed it.
+    posterOriginal: absolute(anime?.image?.original),
     kind: anime?.kind ?? null,
     episodes: anime?.episodes ?? null,
     episodesAired: anime?.episodes_aired ?? null,

@@ -152,6 +152,8 @@ describe('MediaListCollection: the list read', () => {
       anime: {
         title: 'Demon Slayer',
         poster: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg',
+        // #707: `large` is the biggest cover the queries ask for.
+        posterOriginal: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg',
         kind: 'TV',
         episodes: 26,
         episodesAired: 26,

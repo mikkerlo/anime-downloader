@@ -101,6 +101,8 @@ describe('listEntries', () => {
       anime: {
         title: 'Fullmetal Alchemist: Brotherhood',
         poster: 'https://cdn.myanimelist.net/images/anime/1208/94745l.jpg',
+        // #707: `large` is MAL's biggest picture, so the list page's pick is the same.
+        posterOriginal: 'https://cdn.myanimelist.net/images/anime/1208/94745l.jpg',
         kind: 'tv',
         episodes: 64,
         episodesAired: 64,

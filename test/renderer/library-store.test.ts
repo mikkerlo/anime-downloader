@@ -45,6 +45,22 @@ describe('useLibraryStore', () => {
     expect(store.activeAnimeId).toBe(10)
   })
 
+  // #707: the list page's id is 'tracker-list', a stacked view like the others.
+  it("navigate('tracker-list') keeps a back-stack like the other stacked views", () => {
+    const store = useLibraryStore()
+    store.navigate('tracker-list')
+    store.openAnime(1)
+    store.openAnime(2)
+    expect(store.activeAnimeId).toBe(2)
+    expect(store.animeHistoryByView['tracker-list']).toEqual([1])
+    store.navigate('home')
+    expect(store.activeAnimeId).toBe(null)
+    store.navigate('tracker-list')
+    expect(store.activeAnimeId).toBe(2)
+    store.closeAnime()
+    expect(store.animeByView['tracker-list']).toBe(1)
+  })
+
   it('pops history on closeAnime; nulls out when stack is empty', () => {
     const store = useLibraryStore()
     store.navigate('search')

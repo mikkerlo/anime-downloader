@@ -1,0 +1,142 @@
+[
+  {
+    "rate": {
+      "id": 9010,
+      "score": 9,
+      "status": "completed",
+      "episodes": 12,
+      "rewatches": 0,
+      "updated_at": "2026-05-20T10:00:00.000Z",
+      "target_id": 10
+    },
+    "shikiAnime": {
+      "id": 10,
+      "name": "Show Ten",
+      "russian": "Шоу десять",
+      "image": {
+        "original": "/system/animes/original/10.jpg",
+        "preview": "/system/animes/preview/10.jpg",
+        "x96": "/system/animes/x96/10.jpg",
+        "x48": "/system/animes/x48/10.jpg"
+      },
+      "episodes": 12,
+      "episodes_aired": 12,
+      "kind": "tv",
+      "score": "8.1",
+      "status": "released"
+    },
+    "smotretAnime": null
+  },
+  {
+    "rate": {
+      "id": 9011,
+      "score": 0,
+      "status": "completed",
+      "episodes": 1,
+      "rewatches": 0,
+      "updated_at": "2026-04-01T08:00:00.000Z",
+      "target_id": 11
+    },
+    "shikiAnime": {
+      "id": 11,
+      "name": "Show Eleven",
+      "russian": "",
+      "image": {
+        "original": "https://cdn.example/original/11.jpg",
+        "preview": "https://cdn.example/preview/11.jpg",
+        "x96": "",
+        "x48": ""
+      },
+      "episodes": 1,
+      "episodes_aired": 1,
+      "kind": "movie",
+      "score": "7.0",
+      "status": "released"
+    },
+    "smotretAnime": null
+  },
+  {
+    "rate": {
+      "id": 9012,
+      "score": 7,
+      "status": "watching",
+      "episodes": 1,
+      "rewatches": 0,
+      "updated_at": "2026-05-29T23:00:00.000Z",
+      "target_id": 12
+    },
+    "shikiAnime": {
+      "id": 12,
+      "name": "Show Twelve",
+      "russian": "Шоу двенадцать",
+      "image": {
+        "original": "/system/animes/original/12.jpg",
+        "preview": "/system/animes/preview/12.jpg",
+        "x96": "/system/animes/x96/12.jpg",
+        "x48": "/system/animes/x48/12.jpg"
+      },
+      "episodes": 0,
+      "episodes_aired": 5,
+      "kind": "tv",
+      "score": "0.0",
+      "status": "ongoing"
+    },
+    "smotretAnime": null
+  },
+  {
+    "rate": {
+      "id": 9013,
+      "score": 0,
+      "status": "watching",
+      "episodes": 3,
+      "rewatches": 0,
+      "updated_at": "2026-05-10T00:00:00.000Z",
+      "target_id": 13
+    },
+    "shikiAnime": {
+      "id": 13,
+      "name": "Show Thirteen",
+      "russian": "Шоу тринадцать",
+      "image": {
+        "original": "/system/animes/original/13.jpg",
+        "preview": "/system/animes/preview/13.jpg",
+        "x96": "/system/animes/x96/13.jpg",
+        "x48": "/system/animes/x48/13.jpg"
+      },
+      "episodes": 3,
+      "episodes_aired": 3,
+      "kind": "ova",
+      "score": "6.5",
+      "status": "released"
+    },
+    "smotretAnime": null
+  },
+  {
+    "rate": {
+      "id": 9014,
+      "score": 0,
+      "status": "planned",
+      "episodes": 0,
+      "rewatches": 0,
+      "updated_at": "not a date",
+      "target_id": 14
+    },
+    "shikiAnime": {
+      "id": 14,
+      "name": "Show Fourteen",
+      "russian": "Шоу четырнадцать",
+      "image": {
+        "original": "/system/animes/original/14.jpg",
+        "preview": "/system/animes/preview/14.jpg",
+        "x96": "/system/animes/x96/14.jpg",
+        "x48": "/system/animes/x48/14.jpg"
+      },
+      "episodes": 24,
+      "episodes_aired": 0,
+      "kind": "tv",
+      "score": "0.0",
+      "status": "anons"
+    },
+    "smotretAnime": null
+  }
+]

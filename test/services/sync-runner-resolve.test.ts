@@ -12,7 +12,11 @@ vi.mock('../../src/main/shikimori', async (orig) => ({
 
 import { cleanup } from '../helpers/shared-library'
 import { doc, rate, watch } from '../helpers/sync-merge'
+import { ANILIST_MEDIA_IDS } from '../helpers/fake-tracker'
+import { ANILIST_KEYS } from '../../src/main/trackers/keys'
 import {
+  ANILIST_5,
+  ANILIST_USER,
   ANIME,
   MAL,
   OWNER,
@@ -77,10 +81,11 @@ async function conflicts(pc: Pc): Promise<SyncConflictRecord[]> {
   }
 }
 
-function seedConflicts(pc: Pc, records: SyncConflictRecord[]): void {
+function seedConflicts(pc: Pc, records: SyncConflictRecord[], provider = 'shikimori'): void {
   const dir = path.join(pc.userData, 'sync-state')
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'conflicts.json'), JSON.stringify({ version: 1, records }))
+  const file = provider === 'shikimori' ? 'conflicts.json' : `conflicts-${provider}.json`
+  fs.writeFileSync(path.join(dir, file), JSON.stringify({ version: 1, records }))
 }
 
 const queue = (pc: Pc) => pc.store.get('shikimoriUpdateQueue') as any[]
@@ -535,14 +540,16 @@ describe('Combine, and the rewatch question (owner decision 6)', () => {
   }
 })
 
-describe('a claim unlocks a rate conflict only for the owner it names (#714)', () => {
-  const scoped = (libraryId: string): SyncConflictRecord => ({
+describe('a claim unlocks a rate conflict only for its owner (#714, #715)', () => {
+  // The claim library holds the title but isn't a party: only `conflictLibraries`'
+  // owner clause brings it in.
+  const scoped = (ownerScope: number | string): SyncConflictRecord => ({
     id: 'c-scope',
-    ownerScope: OWNER.id,
+    ownerScope,
     animeId: ID,
     fieldPath: 'rate.score',
-    parties: { local: 7, [`library:${libraryId}`]: 8 },
-    bases: { [`library:${libraryId}`]: 6 },
+    parties: { local: 7, [`library:${OTHER_LIB}`]: 8 },
+    bases: { [`library:${OTHER_LIB}`]: 6 },
     at: {},
     suggestion: null,
     reason: 'changed on both sides, to different values',
@@ -551,19 +558,29 @@ describe('a claim unlocks a rate conflict only for the owner it names (#714)', (
   })
   const SIGN_IN = { id: 'c-scope', reason: "Sign in as the library's owner to resolve this." }
 
-  it('a v2 claim library holding the title does not unlock a Shikimori-scoped rate conflict', async () => {
+  /** A no-account PC claiming a library owned by AniList user `OWNER.id`. */
+  async function anilistClaim() {
     const tracker = { provider: 'anilist', userId: String(OWNER.id) }
-    const { root, libraryId } = await makeLibrary({
-      tracker,
-      doc: titleDoc({ rate: r({ score: 8 }, T0 + 77) })
-    })
+    const lib = await makeLibrary({ tracker, doc: titleDoc({ rate: r({ score: 8 }, T0 + 77) }) })
     const pc = makePc({ user: null, installId: 'pc-claim' })
-    await pc.attach(root)
-    const recs = pc.store.get('attachedLibraries') as Record<string, AttachedLibraryRecord>
-    recs[libraryId].trackerClaim = { ...tracker, at: 1 }
-    pc.store.set('attachedLibraries', recs)
-    expect(pc.attached.get(libraryId)).toMatchObject({ role: 'claim', layoutVersion: 2 })
-    seedConflicts(pc, [scoped(libraryId)])
+    await pc.attach(lib.root, { claim: true })
+    expect(pc.attached.get(lib.libraryId)).toMatchObject({ role: 'claim', layoutVersion: 2 })
+    return { pc, ...lib }
+  }
+
+  it('a v2 claim of AniList user N unlocks a conflicts-anilist.json record with ownerScope "N": the drive gets the choice', async () => {
+    const { pc, root } = await anilistClaim()
+    seedConflicts(pc, [scoped(String(OWNER.id))], 'anilist')
+    const res = await pc.runner.resolve(['c-scope'], { 'c-scope': keep('local') })
+    expect(res.failed).toEqual([])
+    expect(res.resolved).toEqual(['c-scope'])
+    expect(await driveScore(root)).toBe(7)
+    expect(pc.store.get('shikimoriUpdateQueue')).toEqual([])
+  })
+
+  it('the same claim does not unlock a conflicts.json record with ownerScope N: another provider is another owner', async () => {
+    const { pc, root } = await anilistClaim()
+    seedConflicts(pc, [scoped(OWNER.id)])
     const res = await pc.runner.resolve(['c-scope'], { 'c-scope': keep('local') })
     expect(res.failed).toEqual([SIGN_IN])
     expect(await driveScore(root)).toBe(8)
@@ -577,7 +594,7 @@ describe('a claim unlocks a rate conflict only for the owner it names (#714)', (
     const pc = makePc({ user: null, installId: 'pc-claim' })
     await pc.attach(root, { claim: true })
     expect(pc.attached.get(libraryId)?.role).toBe('claim')
-    seedConflicts(pc, [scoped(libraryId)])
+    seedConflicts(pc, [scoped(OWNER.id)])
     const res = await pc.runner.resolve(['c-scope'], { 'c-scope': keep('local') })
     expect(res.failed).toEqual([SIGN_IN])
     expect(await driveScore(root)).toBe(8)
@@ -908,5 +925,256 @@ describe('the resolution double-emits through the Shikimori bridge (#694)', () =
     const changed = onlyTwin(calls, EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED)
     expect(changed.legacy).toEqual({ length: 1 })
     expectQueueTwin(changed, { [MAL]: vals({ score: 7, episodes: 4 }) })
+  })
+})
+
+// --- resolve per owner tracker (#715) ----------------------------------------------------------
+
+/** One non-Shikimori owner tracker: AniList here; #717 (T14) adds MyAnimeList's row. */
+const RESOLVE_CASES = [
+  {
+    id: 'anilist' as const,
+    label: 'AniList',
+    user: ANILIST_USER,
+    owner: ANILIST_5,
+    keys: ANILIST_KEYS,
+    pc: (opts: Parameters<typeof makePc>[0] = {}) =>
+      makePc({ ...opts, anilist: { user: ANILIST_USER } })
+  }
+]
+
+describe.each(RESOLVE_CASES)('resolve on an $label-owned library (#715)', (tc) => {
+  const party = `${tc.id}-${tc.user.id}`
+  const trackerQueue = (pc: Pc) => (pc.store.get(tc.keys.updateQueue) ?? []) as any[]
+  const pendingPath = (pc: Pc) =>
+    path.join(pc.userData, 'sync-pending', `${tc.id}-${tc.user.id}.json`)
+  const trackerRecords = (pc: Pc): SyncConflictRecord[] => {
+    try {
+      return JSON.parse(
+        fs.readFileSync(path.join(pc.userData, 'sync-state', `conflicts-${tc.id}.json`), 'utf8')
+      ).records
+    } catch {
+      return []
+    }
+  }
+
+  /** This PC and the library at 8, the tracker at 9, base 7: one held tracker-side conflict. */
+  async function trackerSideConflict(opts: { user?: typeof OWNER } = {}) {
+    const lib = await makeLibrary({
+      tracker: tc.owner,
+      doc: titleDoc({ rate: r({ score: 8 }, T0 + 500) })
+    })
+    const pc = tc.pc({
+      ...(opts.user ? { user: opts.user } : {}),
+      store: {
+        [tc.keys.userRates]: [
+          {
+            malId: MAL,
+            remoteId: ANILIST_MEDIA_IDS[MAL] * 10,
+            values: vals({ score: 7, episodes: 3 }),
+            updatedAt: T0,
+            smotretAnime: { id: ANIME }
+          }
+        ]
+      }
+    })
+    pc.anilist!.fake.set(MAL, { score: 9, episodes: 3 }, { at: T0 })
+    await pc.attach(lib.root)
+    await seedBase(pc, lib.libraryId, lib.root, titleDoc({ rate: r({ score: 7 }) }))
+    await pc.bases.write(party, {
+      stateGeneration: null,
+      doc: titleDoc({ rate: rate({ score: 7, episodes: 3 }, T0, tc.id, MAL) })
+    })
+    await pc.runner.runAll('manual')
+    const [rec] = trackerRecords(pc)
+    expect(rec).toMatchObject({
+      ownerScope: String(tc.user.id),
+      fieldPath: 'rate.score',
+      parties: { local: 8, [tc.id]: 9 }
+    })
+    return { pc, rec, ...lib }
+  }
+
+  it('lists the row with the tracker as its fourth party', async () => {
+    const { pc, libraryId } = await trackerSideConflict()
+    const [item] = await pc.runner.listConflicts()
+    expect(item).toMatchObject({ tracker: tc.id, parties: { local: 8, [tc.id]: 9 } })
+    expect(item.libraries.map((l) => l.libraryId)).toEqual([libraryId])
+    expect(item.options).toEqual([
+      { choice: keep('local'), value: 8 },
+      { choice: keep(tc.id), value: 9 }
+    ])
+  })
+
+  it('Keep mine queues exactly one resolvedFields entry to its queue, and kicks its drain, not Shikimori’s', async () => {
+    const { pc, rec } = await trackerSideConflict()
+    const sync = pc.anilist!.sync
+    const kicked = vi.spyOn(sync, 'syncQueue').mockResolvedValue(undefined)
+    const shiki = vi.spyOn(pc.sync, 'syncShikimoriQueue').mockResolvedValue(undefined)
+    const shikiTimer = vi.spyOn(pc.sync, 'startSyncTimer')
+    const res = await pc.runner.resolve([rec.id], { [rec.id]: keep('local') })
+    expect(res.resolved).toEqual([rec.id])
+    const q = trackerQueue(pc)
+    expect(q).toHaveLength(1)
+    expect(q[0]).toMatchObject({
+      malId: MAL,
+      fields: ['score'],
+      resolvedFields: ['score'],
+      after: expect.objectContaining({ score: 8 }),
+      origin: { kind: 'sync-merge', provenance: { score: { resolution: rec.id } } }
+    })
+    expect(queue(pc)).toEqual([])
+    expect(kicked).toHaveBeenCalledTimes(1)
+    expect(shiki).not.toHaveBeenCalled()
+    expect(shikiTimer).not.toHaveBeenCalled()
+    const log = await pc.runner.syncLog.read(new Date(pc.clock.t).toISOString().slice(0, 7))
+    expect(log.find((e) => e.kind === 'resolution')).toMatchObject({
+      wrote: { shikimori: 'none', tracker: { id: tc.id, status: 'queued' } }
+    })
+    expect(trackerRecords(pc)).toEqual([])
+  })
+
+  it(`Keep theirs (the tracker), which already has it: nothing queued, its queue stripped and base advanced with its origin; Shikimori's untouched`, async () => {
+    const { pc, rec, libraryId, root } = await trackerSideConflict()
+    const merge = (queuedAt: number) => ({
+      malId: MAL,
+      rateId: 1,
+      before: vals({ score: 7, episodes: 3 }),
+      after: vals({ score: 8, episodes: 4 }),
+      queuedAt,
+      fields: ['score', 'episodes'],
+      origin: {
+        kind: 'sync-merge',
+        provenance: { score: { libraryId }, episodes: { libraryId } }
+      }
+    })
+    pc.store.set(tc.keys.updateQueue, [merge(5)])
+    // A colliding Shikimori owner's base and queue entry for the same field.
+    pc.store.set('shikimoriUpdateQueue', [merge(6)])
+    await pc.bases.write(`shikimori-${tc.user.id}`, {
+      stateGeneration: null,
+      doc: titleDoc({ rate: rate({ score: 3 }, T0, 'shikimori', MAL) })
+    })
+    const shikiFile = path.join(pc.userData, 'sync-bases', `shikimori-${tc.user.id}.json`)
+    const shikiBytes = fs.readFileSync(shikiFile, 'utf8')
+    const shikiQueue = JSON.stringify(pc.store.get('shikimoriUpdateQueue'))
+    pc.offline.value = true
+    const res = await pc.runner.resolve([rec.id], { [rec.id]: keep(tc.id) })
+    expect(res.resolved).toEqual([rec.id])
+    expect(fs.existsSync(pendingPath(pc))).toBe(false)
+    expect(trackerQueue(pc)).toEqual([
+      expect.objectContaining({
+        queuedAt: 5,
+        fields: ['episodes'],
+        origin: { kind: 'sync-merge', provenance: { episodes: { libraryId } } }
+      })
+    ])
+    expect((await pc.bases.read(party))!.doc.titles[ID].rate!.score).toMatchObject({
+      value: 9,
+      origin: tc.id
+    })
+    expect(await driveScore(root)).toBe(9)
+    expect(fs.readFileSync(shikiFile, 'utf8')).toBe(shikiBytes)
+    expect(JSON.stringify(pc.store.get('shikimoriUpdateQueue'))).toBe(shikiQueue)
+    const log = await pc.runner.syncLog.read(new Date(pc.clock.t).toISOString().slice(0, 7))
+    expect(log.find((e) => e.kind === 'resolution')).toMatchObject({
+      choice: tc.id,
+      wrote: { shikimori: 'none', tracker: { id: tc.id, status: 'already' } }
+    })
+  })
+
+  it('colliding ids: a Shikimori 5 record next to it stays, and resolving the tracker’s leaves the Shikimori base alone', async () => {
+    const SHIKI_5 = { ...OWNER, id: tc.user.id }
+    const { pc, rec } = await trackerSideConflict({ user: SHIKI_5 })
+    const shikiRecord: SyncConflictRecord = { ...rec, id: 'c-shiki', ownerScope: tc.user.id }
+    shikiRecord.parties = { local: 8, shikimori: 4 }
+    seedConflicts(pc, [shikiRecord])
+    await pc.bases.write(`shikimori-${tc.user.id}`, {
+      stateGeneration: null,
+      doc: titleDoc({ rate: rate({ score: 4 }, T0, 'shikimori', MAL) })
+    })
+    const shikiFile = path.join(pc.userData, 'sync-bases', `shikimori-${tc.user.id}.json`)
+    const before = fs.readFileSync(shikiFile, 'utf8')
+    pc.offline.value = true
+    expect((await pc.runner.listConflicts()).map((i) => i.id).sort()).toEqual(
+      ['c-shiki', rec.id].sort()
+    )
+    await pc.runner.resolve([rec.id], { [rec.id]: keep(tc.id) })
+    expect(trackerRecords(pc)).toEqual([])
+    expect(await conflicts(pc)).toEqual([shikiRecord])
+    expect(fs.readFileSync(shikiFile, 'utf8')).toBe(before)
+    expect((await pc.bases.read(party))!.doc.titles[ID].rate!.score.value).toBe(9)
+  })
+})
+
+describe('conflictLibraries filters to the record’s owner (#715)', () => {
+  const watchRecord = (id: string, ownerScope: number | string, partyLib: string) =>
+    ({
+      id,
+      ownerScope,
+      animeId: ID,
+      fieldPath: 'watch.1.watched',
+      parties: { local: false, [`library:${partyLib}`]: true },
+      bases: { [`library:${partyLib}`]: false },
+      at: {},
+      suggestion: null,
+      reason: 'changed on both sides, to different values',
+      firstSeenRunId: 'r1',
+      lastSeenRunId: 'r1'
+    }) as SyncConflictRecord
+  const unwatched = () => titleDoc({ watch: { '1': watch(false, T0, 0, 'pc-x') } })
+  const filesOf = (pc: Pc, root: string, libraryId: string) => [
+    fs.readFileSync(path.join(root, '.anime-dl', 'state.json'), 'utf8'),
+    fs.readFileSync(path.join(pc.userData, 'sync-bases', `library-${libraryId}.json`), 'utf8')
+  ]
+
+  it.each([
+    ['Shikimori 5 and Shikimori 7', { ownerId: 7 }],
+    ['Shikimori 5 and AniList 5', { tracker: ANILIST_5 }]
+  ] as const)(
+    '%s: the sheet lists only the record owner’s libraries, and resolve leaves the other’s alone',
+    async (_l, other) => {
+      const OTHER_LIB_ID = '44444444-4444-4444-8444-444444444444'
+      const mine = await makeLibrary({ ownerId: 5, doc: unwatched() })
+      const theirs = await makeLibrary({ libraryId: OTHER_LIB_ID, ...other, doc: unwatched() })
+      const pc = makePc({ user: null, installId: 'pc-claim' })
+      await pc.attach(mine.root, { claim: true })
+      await pc.attach(theirs.root, { claim: true })
+      expect(pc.attached.get(theirs.libraryId)?.role).toBe('claim')
+      for (const lib of [mine, theirs]) await seedBase(pc, lib.libraryId, lib.root, unwatched())
+      seedConflicts(pc, [watchRecord('c-w', 5, OTHER_LIB)])
+      const [item] = await pc.runner.listConflicts()
+      expect(item.libraries.map((l) => l.libraryId)).toEqual([mine.libraryId])
+      const before = filesOf(pc, theirs.root, theirs.libraryId)
+      const res = await pc.runner.resolve(['c-w'], { 'c-w': keep('local') })
+      expect(res.resolved).toEqual(['c-w'])
+      expect(res.notes.map((n) => n.text).join(' ')).not.toContain(
+        pc.attached.get(theirs.libraryId)!.name
+      )
+      expect(filesOf(pc, theirs.root, theirs.libraryId)).toEqual(before)
+    }
+  )
+
+  it('a party library whose manifest owner changed is still listed and still held for its next run', async () => {
+    const lib = await makeLibrary({ ownerId: 7, doc: unwatched() })
+    const pc = makePc({ user: null, installId: 'pc-claim' })
+    await pc.attach(lib.root, { claim: true })
+    await seedBase(pc, lib.libraryId, lib.root, unwatched())
+    // Held for owner 5, from before the library changed hands.
+    seedConflicts(pc, [watchRecord('c-p', 5, lib.libraryId)])
+    const [item] = await pc.runner.listConflicts()
+    expect(item.libraries).toEqual([
+      expect.objectContaining({ libraryId: lib.libraryId, involved: true })
+    ])
+    const res = await pc.runner.resolve(['c-p'], { 'c-p': keep('local') })
+    expect(res.notes).toEqual([
+      {
+        id: 'c-p',
+        text: `${pc.attached.get(lib.libraryId)!.name} couldn't be read. It gets this choice on its next sync.`
+      }
+    ])
+    // holdForNextRun: the base moves to the value the conflict showed for the library.
+    const base = await pc.bases.read(`library-${lib.libraryId}`)
+    expect(base!.doc.titles[ID].watch!['1'].watched.value).toBe(true)
   })
 })

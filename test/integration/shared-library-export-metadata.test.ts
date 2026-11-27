@@ -22,18 +22,21 @@ import {
   takeoverUnconfirmed
 } from '../../src/shared/shared-library-export'
 import {
+  PC_ACTOR,
   makeExportEnv,
   scan,
   seedLibrary,
   sel,
   type ExportEnv
 } from '../helpers/shared-library-export'
+import { createGenericTracker, datedCodec } from '../helpers/generic-tracker'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { createFakeSafeStorage } from '../helpers/fake-safe-storage'
 import { createCredentialVault } from '../../src/main/trackers/credential-vault'
 import { setClientConfig } from '../../src/main/trackers/client-config'
 
 const ME = { id: 4242, nickname: 'akira', avatar: '' }
+const AL = { id: 5, nickname: 'al', avatar: null }
 const FRIEND: SharedLibraryOwner = { shikimoriId: 777, nickname: 'friend' }
 const OTHER_LIB = '9c2d4e6f-1a3b-4c5d-8e7f-0a1b2c3d4e5f'
 const T0 = Date.now() - 3_600_000
@@ -74,8 +77,39 @@ function rig(
     user?: typeof ME | null
     store?: Record<string, unknown>
     deps?: Partial<SharedLibraryExportDeps>
+    /** Signed in to AniList as AL (#715), with its leg wired into the runner as `index.ts` does. */
+    anilist?: boolean
   } = {}
 ): Rig {
+  if (opts.anilist) {
+    opts = {
+      ...opts,
+      store: {
+        anilistUser: AL,
+        anilistCredentials: { v: 1, enc: 'plain', data: 'token' },
+        anilistUpdateQueue: [],
+        anilistUserRates: [101, 303].map((id) => ({
+          malId: 9000 + id,
+          remoteId: id * 10,
+          values: { episodes: 1, status: 'watching', score: 9, rewatches: 0 },
+          updatedAt: T0,
+          smotretAnime: { id }
+        })),
+        ...opts.store
+      },
+      deps: {
+        actor: () => ({
+          ...PC_ACTOR,
+          trackerAccounts: [
+            ...(opts.user === null ? [] : [{ provider: 'shikimori', userId: String(ME.id) }]),
+            { provider: 'anilist', userId: String(AL.id) }
+          ],
+          shikimoriUserId: opts.user === null ? null : ME.id
+        }),
+        ...opts.deps
+      }
+    }
+  }
   // The runner needs the env's store, and the env needs the runner's leg.
   const late: { runner?: SyncRunner } = {}
   const copies = { n: 0 }
@@ -151,7 +185,15 @@ function rig(
     isOffline: () => true,
     broadcast: () => {},
     appVersion: '5.0.47',
-    log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    ...(opts.anilist
+      ? (() => {
+          const al = createGenericTracker('anilist', env.store as never, {
+            codec: datedCodec('anilist') as never
+          })
+          return { legs: [{ sync: al.sync, provider: al.fake.provider as never }] }
+        })()
+      : {})
   })
   late.runner = runner
   const r = { env, runner, copies, a1, a2, b1, c1 }
@@ -683,6 +725,62 @@ describe('With metadata: who and where', () => {
     expect(CLAIMED_TARGET).toBe(
       'You use this library through a claim. Your export goes into a new library next to it.'
     )
+  })
+})
+
+describe('With metadata for any tracker account (#715)', () => {
+  it('an AniList-only PC exports: a v2 owner, its library leg, the base, and a re-export keeps the owner', async () => {
+    const r = rig({ user: null, anilist: true })
+    const plan = await r.env.svc.plan({
+      animeIds: [101],
+      target: r.env.drive,
+      name: '',
+      mode: 'metadata'
+    })
+    expect(plan).toMatchObject({
+      canExportMetadata: true,
+      defaultOwner: 'anilist',
+      owners: [{ provider: 'anilist', nickname: AL.nickname, olderVersions: false }]
+    })
+    const root = path.join(r.env.drive, 'Trip')
+    expect(await startMeta(r, [r.a1])).toMatchObject({ status: 'completed', phase: 'done' })
+    const p1 = await pairOf(root)
+    expect(p1.manifest).toMatchObject({
+      layoutVersion: 2,
+      mode: 'metadata',
+      owner: { provider: 'anilist', userId: String(AL.id), nickname: AL.nickname }
+    })
+    // The state step projected AniList's cache (score 9), not Shikimori's (7).
+    expect(p1.state!.doc.titles!['101'].rate?.score.value).toBe(9)
+    expect(p1.state!.doc.titles!['101'].watch!['1'].watched.value).toBe(true)
+    const g1 = await expectPairedWithBase(r, root)
+    await startMeta(r, [r.b1])
+    const p2 = await pairOf(root)
+    expect(p2.manifest).toMatchObject({
+      layoutVersion: 2,
+      owner: { provider: 'anilist', userId: String(AL.id) }
+    })
+    expect(await expectPairedWithBase(r, root)).toBe(g1 + 1)
+  })
+
+  it('AniList terms of use: no file on the drive carries AniList-sourced media data', async () => {
+    const MARKERS = ['AL-DESCRIPTION-MARKER-1', 'AL-GENRE-MARKER-2']
+    const details = Object.fromEntries(
+      [9101, 9202, 9303].map((malId) => [
+        String(malId),
+        { description: MARKERS[0], genres: [MARKERS[1]], fetchedAt: T0 }
+      ])
+    )
+    const r = rig({ user: null, anilist: true, store: { anilistAnimeDetails: details } })
+    const root = path.join(r.env.drive, 'Trip')
+    await startMeta(r, [r.a1, r.b1])
+    expect((await pairOf(root)).manifest.owner).toMatchObject({ provider: 'anilist' })
+    const files = Object.keys(scan(root))
+    expect(files).toContain(path.join(LIBRARY_DIR, 'state.json'))
+    for (const rel of files) {
+      const bytes = fs.readFileSync(path.join(root, rel))
+      for (const m of MARKERS) expect(bytes.includes(m), `${rel} holds ${m}`).toBe(false)
+    }
   })
 })
 

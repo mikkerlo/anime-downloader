@@ -2,6 +2,7 @@
 // newest first, turned into plain lines. There is no undo and no per-entry
 // action; the renderer only shows these.
 
+import { TRACKER_LABELS } from '../../trackers/types'
 import type { SyncLog, SyncLogDetail, SyncLogRecord } from './log'
 import { monthOf } from './log'
 
@@ -102,12 +103,20 @@ function splitPath(p: string): { animeId: string | null; sub: string } {
   return m ? { animeId: m[1], sub: m[2] } : { animeId: null, sub: p }
 }
 
+/**
+ * A tracker's name (#715). An unknown value reads as Shikimori, as a v6
+ * history reads every tracker side it doesn't know.
+ */
+function trackerLabel(id: string | undefined): string {
+  return id === 'anilist' || id === 'mal' ? TRACKER_LABELS[id] : 'Shikimori'
+}
+
 function partyName(
   side: SyncLogDetail['from'],
   libraryId: string | undefined,
   names: HistoryNames
 ) {
-  if (side === 'shikimori') return 'Shikimori'
+  if (side === 'shikimori' || side === 'anilist' || side === 'mal') return trackerLabel(side)
   if (side === 'local') return 'this PC'
   return libraryId ? names.library(libraryId) : 'the Shared Library'
 }
@@ -126,7 +135,7 @@ function detailLine(d: SyncLogDetail, names: HistoryNames): string {
   const lib = partyName('library', d.libraryId, names)
   if (d.to === 'local') return `${what}${values} from ${partyName(d.from, d.libraryId, names)}`
   if (d.to === 'library') return `${what}${values} written to ${lib}`
-  return `${what}${values} sent to Shikimori`
+  return `${what}${values} sent to ${trackerLabel(d.to)}`
 }
 
 /** A record written before #585 has paths only: `local:<path>` / `library:<path>`. */
@@ -149,15 +158,16 @@ function runEntry(
   for (const x of r.raises) {
     const title = names.title(x.animeId)
     const lib = names.library(x.libraryId)
+    const tracker = trackerLabel(x.tracker)
     details.push(
       x.kind === 'forward'
-        ? `${title}: Shikimori episodes ${x.from ?? '—'} → ${x.episodes} from episodes watched on ${lib}`
-        : `${title}: Shikimori rewatch (episode ${x.episodes}) from episodes watched on ${lib}, until Shikimori confirms it`
+        ? `${title}: ${tracker} episodes ${x.from ?? '—'} → ${x.episodes} from episodes watched on ${lib}`
+        : `${title}: ${tracker} rewatch (episode ${x.episodes}) from episodes watched on ${lib}, until ${tracker} confirms it`
     )
   }
   if (r.skippedMalIds.length > 0) {
     details.push(
-      `Waiting for your queued Shikimori edits: ${r.skippedMalIds.map((m) => names.titleOfMal(m)).join(', ')}`
+      `Waiting for your queued ${waitingTracker(r)} edits: ${r.skippedMalIds.map((m) => names.titleOfMal(m)).join(', ')}`
     )
   }
   for (const c of r.clamps) {
@@ -183,9 +193,27 @@ function runEntry(
   }
 }
 
+/**
+ * Whose queued edits a run waited for: the one non-Shikimori tracker when
+ * every leg that ran was that tracker's (#715), Shikimori otherwise.
+ */
+function waitingTracker(r: Extract<SyncLogRecord, { kind: 'run' }>): string {
+  const ran = new Set(
+    (r.result?.libraries ?? []).flatMap((l) =>
+      l.tracker && l.tracker.status !== 'skipped'
+        ? [l.tracker.id]
+        : l.shikimori !== 'skipped'
+          ? ['shikimori']
+          : []
+    )
+  )
+  return ran.size === 1 ? trackerLabel([...ran][0]) : 'Shikimori'
+}
+
 function choiceText(choice: string, names: HistoryNames): string {
   if (choice === 'local') return 'kept this PC’s value'
   if (choice === 'shikimori') return 'kept Shikimori’s value'
+  if (choice === 'anilist' || choice === 'mal') return `kept ${trackerLabel(choice)}’s value`
   if (choice.startsWith('library:')) return `kept ${names.library(choice.slice(8))}’s value`
   if (choice === 'combine') return 'combined both'
   if (choice === 'one') return 'counted one rewatch'
@@ -205,27 +233,31 @@ export function toEntry(
       kind: r.kind,
       at: r.at,
       libraries: r.libraryId ? [{ libraryId: r.libraryId, name: names.library(r.libraryId) }] : [],
-      summary: `Your rewatch of ${names.title(r.animeId)} (episode ${r.episodes}) didn't count because Shikimori changed after it.`,
+      summary: `Your rewatch of ${names.title(r.animeId)} (episode ${r.episodes}) didn't count because ${trackerLabel(r.tracker)} changed after it.`,
       details: []
     }
   }
-  if (r.kind === 'shikimori-rejected') {
+  if (r.kind === 'shikimori-rejected' || r.kind === 'tracker-rejected') {
+    const tracker = trackerLabel(r.kind === 'tracker-rejected' ? r.tracker : 'shikimori')
     return {
       key,
       kind: r.kind,
       at: r.at,
       libraries: [],
-      summary: `Shikimori rejected ${r.fields.join(', ')} of ${names.titleOfMal(r.malId)} three times; it needs your input.`,
+      summary: `${tracker} rejected ${r.fields.join(', ')} of ${names.titleOfMal(r.malId)} three times; it needs your input.`,
       details: r.error ? [r.error] : []
     }
   }
   if (r.kind === 'resolution') {
     const label = fieldLabel(r.fieldPath)
+    // A non-Shikimori owner's tracker is `wrote.tracker` (#715).
+    const side = r.wrote.tracker ?? { id: 'shikimori', status: r.wrote.shikimori }
+    const name = trackerLabel(side.id)
     const wrote = [
       ...(r.wrote.local ? ['this PC'] : []),
       ...r.wrote.libraries.map((id) => names.library(id)),
-      ...(r.wrote.shikimori === 'queued' ? ['Shikimori (queued)'] : []),
-      ...(r.wrote.shikimori === 'already' ? ['Shikimori (already had it)'] : [])
+      ...(side.status === 'queued' ? [`${name} (queued)`] : []),
+      ...(side.status === 'already' ? [`${name} (already had it)`] : [])
     ]
     return {
       key,

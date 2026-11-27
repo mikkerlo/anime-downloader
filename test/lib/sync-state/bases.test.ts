@@ -89,4 +89,18 @@ describe('SyncBaseStore', () => {
       'invalid sync base party'
     )
   })
+
+  it('takes the owner trackers’ parties beside Shikimori’s (#715), and nothing else', async () => {
+    for (const p of ['shikimori-5', 'anilist-5', 'mal-5', 'anilist-a_B-9']) {
+      expect(isSyncBaseParty(p), p).toBe(true)
+    }
+    for (const p of ['kitsu-5', 'anilist-', 'anilist-5/x', 'mal']) {
+      expect(isSyncBaseParty(p), p).toBe(false)
+    }
+    const store = createSyncBaseStore(dir, realFs)
+    await store.write('anilist-5', { stateGeneration: null, doc: doc('pc-a') })
+    expect(fs.readdirSync(dir)).toEqual(['anilist-5.json'])
+    expect((await store.read('anilist-5'))!.party).toBe('anilist-5')
+    expect(await store.read('shikimori-5')).toBeNull()
+  })
 })

@@ -115,6 +115,36 @@ describe('the review sheet', () => {
     ])
   })
 
+  it('an AniList record’s fourth column is AniList’s, labelled, and its choice names AniList (#715)', async () => {
+    held = [
+      item('c1', {
+        tracker: 'anilist',
+        ownerScope: '5',
+        parties: { local: 8, anilist: 9 },
+        bases: { anilist: 7 },
+        suggestion: 'anilist',
+        options: [
+          { choice: party('local'), value: 8 },
+          { choice: party('anilist'), value: 9 }
+        ]
+      })
+    ]
+    const w = await mountSheet()
+    const row = w.find('[data-testid="conflict-row"]')
+    expect(cols(row)).toEqual([
+      ['Before ★ 7', 'true'],
+      ['This PC ★ 8', 'true'],
+      ['Shared Library ★ 8', 'false'],
+      ['AniList ★ 9', 'true']
+    ])
+    expect(row.find('[data-testid="col-shikimori"]').attributes('data-tracker')).toBe('anilist')
+    expect(row.findAll('[data-testid="conflict-choice"]').map((c) => c.text())).toEqual([
+      'Keep mine · ★ 8',
+      'Keep theirs (AniList) · ★ 9newest'
+    ])
+    expect(w.text()).toContain('on each connected library and on AniList.')
+  })
+
   it('a library-only row greys Shikimori; no library at all greys the Shared Library column', async () => {
     held = [
       item('c1', {

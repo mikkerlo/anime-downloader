@@ -114,6 +114,29 @@ describe('computeRaise', () => {
   })
 })
 
+describe('the raise with an AniList clock (#715)', () => {
+  // The runner passes the owner tracker's latest clock: its cached `updatedAt`
+  // or a merged field clock of its origin. The rule doesn't care which tracker.
+  it('a rewatch raise keeps only the flips newer than the AniList clock', () => {
+    const anilistAt = 25
+    const r = computeRaise({
+      noBase: false,
+      flips: [flip('1', 20), flip('2', 30)],
+      mergedRate: completed12,
+      shikimoriAt: anilistAt
+    })
+    expect(r).toMatchObject({ kind: 'rewatch', flips: [flip('2', 30)] })
+    expect(
+      computeRaise({
+        noBase: false,
+        flips: [flip('1', 20)],
+        mergedRate: completed12,
+        shikimoriAt: anilistAt
+      })
+    ).toBeNull()
+  })
+})
+
 describe('nextWatchedRate moved to lib/shikimori-rate.ts', () => {
   it('is the auto-mark rule', () => {
     expect(nextWatchedRate(completed12, 3)).toEqual({

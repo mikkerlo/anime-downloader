@@ -2,6 +2,7 @@
 // or claimed library, read from its `SyncRunResult`. Runs offline too: the
 // drive leg needs no network, and `runAll` skips the Shikimori leg itself.
 
+import { TRACKER_LABELS } from '../../../trackers/types'
 import { type PrepareStep, type PrepareStepResult, worstStatus } from '../index'
 import { NO_LIBRARY_REASON } from './attached-integrity'
 
@@ -74,31 +75,41 @@ export function drivePart(r: SyncLibraryResult, needReview?: number): Part {
   return { text: `Drive: ${r.driveReason ?? r.drive}`, status: 'warning' }
 }
 
+/**
+ * The owner tracker's leg (#715): Shikimori's from `shikimori*`, another
+ * tracker's from `tracker`, each with that tracker's name. A Shikimori
+ * library reads exactly as before.
+ */
 export function shikimoriPart(r: SyncLibraryResult): Part {
-  if (r.shikimori === 'ok') {
+  const name = r.tracker ? TRACKER_LABELS[r.tracker.id] : 'Shikimori'
+  const status = r.tracker ? r.tracker.status : r.shikimori
+  const reason = r.tracker ? r.tracker.reason : r.shikimoriReason
+  if (status === 'ok') {
     const k = r.waitingMalIds.length
     return {
       text:
         k > 0
-          ? `Shikimori updated, ${k} ${k === 1 ? 'title waits' : 'titles wait'} for your queued edits`
-          : 'Shikimori updated',
+          ? `${name} updated, ${k} ${k === 1 ? 'title waits' : 'titles wait'} for your queued edits`
+          : `${name} updated`,
       status: 'ok'
     }
   }
-  switch (`${r.shikimori}:${r.shikimoriReason ?? ''}`) {
+  switch (`${status}:${reason ?? ''}`) {
     case 'skipped:offline':
-      return { text: 'Shikimori push waits until online', status: 'ok' }
+      return { text: `${name} push waits until online`, status: 'ok' }
     case 'skipped:logged-out':
     case 'skipped:claim':
-      return { text: 'Shikimori push needs a logged-in owner', status: 'ok' }
+      return { text: `${name} push needs a logged-in owner`, status: 'ok' }
     case 'error:auth':
-      return { text: 'Shikimori session expired; log in to push', status: 'warning' }
+      return { text: `${name} session expired; log in to push`, status: 'warning' }
     case 'error:network':
-      return { text: 'Shikimori push was interrupted; it resumes when online', status: 'warning' }
+      return { text: `${name} push was interrupted; it resumes when online`, status: 'warning' }
     case 'error:api':
-      return { text: 'Shikimori rejected the update', status: 'warning' }
+      return { text: `${name} rejected the update`, status: 'warning' }
+    case 'error:config':
+      return { text: `${name} needs setup in Settings → Trackers; changes kept`, status: 'warning' }
   }
-  return { text: `Shikimori: ${r.shikimoriReason ?? r.shikimori}`, status: 'warning' }
+  return { text: `${name}: ${reason ?? status}`, status: 'warning' }
 }
 
 /** One summary line per owned or claimed library; null for one that isn't. */
@@ -130,7 +141,7 @@ export function syncDetails(
     if (r.rewatchesSuperseded > 0) {
       const n = r.rewatchesSuperseded
       out.push({
-        text: `${n} rewatch ${n === 1 ? 'raise' : 'raises'} superseded by Shikimori`,
+        text: `${n} rewatch ${n === 1 ? 'raise' : 'raises'} superseded by ${r.tracker ? TRACKER_LABELS[r.tracker.id] : 'Shikimori'}`,
         status: 'ok'
       })
     }

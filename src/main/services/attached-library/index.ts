@@ -21,6 +21,7 @@ import {
   isTrackerOwner,
   ownerAccountsOf,
   ownerOf,
+  sameOwnerKey,
   shikimoriOwnerId
 } from '../../lib/shared-library/owner'
 import { connectedAccounts, type ConnectedAccount } from '../../trackers/primary'
@@ -211,8 +212,9 @@ const episodeOrder = (a: string, b: string): number => {
  */
 function claimMatches(rec: AttachedLibraryRecord): boolean {
   if (rec.trackerOwner) {
+    // Through the owner key (#715): a non-canonical v2 Shikimori owner is never claimed.
     const c = rec.trackerClaim
-    return !!c && c.provider === rec.trackerOwner.provider && c.userId === rec.trackerOwner.userId
+    return !!c && sameOwnerKey(c, rec.trackerOwner)
   }
   const ownerId = shikimoriOwnerId(rec.owner)
   return ownerId !== null && rec.claim?.ownerId === ownerId

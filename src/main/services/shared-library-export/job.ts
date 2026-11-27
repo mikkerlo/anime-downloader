@@ -12,7 +12,7 @@
 
 import * as path from 'path'
 import type { MergeStatus } from '../../download-manager'
-import { itemKey, layoutVersionFor } from '../../lib/shared-library/format'
+import { itemKey } from '../../lib/shared-library/format'
 import { renderIndexHtml } from '../../lib/shared-library/index-html'
 import type { MountCandidates } from '../../lib/shared-library/mount-candidates'
 import { nameItems } from '../../lib/shared-library/naming'
@@ -241,6 +241,26 @@ export function jobFiles(rec: JobRecord): { rel: string; size: number; item: Job
     if (item.subtitlePath) out.push({ rel: item.subtitlePath, size: item.subtitleSize, item })
   }
   return out
+}
+
+/**
+ * The job's in-memory manifest after a checkpoint: `next` with what the write
+ * stamped (#715, the #721 review). A v1 Videos only → v2 takeover changes the
+ * major, and the minor comes with it, never the v1 file's.
+ */
+export function checkpointBase(
+  base: SharedLibraryManifest,
+  next: SharedLibraryManifestInput,
+  r: Awaited<ReturnType<typeof writeManifest>>
+): SharedLibraryManifest {
+  return {
+    ...base,
+    ...next,
+    generation: r.generation,
+    stateGeneration: r.stateGeneration,
+    layoutMinor: r.layoutMinor,
+    layoutVersion: r.layoutVersion
+  }
 }
 
 export class ExportJob {
@@ -482,14 +502,7 @@ export class ExportJob {
       try {
         const r = await writeManifest(this.rec.root, next, this.deps.actor(), this.generation)
         this.generation = r.generation
-        this.base = {
-          ...this.base,
-          ...next,
-          generation: r.generation,
-          stateGeneration: r.stateGeneration,
-          layoutMinor: this.base.layoutMinor,
-          layoutVersion: layoutVersionFor(next.owner)
-        }
+        this.base = checkpointBase(this.base, next, r)
         this.libraryWritten()
         this.signature = await this.manifestSignature()
         this.sinceCheckpoint = 0

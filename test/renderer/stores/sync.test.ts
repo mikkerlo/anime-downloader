@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { reactive } from 'vue'
 import { TOAST_MS, toastText, useSyncStore } from '../../../src/renderer/src/stores/sync'
+import { syncLegOf } from '../../../src/renderer/src/stores/shared-libraries'
 
 function conflict(id: string, over: Partial<SyncConflictItem> = {}): SyncConflictItem {
   return {
@@ -140,6 +141,36 @@ describe('the toast', () => {
     runFinished(run('manual', [lib('a')]))
     await settle()
     expect(s.toastLine).toBe('Everything is up to date')
+  })
+
+  it('the derived leg reads ok for both kinds (#715): a Shikimori leg and an AniList one name their libraries', async () => {
+    const s = useSyncStore()
+    await settle()
+    // Drive skipped on both: only the tracker leg's ok puts a library in the toast.
+    runFinished(
+      run('manual', [
+        lib('a', {
+          drive: 'skipped',
+          shikimori: 'ok',
+          leg: { tracker: 'shikimori', status: 'ok' }
+        }),
+        lib('b', {
+          drive: 'skipped',
+          shikimori: 'skipped',
+          tracker: { id: 'anilist', status: 'ok' },
+          leg: { tracker: 'anilist', status: 'ok' }
+        })
+      ])
+    )
+    await settle()
+    expect(s.toast?.libraryIds).toEqual(['a', 'b'])
+  })
+
+  it('a result with no derived leg falls back to its own fields', () => {
+    expect(
+      syncLegOf(lib('a', { shikimori: 'skipped', tracker: { id: 'anilist', status: 'ok' } }))
+    ).toMatchObject({ tracker: 'anilist', status: 'ok' })
+    expect(syncLegOf(lib('a'))).toMatchObject({ tracker: 'shikimori', status: 'ok' })
   })
 
   it('updates only say "N updates" (Details)', () => {

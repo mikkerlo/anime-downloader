@@ -413,6 +413,25 @@ describe('step 6: SyncRunResult → summary lines', () => {
       },
       'Lib: Drive: new-thing; Shikimori: other',
       'warning'
+    ],
+    // #715: an AniList-owned library's leg is `tracker`, named by its tracker.
+    [
+      'AniList ok',
+      { shikimori: 'skipped', tracker: { id: 'anilist', status: 'ok' }, waitingMalIds: [1] },
+      'Lib: Drive synced; AniList updated, 1 title waits for your queued edits',
+      'ok'
+    ],
+    [
+      'AniList skipped:offline',
+      { shikimori: 'skipped', tracker: { id: 'anilist', status: 'skipped', reason: 'offline' } },
+      'Lib: Drive synced; AniList push waits until online',
+      'ok'
+    ],
+    [
+      'MyAnimeList error:config',
+      { shikimori: 'skipped', tracker: { id: 'mal', status: 'error', reason: 'config' } },
+      'Lib: Drive synced; MyAnimeList needs setup in Settings → Trackers; changes kept',
+      'warning'
     ]
   ]
 

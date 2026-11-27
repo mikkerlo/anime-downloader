@@ -14,8 +14,9 @@ export const LOG_MAX_BYTES = 4 * 1024 * 1024
  */
 export interface SyncLogDetail {
   path: string
-  to: 'local' | 'library' | 'shikimori'
-  from: 'local' | 'library' | 'shikimori'
+  // A non-Shikimori leg's side is its provider id, `'anilist'` / `'mal'` (#715).
+  to: 'local' | 'library' | 'shikimori' | 'anilist' | 'mal'
+  from: 'local' | 'library' | 'shikimori' | 'anilist' | 'mal'
   libraryId?: string
   before: unknown
   after: unknown
@@ -41,6 +42,8 @@ export type SyncLogRecord =
         kind: string
         episodes: number
         from?: number
+        // The owner tracker the raise goes to, when it isn't Shikimori (#715).
+        tracker?: TrackerId
       }[]
       resolvedElsewhere: { animeId: string; fieldPath: string }[]
       result: SyncRunResult
@@ -53,12 +56,23 @@ export type SyncLogRecord =
       malId: number
       episodes: number
       flipAt: number
+      // The owner tracker's row time; the tracker is `tracker` when it isn't Shikimori (#715).
       shikimoriUpdatedAt: string
       libraryId: string | null
       reason: string
+      tracker?: TrackerId
     }
   | {
       kind: 'shikimori-rejected'
+      at: number
+      malId: number
+      fields: SyncRateField[]
+      error: string
+    }
+  | {
+      // Another tracker's three drops (#715); a v6 history skips the kind.
+      kind: 'tracker-rejected'
+      tracker: TrackerId
       at: number
       malId: number
       fields: SyncRateField[]
@@ -75,7 +89,13 @@ export type SyncLogRecord =
       value: unknown
       // The libraries that were parties to the conflict.
       libraryIds: string[]
-      wrote: { local: boolean; libraries: string[]; shikimori: 'queued' | 'already' | 'none' }
+      // A non-Shikimori owner's tracker in `tracker`, with `shikimori: 'none'` (#715).
+      wrote: {
+        local: boolean
+        libraries: string[]
+        shikimori: 'queued' | 'already' | 'none'
+        tracker?: { id: TrackerId; status: 'queued' | 'already' | 'none' }
+      }
       notes: string[]
     }
 

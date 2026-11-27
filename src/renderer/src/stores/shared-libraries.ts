@@ -62,6 +62,17 @@ export function rateText(rate: AttachedTitleRate): string {
   return parts.join(' · ')
 }
 
+/**
+ * A result's tracker leg in one shape (#715): main's derived `leg`, or, for a
+ * result without one, Shikimori's fields.
+ */
+export function syncLegOf(r: SyncLibraryResult): SyncLeg {
+  if (r.leg) return r.leg
+  if (r.tracker)
+    return { tracker: r.tracker.id, status: r.tracker.status, reason: r.tracker.reason }
+  return { tracker: 'shikimori', status: r.shikimori, reason: r.shikimoriReason }
+}
+
 /** "never" until the first merge with the library (#584). */
 export function lastSyncWhen(lastSyncAt: number | null, now = Date.now()): string {
   return lastSyncAt === null ? 'never' : formatAgo(lastSyncAt, now)
@@ -85,7 +96,7 @@ export function syncStatusText(
           ? "Couldn't read the drive"
           : 'Sync failed, will retry'
     )
-  } else if (last && (last.drive === 'ok' || last.shikimori === 'ok')) {
+  } else if (last && (last.drive === 'ok' || syncLegOf(last).status === 'ok')) {
     parts.push(`${plural(last.counts.applied, 'change', 'changes')} synced`)
   }
   if (entry.needReview > 0) parts.push(`${entry.needReview} need review`)
@@ -248,14 +259,13 @@ export const useSharedLibrariesStore = defineStore('shared-libraries', () => {
 
   /**
    * Whether an owned or claimed library has `animeId` in scope (the detail
-   * page's Sync now); a v1 library only until #715 runs v2 legs (#714).
+   * page's Sync now), of either layout (#715).
    */
   function canSyncTitle(animeId: number): boolean {
     return libraries.value.some(
       (l) =>
         l.mode === 'metadata' &&
         (l.role === 'owner' || l.role === 'claim') &&
-        l.layoutVersion === 1 &&
         l.titles.some((t) => t.animeId === animeId)
     )
   }

@@ -5,8 +5,10 @@ import { describe, expect, it } from 'vitest'
 import {
   isOwnedBy,
   isTrackerOwner,
+  ownerKey,
   ownerOf,
   sameOwner,
+  sameOwnerKey,
   shikimoriOwnerId
 } from '../../../src/main/lib/shared-library/owner'
 
@@ -97,4 +99,40 @@ describe('sameOwner and shikimoriOwnerId', () => {
     expect(shikimoriOwnerId(ANILIST)).toBeNull()
     expect(shikimoriOwnerId(null)).toBeNull()
   })
+})
+
+describe('the owner key (#715)', () => {
+  it("is '<provider>:<userId>' across majors: a v1 owner and a v2 Shikimori owner of one account share it", () => {
+    expect(ownerKey(V1)).toBe('shikimori:5')
+    expect(ownerKey(V2_SHIKIMORI)).toBe('shikimori:5')
+    expect(ownerKey(ANILIST)).toBe('anilist:5')
+    expect(ownerKey(null)).toBeNull()
+    expect(sameOwnerKey(V1, V2_SHIKIMORI)).toBe(true)
+    // `sameOwner` stays the layout-aware identity check.
+    expect(sameOwner(V1, V2_SHIKIMORI)).toBe(false)
+  })
+
+  it('never matches across providers with the same userId', () => {
+    expect(sameOwnerKey(ANILIST, MAL)).toBe(false)
+    expect(sameOwnerKey(ANILIST, V2_SHIKIMORI)).toBe(false)
+    expect(sameOwnerKey(ANILIST, { provider: 'anilist', userId: '6' })).toBe(false)
+    expect(sameOwnerKey(ANILIST, { provider: 'anilist', userId: '5' })).toBe(true)
+    expect(sameOwnerKey(null, null)).toBe(false)
+  })
+
+  it.each(['05', 'abc', '0', ''])(
+    'a v2 Shikimori userId %j is not canonical: no key, no match, owned by nobody',
+    (userId) => {
+      const owner = { provider: 'shikimori', userId }
+      expect(ownerKey(owner)).toBeNull()
+      expect(sameOwnerKey(owner, owner)).toBe(false)
+      expect(sameOwnerKey(owner, V1)).toBe(false)
+      expect(
+        isOwnedBy(owner, {
+          shikimoriUserId: 5,
+          trackerAccounts: [{ provider: 'shikimori', userId }]
+        })
+      ).toBe(false)
+    }
+  )
 })

@@ -217,8 +217,9 @@ describe('ExportDialog With metadata (#586)', () => {
     const w = await open(target({}), true, null, { canExportMetadata: false, nickname: null })
     expect(radio(w, 'export-mode-metadata').disabled).toBe(true)
     expect(radio(w, 'export-mode-videos').checked).toBe(true)
+    // Any tracker account will do since #715, so the hint no longer names Shikimori.
     expect(w.find('[data-testid="export-mode-hint"]').text()).toBe(
-      'Log in to Shikimori to include watch state'
+      'Connect a tracker in Settings → Trackers to include watch state'
     )
   })
 

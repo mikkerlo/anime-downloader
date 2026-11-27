@@ -286,3 +286,127 @@ describe('the lines a record becomes', () => {
     ])
   })
 })
+
+describe('the owner tracker in the history (#715)', () => {
+  it('a non-Shikimori leg’s lines name its tracker: sent to AniList, from AniList, its raise and waits', () => {
+    const e = toEntry(
+      run(JAN, [LIB], {
+        details: [
+          { path: 'titles.101.rate.score', to: 'anilist', from: 'local', before: 7, after: 8 },
+          { path: 'titles.101.rate.episodes', to: 'local', from: 'anilist', before: 3, after: 4 }
+        ],
+        raises: [
+          {
+            libraryId: LIB,
+            animeId: '101',
+            malId: 9001,
+            kind: 'forward',
+            episodes: 6,
+            from: 5,
+            tracker: 'anilist'
+          }
+        ],
+        skippedMalIds: [9001],
+        result: {
+          runId: 'r',
+          trigger: 'plug',
+          libraries: [
+            {
+              libraryId: LIB,
+              drive: 'ok',
+              shikimori: 'skipped',
+              tracker: { id: 'anilist', status: 'ok' },
+              counts: { applied: 1, conflicts: 0, clamped: 0 },
+              waitingMalIds: [9001],
+              rewatchesSuperseded: 0
+            }
+          ]
+        }
+      } as Partial<SyncLogRecord>),
+      'k',
+      names
+    )!
+    expect(e.details).toEqual([
+      'Frieren: score ★ 7 → ★ 8 sent to AniList',
+      'Frieren: episodes watched 3 → 4 from AniList',
+      'Frieren: AniList episodes 5 → 6 from episodes watched on Drive',
+      'Waiting for your queued AniList edits: Frieren'
+    ])
+  })
+
+  it('a tracker-rejected record, an AniList rewatch and an AniList resolution', () => {
+    expect(
+      toEntry(
+        {
+          kind: 'tracker-rejected',
+          tracker: 'anilist',
+          at: JAN,
+          malId: 9001,
+          fields: ['score'],
+          error: '404'
+        },
+        'k',
+        names
+      )!.summary
+    ).toBe('AniList rejected score of Frieren three times; it needs your input.')
+    expect(
+      toEntry(
+        {
+          kind: 'rewatch-superseded',
+          runId: 'r',
+          at: JAN,
+          animeId: '101',
+          malId: 9001,
+          episodes: 4,
+          flipAt: JAN,
+          shikimoriUpdatedAt: '',
+          libraryId: null,
+          reason: 'x',
+          tracker: 'anilist'
+        },
+        'k',
+        names
+      )!.summary
+    ).toBe("Your rewatch of Frieren (episode 4) didn't count because AniList changed after it.")
+    const res = toEntry(
+      {
+        kind: 'resolution',
+        at: JAN,
+        conflictId: 'c',
+        animeId: '101',
+        fieldPath: 'rate.score',
+        choice: 'anilist',
+        value: 9,
+        libraryIds: [],
+        wrote: {
+          local: true,
+          libraries: [],
+          shikimori: 'none',
+          tracker: { id: 'anilist', status: 'queued' }
+        },
+        notes: []
+      },
+      'k',
+      names
+    )!
+    expect(res.summary).toBe('Frieren: score: you kept AniList’s value (★ 9)')
+    expect(res.details).toEqual(['Written to this PC, AniList (queued)'])
+  })
+
+  it('v6 shows an unknown tracker side as Shikimori, and an old record reads as before', () => {
+    const e = toEntry(
+      run(JAN, [LIB], {
+        details: [
+          { path: 'titles.101.rate.score', to: 'shikimori', from: 'local', before: 7, after: 8 }
+        ],
+        skippedMalIds: [9001]
+      } as Partial<SyncLogRecord>),
+      'k',
+      names
+    )!
+    expect(e.details).toEqual([
+      'Frieren: score ★ 7 → ★ 8 sent to Shikimori',
+      'Waiting for your queued Shikimori edits: Frieren'
+    ])
+  })
+})

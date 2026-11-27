@@ -1,7 +1,12 @@
 // The first merge with no base (#584 §1): every row of the no-base table.
 import { describe, it, expect } from 'vitest'
 import { merge3 } from '../../../src/main/lib/sync-merge/merge3'
-import { normalizeDoc, ratesOnly, shikimoriNoBase } from '../../../src/main/lib/sync-merge/no-base'
+import {
+  normalizeDoc,
+  ratesOnly,
+  shikimoriNoBase,
+  trackerNoBase
+} from '../../../src/main/lib/sync-merge/no-base'
 import { FIELD_TABLE } from '../../../src/main/lib/sync-state/field-table'
 import { F, doc, rate, watch } from '../../helpers/sync-merge'
 
@@ -157,5 +162,22 @@ describe('merge3(null, …): the no-base table', () => {
     expect(m.conflicts).toEqual([])
     expect(m.changesB).toEqual(['titles.1.rate.score'])
     expect(m.changesA).toEqual([])
+  })
+
+  it('a tracker leg with no base (#715): the same rule, the base is the owner tracker’s side', () => {
+    const anilist = t({ rate: rate({ episodes: 3, score: 6 }, 500, 'anilist') })
+    const local = t({ rate: rate({ episodes: 5, score: 6 }, 600) })
+    const base = trackerNoBase(anilist)
+    expect(base).toEqual(anilist)
+    expect(base).not.toBe(anilist)
+    const m = merge3(base, ratesOnly(local, ['1']), anilist, FIELD_TABLE, {
+      now: 1e7,
+      scope: ['1'],
+      order: false
+    })
+    expect(m.conflicts).toEqual([])
+    expect(m.changesB).toEqual(['titles.1.rate.episodes'])
+    expect(m.changesA).toEqual([])
+    expect(shikimoriNoBase).toBe(trackerNoBase)
   })
 })

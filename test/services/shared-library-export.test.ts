@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
+import { checkpointBase } from '../../src/main/services/shared-library-export/job'
 import {
   OWNER_NOT_OFFERED,
   SEPARATE_NEWER_MINOR,
@@ -652,10 +653,11 @@ describe('the export owner picker (#714)', () => {
     }) as SyncLibraryResult
 
   /**
-   * A Shikimori + AniList PC, AniList primary. `seam` offers AniList as an
-   * owner too, as #715 will; the actor then holds both accounts.
+   * A Shikimori + AniList PC, AniList primary; the actor holds both accounts.
+   * Since #715 every tracker is offered (`all`); without it the test seam
+   * offers Shikimori only, as #714 did.
    */
-  function pc(seam: boolean, users: { shikimori?: boolean; anilist?: boolean } = {}): void {
+  function pc(all: boolean, users: { shikimori?: boolean; anilist?: boolean } = {}): void {
     const shikimori = users.shikimori ?? true
     const anilist = users.anilist ?? true
     const accounts = [
@@ -664,7 +666,7 @@ describe('the export owner picker (#714)', () => {
     ]
     env = makeExportEnv(
       {
-        ...(seam ? { ownerProviders: ['shikimori', 'anilist'] as const } : {}),
+        ...(all ? {} : { ownerProviders: ['shikimori'] as const }),
         writeLibraryState: stateOk,
         actor: () => ({
           installId: 'pc-export',
@@ -697,26 +699,22 @@ describe('the export owner picker (#714)', () => {
     await env.svc.settled(res.job.jobId)
   }
 
-  it('until #715 the plan offers Shikimori only, and defaults to it even with AniList primary', async () => {
-    pc(false)
-    const p = await env.svc.plan({ animeIds: [7], target: null, name: '' })
-    expect(p).toMatchObject({
+  it('since #715 an AniList-only PC exports With metadata: AniList is offered and the default; Shikimori only through the seam', async () => {
+    pc(true, { shikimori: false })
+    expect(await env.svc.plan({ animeIds: [7], target: null, name: '' })).toMatchObject({
       canExportMetadata: true,
-      nickname: 'me',
+      nickname: 'al',
+      owners: [{ provider: 'anilist', nickname: 'al', olderVersions: false }],
+      defaultOwner: 'anilist'
+    })
+    pc(false)
+    expect(await env.svc.plan({ animeIds: [7], target: null, name: '' })).toMatchObject({
       owners: [{ provider: 'shikimori', nickname: 'me', olderVersions: true }],
       defaultOwner: 'shikimori'
     })
-    // An AniList-only PC can't export With metadata yet.
-    pc(false, { shikimori: false })
-    expect(await env.svc.plan({ animeIds: [7], target: null, name: '' })).toMatchObject({
-      canExportMetadata: false,
-      nickname: null,
-      owners: [],
-      defaultOwner: null
-    })
   })
 
-  it('with AniList offered (the #715 seam): both owners, the primary first by default, the older-versions flag on Shikimori only', async () => {
+  it('every connected account by default (#715): both owners, the primary first by default, the older-versions flag on Shikimori only', async () => {
     pc(true)
     const p = await env.svc.plan({ animeIds: [7], target: null, name: '' })
     expect(p.owners).toEqual([
@@ -849,38 +847,36 @@ describe('the export owner picker (#714)', () => {
     })
   })
 
-  // PR #730 review: gated on the library, not the request. A Videos only
-  // export at an own v2 library went to `own-metadata`: written on a
-  // Shikimori + AniList PC, refused ("Log in to Shikimori…") on an AniList-only one.
+  // PR #730 review: gated on the library, not the request. Until #715 a Videos
+  // only export at an own v2 library went next to it; now its owner is offered,
+  // so it is routed into the library With metadata, on either PC.
   it.each([
     ['Shikimori + AniList', {}],
     ['AniList only', { shikimori: false }]
   ] as const)(
-    '%s PC, Videos only at an own v2 AniList library: other-owner next to it, the v2 library byte-identical',
+    '%s PC, Videos only at an own v2 AniList library: routed into it With metadata, kept v2 with its owner (#715)',
     async (_l, users) => {
-      pc(false, users)
+      pc(true, users)
       const v2 = path.join(env.drive, 'Trip')
       await seedLibrary(v2, {
         libraryId: OTHER_LIB,
         name: 'Trip',
         owner: { provider: 'anilist', userId: String(AL.id), nickname: 'al' }
       })
-      const before = scan(v2)
       const p = await plan({ target: v2, mode: 'videos' })
       expect(p.target).toMatchObject({
-        kind: 'other-owner',
-        mode: 'videos',
-        root: path.join(env.drive, 'Trip (2)'),
-        ownerNickname: 'al',
+        kind: 'own-metadata',
+        mode: 'metadata',
+        root: v2,
         owner: { provider: 'anilist', nickname: 'al' }
       })
       await startOk({ target: v2, mode: 'videos' })
-      expect(scan(v2)).toEqual(before)
-      expect(manifestAt(path.join(env.drive, 'Trip (2)'))).toMatchObject({
-        layoutVersion: 1,
-        mode: 'videos',
-        owner: null
+      expect(manifestAt(v2)).toMatchObject({
+        layoutVersion: 2,
+        mode: 'metadata',
+        owner: { provider: 'anilist', userId: String(AL.id) }
       })
+      expect(manifestAt(v2).items).toHaveLength(1)
     }
   )
 
@@ -1139,5 +1135,41 @@ describe('the meta snapshot on re-export', () => {
     const out = mergeMeta(existing, local)
     expect((out as unknown as Record<symbol, unknown>)[UNKNOWN_FIELDS]).toEqual({ future: 1 })
     expect(JSON.parse(serializeMeta(out))).toEqual({ animeId: 7, year: 2, future: 1 })
+  })
+})
+
+describe('the job’s base after a checkpoint (#715, the #721 review)', () => {
+  it('takes the major and the minor the write stamped: a v1 Videos only → v2 takeover never keeps the v1 minor', () => {
+    const base = {
+      layoutVersion: 1,
+      layoutMinor: 1,
+      libraryId: 'lib',
+      owner: null,
+      mode: 'videos',
+      generation: 3,
+      stateGeneration: null,
+      titles: [],
+      items: []
+    } as unknown as SharedLibraryManifest
+    const next = {
+      libraryId: 'lib',
+      owner: { provider: 'anilist', userId: '5' },
+      mode: 'metadata',
+      titles: [],
+      items: []
+    } as unknown as SharedLibraryManifestInput
+    const out = checkpointBase(base, next, {
+      generation: 4,
+      stateGeneration: null,
+      layoutVersion: 2,
+      layoutMinor: 0
+    })
+    expect(out).toMatchObject({
+      layoutVersion: 2,
+      layoutMinor: 0,
+      generation: 4,
+      owner: { provider: 'anilist', userId: '5' },
+      mode: 'metadata'
+    })
   })
 })

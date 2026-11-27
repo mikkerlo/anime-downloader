@@ -1,6 +1,6 @@
 // `SyncBaseStore` (#572 §5): this PC's merge base per party, one file each
 // under `userData/sync-bases/`, outside `config.json` (which every store write
-// re-serializes). A party is `library-<libraryId>` or `shikimori-<ownerId>`.
+// re-serializes). A party is `library-<libraryId>` or `<tracker>-<ownerId>`.
 // Writes are atomic: a temp file, then a rename over the old base, so a crash
 // in between leaves the old base intact. The file system is injected, which
 // keeps `lib/sync-state/` free of `fs`; S9 (#584) wires `fs/promises`.
@@ -31,7 +31,10 @@ export interface SyncBaseStore {
   remove(party: string): Promise<void>
 }
 
-const PARTY = /^(library|shikimori)-[A-Za-z0-9_-]{1,128}$/
+// `anilist-<userId>` / `mal-<userId>` beside Shikimori's (#715): the owner
+// tracker's base. Shikimori's are never renamed: a missing base reads as "the
+// base is the tracker's side" (`trackerNoBase`).
+const PARTY = /^(library|shikimori|anilist|mal)-[A-Za-z0-9_-]{1,128}$/
 
 export function isSyncBaseParty(party: string): boolean {
   return PARTY.test(party)

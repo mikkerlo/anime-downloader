@@ -22,14 +22,23 @@ export interface LegConflict {
 }
 
 export interface LegReport {
-  ownerScope: number
-  /** `library:<id>` or `shikimori`. */
+  /**
+   * A Shikimori owner's numeric id, another tracker's string `userId` (#715).
+   * One conflicts file holds one provider's records, so the id alone names
+   * the owner there.
+   */
+  ownerScope: number | string
+  /** `library:<id>` or the owner tracker (`shikimori`, `anilist`, `mal`). */
   party: string
   /** Whether a record's title took part in this leg (out-of-scope records are left alone). */
   inScope(animeId: string): boolean
   conflicts: LegConflict[]
   runId: string
 }
+
+/** Two `ownerScope`s of one conflicts file, compared as owner ids (#715). */
+export const sameScope = (a: number | string, b: number | string): boolean =>
+  String(a) === String(b)
 
 export const identityOf = (
   r: Pick<SyncConflictRecord, 'ownerScope' | 'animeId' | 'fieldPath'>
@@ -103,7 +112,9 @@ export function reconcileLeg(
   }
   const removed: SyncConflictRecord[] = []
   for (const [key, rec] of byId) {
-    if (seen.has(key) || rec.ownerScope !== leg.ownerScope || !(leg.party in rec.parties)) continue
+    // Never `===` on raw ids (#715): `'5'` and `5` name one owner in one file.
+    if (seen.has(key) || !sameScope(rec.ownerScope, leg.ownerScope) || !(leg.party in rec.parties))
+      continue
     if (!leg.inScope(rec.animeId)) continue
     delete rec.parties[leg.party]
     delete rec.bases[leg.party]

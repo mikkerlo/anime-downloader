@@ -1,12 +1,14 @@
 // Forget a library with pending changes (owner decision 8, #584 §4), through
 // S7c (#581)'s forget-hook contract. Forget forgets everything that makes
-// sense after the warning: the library's unwritten changes, its Shikimori
-// pushes, and the unpushed review-screen choices for conflicts it was part of.
-// It never touches the drive, and running it again is a no-op.
+// sense after the warning: the library's unwritten changes, its pushes to the
+// owner's tracker, and the unpushed review-screen choices for conflicts it was
+// part of. It never touches the drive, and running it again is a no-op.
+//
+// Every owner is `(provider, userId)` (#715): the pending store lists both
+// file forms, each owner reverts through its own tracker, and the library's
+// party leaves every conflicts file.
 
 import { FIELD_TABLE } from '../../lib/sync-state/field-table'
-import { projectSyncDoc } from '../../lib/sync-state/project'
-import type { EpisodeFileIdentity } from '../../lib/sync-state/skip'
 import type { SyncBaseStore } from '../../lib/sync-state/bases'
 import { merge3 } from '../../lib/sync-merge/merge3'
 import { dropLibraryParty } from '../../lib/sync-merge/conflicts'
@@ -22,7 +24,7 @@ import type { StorageService } from '../../store/types'
 import type { AttachedLibraryService, ForgetHook } from '../attached-library'
 import type { TrackerSyncService } from '../trackers/sync'
 import type { ConflictStore } from './conflicts'
-import type { PendingField, PendingRates, PendingStore } from './pending'
+import type { PendingField, PendingOwner, PendingStore } from './pending'
 
 export interface ForgetHookDeps {
   store: StorageService
@@ -33,23 +35,17 @@ export interface ForgetHookDeps {
   pending: PendingStore
   conflicts: ConflictStore
   attached: Pick<AttachedLibraryService, 'get'>
+  /** Reverts an owner's dropped fields through that owner's tracker (#715). */
   revertFields(
-    ownerId: number,
+    owner: PendingOwner,
     dropped: { malId: number; field: SyncRateField; p: PendingField }[],
     opts?: { keep?: ReadonlySet<string> }
   ): Promise<void>
-  pendingRatesFor(
-    ownerId: number,
-    rates: PendingRates
-  ): (
-    owner: number,
-    malId: number
-  ) => Partial<Record<SyncRateField, SyncRateFieldClock>> | undefined
-  resolveEpisodeFile(
-    animeId: string,
-    episodeInt: string,
-    filePath: string
-  ): EpisodeFileIdentity | null
+  /**
+   * This PC's projection of `scope` through the library owner's tracker, with
+   * its pending overlay while this PC is signed in as that owner (#715).
+   */
+  projectLibrary(libraryId: string, scope: string[]): Promise<SyncDoc>
   now?: () => number
 }
 
@@ -63,8 +59,8 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
     let libraryChanges = 0
     let resolutions = 0
     const resolutionMalFields = new Set<string>()
-    for (const ownerId of await deps.pending.owners()) {
-      const rates = await deps.pending.load(ownerId)
+    for (const owner of await deps.pending.owners()) {
+      const rates = await deps.pending.load(owner)
       for (const [malId, fields] of Object.entries(rates)) {
         for (const [f, p] of Object.entries(fields ?? {})) {
           if (!p || !provenanceNames(p.provenance, libraryId)) continue
@@ -80,12 +76,7 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
     const lib = deps.attached.get(libraryId)
     if (base && lib) {
       const scope = lib.titles.map((t) => String(t.animeId))
-      const userId = store.get<{ id?: number } | null>('shikimoriUser')?.id ?? null
-      const ownerRates = userId !== null ? await deps.pending.load(userId) : {}
-      const local = projectSyncDoc(store, scope, {
-        resolveEpisodeFile: deps.resolveEpisodeFile,
-        pendingRates: userId !== null ? deps.pendingRatesFor(userId, ownerRates) : undefined
-      })
+      const local = await deps.projectLibrary(libraryId, scope)
       const diff = merge3(base.doc, local, base.doc, FIELD_TABLE, { now: now(), scope }).changesB
       for (const p of diff) {
         const m = /^titles\.([^.]+)\.rate\.(\w+)$/.exec(p)
@@ -94,8 +85,11 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
         libraryChanges++
       }
     }
+    // The library's party in every conflicts file (#715).
     const party = `library:${libraryId}`
-    libraryChanges += (await deps.conflicts.read()).filter((r) => party in r.parties).length
+    for (const { records } of await deps.conflicts.readAll()) {
+      libraryChanges += records.filter((r) => party in r.parties).length
+    }
     return { libraryChanges, resolutions }
   }
 
@@ -128,22 +122,28 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
       for (const t of deps.trackers) {
         await t.withQueueLock(async () => {
           const keep = stripTracker(t.keys, libraryId)
-          // The pending store and its owner revert are Shikimori's.
-          if (t.trackerId === 'shikimori') await revertOwner(libraryId, keep)
+          // Each tracker's own owners' pending fields revert through it (#715).
+          await revertOwners(t.trackerId, libraryId, keep)
         })
       }
       await deps.bases.remove(`library-${libraryId}`)
-      const records = await deps.conflicts.read()
-      const next = dropLibraryParty(records, libraryId)
-      if (next.length !== records.length || JSON.stringify(next) !== JSON.stringify(records)) {
-        await deps.conflicts.write(next)
+      for (const { provider, records } of await deps.conflicts.readAll()) {
+        const next = dropLibraryParty(records, libraryId)
+        if (next.length !== records.length || JSON.stringify(next) !== JSON.stringify(records)) {
+          await deps.conflicts.write(provider, next)
+        }
       }
     })
   }
 
-  async function revertOwner(libraryId: string, keep: ReadonlySet<string>): Promise<void> {
-    for (const ownerId of await deps.pending.owners()) {
-      const rates = await deps.pending.load(ownerId)
+  async function revertOwners(
+    tracker: TrackerId,
+    libraryId: string,
+    keep: ReadonlySet<string>
+  ): Promise<void> {
+    for (const owner of await deps.pending.owners()) {
+      if (owner.provider !== tracker) continue
+      const rates = await deps.pending.load(owner)
       const dropped: { malId: number; field: SyncRateField; p: PendingField }[] = []
       for (const [malId, fields] of Object.entries(rates)) {
         for (const [f, p] of Object.entries(fields ?? {}) as [SyncRateField, PendingField][]) {
@@ -153,8 +153,8 @@ export function createForgetHook(deps: ForgetHookDeps): ForgetHook {
         }
       }
       if (dropped.length === 0) continue
-      await deps.pending.save(ownerId, rates)
-      await deps.revertFields(ownerId, dropped, { keep })
+      await deps.pending.save(owner, rates)
+      await deps.revertFields(owner, dropped, { keep })
     }
   }
 

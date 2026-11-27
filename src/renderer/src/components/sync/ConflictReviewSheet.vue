@@ -44,6 +44,13 @@ const groups = computed(() => {
   return out;
 });
 
+// The trackers the held conflicts go to (#715): each record's owner's tracker.
+const trackerNames = computed(() => {
+  const ids = [...new Set(conflicts.value.map((c) => c.tracker ?? 'shikimori'))];
+  const names = (ids.length > 0 ? ids : (['shikimori'] as const)).map((id) => TRACKER_LABELS[id]);
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+});
+
 const pickedCount = computed(
   () => Object.keys(picked.value).filter((id) => conflicts.value.some((c) => c.id === id)).length
 );
@@ -97,8 +104,8 @@ async function applyPicked(): Promise<void> {
         Needs your input ({{ conflicts.length }})
       </div>
       <p class="sl-muted">
-        Applied here, on each connected library and on {{ TRACKER_LABELS.shikimori }}. You can
-        change any of these later from the title page.
+        Applied here, on each connected library and on {{ trackerNames }}. You can change any of
+        these later from the title page.
       </p>
       <p v-if="conflicts.length === 0" class="sl-text" data-testid="review-empty">
         Nothing needs your input.

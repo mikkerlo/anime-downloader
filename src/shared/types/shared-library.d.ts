@@ -176,7 +176,7 @@ interface SharedLibraryActor {
   appVersion: string
   shikimoriUserId: number | null
   // A v1 claim names a v1 (Shikimori) owner, a v2 claim (#714) a v2 owner by
-  // `(provider, userId)`. The writer matches only a v1 claim until #715.
+  // `(provider, userId)`, matched through the owner key (#715).
   claim: SharedLibraryActorClaim | null
   // The accounts that match a v2 owner (#713): every connected account (#714),
   // Shikimori's included, so a hand-written v2 `provider: 'shikimori'` owner
@@ -655,7 +655,7 @@ interface ExportPlan {
   canExportMetadata: boolean
   /** `defaultOwner`'s nickname, for the default library name; null with no owner. */
   nickname: string | null
-  /** The accounts the owner picker offers (#714): Shikimori only until #715. */
+  /** The accounts the owner picker offers (#714): every connected tracker account (#715). */
   owners: ExportOwnerOption[]
   /** The primary when it is offered, else the first offered owner; null with none (#714). */
   defaultOwner: TrackerId | null

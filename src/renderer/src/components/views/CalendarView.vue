@@ -4,10 +4,13 @@ import { storeToRefs } from 'pinia';
 import OfflineNotice from '../shared/OfflineNotice.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
+import { useTrackersStore } from '../../stores/trackers';
 import { formatAgo } from '../../utils';
 
 const libraryStore = useLibraryStore();
 const { isOffline } = storeToRefs(useOfflineStore());
+const trackersStore = useTrackersStore();
+const { accountsLoaded, connected } = storeToRefs(trackersStore);
 
 const entries = ref<CalendarEntry[]>([]);
 // From main's snapshot (#568): `stale` when served offline or after a failed
@@ -164,19 +167,35 @@ function statusLabel(s: string): string {
   return s;
 }
 
+// The accounts state's first read settles `featureSource` (#709).
+function accountsReady(): Promise<void> {
+  if (accountsLoaded.value) return Promise.resolve();
+  return new Promise((resolve) => {
+    const stop = watch(accountsLoaded, (ready) => {
+      if (!ready) return;
+      stop();
+      resolve();
+    });
+  });
+}
+
 async function load(force = false): Promise<void> {
   await loadViewSetting();
-  const user = await window.api.shikimoriGetUser();
-  if (!user) {
+  await accountsReady();
+  // The resolved `calendar` source (#709): AniList or Shikimori. MyAnimeList
+  // has no airing schedule, so a MAL-only account has none.
+  if (trackersStore.featureSource('calendar') === null) {
     entries.value = [];
-    error.value = 'Connect to Shikimori in Settings → Trackers to see the calendar.';
+    error.value = connected.value.includes('mal')
+      ? 'The calendar needs AniList or Shikimori — MyAnimeList has no airing schedule.'
+      : 'Connect to Shikimori in Settings → Trackers to see the calendar.';
     return;
   }
   loading.value = true;
   error.value = '';
   try {
     now.value = new Date();
-    const res = await window.api.shikimoriGetCalendar(force);
+    const res = await window.api.trackerGetCalendar(force);
     entries.value = res.data;
     fetchedAt.value = res.fetchedAt;
     stale.value = res.stale;

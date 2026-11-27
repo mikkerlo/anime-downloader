@@ -8,9 +8,12 @@ import OfflineNotice from '../../../src/renderer/src/components/shared/OfflineNo
 import SearchView from '../../../src/renderer/src/components/views/SearchView.vue'
 import CalendarView from '../../../src/renderer/src/components/views/CalendarView.vue'
 import { offlineApi, type OfflineApi } from '../../helpers/offline-api'
+import { trackersApi } from '../../helpers/trackers-api'
 
 function install(offline: OfflineApi): OfflineApi {
   const target: Record<string, unknown> = {
+    // CalendarView reads the `calendar` source from the trackers store (#709).
+    ...trackersApi().api,
     ...offline.api,
     offlineSetManual: vi.fn(offline.api.offlineSetManual),
     offlineRetry: vi.fn(offline.api.offlineRetry),

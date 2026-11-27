@@ -1,5 +1,3 @@
-import * as fs from 'fs'
-import * as path from 'path'
 import * as shikimori from '../../shikimori'
 import { isNetworkError } from '../../lib/errors'
 import type { StorageService } from '../../store/types'
@@ -7,6 +5,11 @@ import type { CachedRateEntry } from '../../lib/shikimori-rate-cache'
 import type { AnimeSearchResult } from '../../smotret-api'
 import { SHIKIMORI_KEYS } from '../../trackers/keys'
 import { createShikimoriProvider } from '../../trackers/shikimori.provider'
+import {
+  createDisplaySnapshots,
+  type CalendarSnapshot,
+  type SnapshotRecord
+} from '../../trackers/display-snapshots'
 import {
   createTrackerSyncService,
   type TrackerDrainStatus,
@@ -35,28 +38,12 @@ export interface CalendarEntry {
 
 // Display snapshots (#568), each kept for the Shikimori user it was fetched
 // for: a mismatch reads as no snapshot. Offline they are served whatever their
-// age. They persist to `snapshotsPath` (#570), never to `config.json`.
-export interface CachedCalendar {
-  data: CalendarEntry[]
-  fetchedAt: number
-  userId: number | null
-  /** Set by `invalidateCalendarCache()`: online a miss, offline still served. */
-  invalidated: boolean
-}
+// age. They persist to `snapshotsPath` (#570), never to `config.json`, through
+// the shared helper (`trackers/display-snapshots.ts`, #709).
+/** `invalidated` is set by `invalidateCalendarCache()`: online a miss, offline still served. */
+export type CachedCalendar = CalendarSnapshot<CalendarEntry>
 
-export interface CachedFriendsActivity {
-  data: ShikiFriendActivityEntry[]
-  fetchedAt: number
-  userId: number | null
-}
-
-/** `userData/shikimori-snapshots.json`: one signed-in user's snapshots. */
-interface SnapshotsFile {
-  version: 1
-  userId: number
-  calendar?: { data: CalendarEntry[]; fetchedAt: number }
-  friendsActivity?: { data: ShikiFriendActivityEntry[]; fetchedAt: number }
-}
+export type CachedFriendsActivity = SnapshotRecord<ShikiFriendActivityEntry[]>
 
 const PREFETCH_INTER_REQUEST_MS = 2000
 const PREFETCH_STALENESS_MS = 30 * 24 * 60 * 60 * 1000
@@ -199,12 +186,25 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   // once a prefetch run has widened the cached-details coverage.
   let onDetailsPrefetched: (() => void) | undefined
 
-  let calendarCache: CachedCalendar | null = null
-  let friendsActivityCache: CachedFriendsActivity | null = null
-
   function currentUserId(): number | undefined {
     return (store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id
   }
+
+  // A loaded calendar starts invalidated: online the first open refetches,
+  // offline it is served stale.
+  const snapshots = createDisplaySnapshots<{
+    calendar: CachedCalendar
+    friendsActivity: CachedFriendsActivity
+  }>({
+    path: deps.snapshotsPath,
+    sections: ['calendar', 'friendsActivity'],
+    currentUserId,
+    label: '[shikimori]',
+    revive: {
+      calendar: (stored, userId) => ({ ...stored, userId, invalidated: true }),
+      friendsActivity: (stored, userId) => ({ ...stored, userId })
+    }
+  })
 
   function getStaleOrMissingMalIds(): number[] {
     const rates = store.get('shikimoriUserRates') as {
@@ -350,16 +350,8 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     prefetchAbort = true
   }
 
-  function isCurrentUser(userId: number | null): boolean {
-    return userId === (currentUserId() ?? null)
-  }
-
-  function ownSnapshot<T extends { userId: number | null }>(snapshot: T | null): T | null {
-    return snapshot && isCurrentUser(snapshot.userId) ? snapshot : null
-  }
-
   function invalidateCalendarCache(): void {
-    if (calendarCache) calendarCache = { ...calendarCache, invalidated: true }
+    snapshots.update('calendar', (c) => ({ ...c, invalidated: true }))
   }
 
   // A rate change shifts the taste signal, so the cached feed is stale. Clear it
@@ -370,7 +362,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   }
 
   function getCachedCalendar(): CachedCalendar | null {
-    return ownSnapshot(calendarCache)
+    return snapshots.get('calendar')
   }
 
   function setCachedCalendar(
@@ -379,15 +371,12 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
   ): CachedCalendar {
     const snapshot: CachedCalendar = { data, fetchedAt: Date.now(), userId, invalidated: false }
     // A fetch that outlived an account switch must not evict the new user's snapshot.
-    if (isCurrentUser(userId)) {
-      calendarCache = snapshot
-      persistSnapshots(userId)
-    }
+    snapshots.put('calendar', snapshot)
     return snapshot
   }
 
   function getCachedFriendsActivity(): CachedFriendsActivity | null {
-    return ownSnapshot(friendsActivityCache)
+    return snapshots.get('friendsActivity')
   }
 
   function setCachedFriendsActivity(
@@ -395,97 +384,13 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     data: ShikiFriendActivityEntry[]
   ): CachedFriendsActivity {
     const snapshot: CachedFriendsActivity = { data, fetchedAt: Date.now(), userId }
-    if (isCurrentUser(userId)) {
-      friendsActivityCache = snapshot
-      persistSnapshots(userId)
-    }
+    snapshots.put('friendsActivity', snapshot)
     return snapshot
   }
 
   function clearOfflineSnapshots(): void {
-    calendarCache = null
-    friendsActivityCache = null
-    deleteSnapshotsFile()
+    snapshots.clear()
   }
-
-  function deleteSnapshotsFile(): void {
-    if (!deps.snapshotsPath) return
-    try {
-      fs.rmSync(deps.snapshotsPath, { force: true })
-    } catch (err) {
-      console.warn('[shikimori] could not delete the offline snapshots:', err)
-    }
-  }
-
-  // Tmp + rename, so a crash mid-write leaves the previous file whole.
-  function persistSnapshots(userId: number | null): void {
-    const file = deps.snapshotsPath
-    if (!file || userId === null) return
-    const body: SnapshotsFile = { version: 1, userId }
-    if (calendarCache?.userId === userId) {
-      body.calendar = { data: calendarCache.data, fetchedAt: calendarCache.fetchedAt }
-    }
-    if (friendsActivityCache?.userId === userId) {
-      body.friendsActivity = {
-        data: friendsActivityCache.data,
-        fetchedAt: friendsActivityCache.fetchedAt
-      }
-    }
-    const tmp = `${file}.tmp`
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(tmp, JSON.stringify(body))
-      fs.renameSync(tmp, file)
-    } catch (err) {
-      console.warn('[shikimori] could not persist the offline snapshots:', err)
-    }
-  }
-
-  // Kept only for the signed-in user; anything else is deleted. A loaded
-  // calendar starts invalidated: online the first open refetches, offline it
-  // is served stale.
-  function loadSnapshots(): void {
-    const file = deps.snapshotsPath
-    if (!file) return
-    let parsed: Partial<SnapshotsFile> | null = null
-    try {
-      parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<SnapshotsFile>
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
-    }
-    const userId = currentUserId()
-    if (
-      !parsed ||
-      parsed.version !== 1 ||
-      typeof parsed.userId !== 'number' ||
-      parsed.userId !== userId
-    ) {
-      deleteSnapshotsFile()
-      return
-    }
-    const { calendar, friendsActivity } = parsed
-    if (calendar && Array.isArray(calendar.data) && typeof calendar.fetchedAt === 'number') {
-      calendarCache = {
-        data: calendar.data,
-        fetchedAt: calendar.fetchedAt,
-        userId,
-        invalidated: true
-      }
-    }
-    if (
-      friendsActivity &&
-      Array.isArray(friendsActivity.data) &&
-      typeof friendsActivity.fetchedAt === 'number'
-    ) {
-      friendsActivityCache = {
-        data: friendsActivity.data,
-        fetchedAt: friendsActivity.fetchedAt,
-        userId
-      }
-    }
-  }
-
-  loadSnapshots()
 
   return {
     getQueueLength: sync.getQueueLength,

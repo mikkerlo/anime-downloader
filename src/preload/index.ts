@@ -505,6 +505,9 @@ const api = {
   onTrackerOfflineQueueChanged: subscribe<TrackerOfflineQueueChangedEvent>(
     EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
   ),
+  // The calendar from the resolved `calendar` source (#709).
+  trackerGetCalendar: (force = false) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_CALENDAR, force) as Promise<TrackerCalendarResult>,
   // Details (#706): `trackerId` defaults to the `details` source.
   trackerGetDetails: (malId: number, trackerId?: TrackerId) =>
     ipcRenderer.invoke(

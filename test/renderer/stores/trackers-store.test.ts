@@ -25,6 +25,7 @@ let listeners: {
   syncStatus: Listener<TrackerSyncStatusEvent>[]
   queueChanged: Listener<TrackerOfflineQueueChangedEvent>[]
   accountsChanged: Listener<TrackerAccountsState>[]
+  detailsUpdated: Listener<TrackerDetailsUpdatedEvent>[]
 }
 
 let api: {
@@ -118,7 +119,8 @@ function installApi(opts: {
     ratesRefreshed: [],
     syncStatus: [],
     queueChanged: [],
-    accountsChanged: []
+    accountsChanged: [],
+    detailsUpdated: []
   }
   api = {
     trackerListAccounts: vi.fn(async () => opts.accounts ?? accountsState([])),
@@ -143,7 +145,8 @@ function installApi(opts: {
       onTrackerRatesRefreshed: sub(listeners.ratesRefreshed),
       onTrackerSyncStatus: sub(listeners.syncStatus),
       onTrackerOfflineQueueChanged: sub(listeners.queueChanged),
-      onTrackerAccountsChanged: sub(listeners.accountsChanged)
+      onTrackerAccountsChanged: sub(listeners.accountsChanged),
+      onTrackerDetailsUpdated: sub(listeners.detailsUpdated)
     }
   }
 }
@@ -153,7 +156,8 @@ const emit = {
   ratesRefreshed: (e: TrackerRatesRefreshedEvent) => listeners.ratesRefreshed.forEach((l) => l(e)),
   syncStatus: (e: TrackerSyncStatusEvent) => listeners.syncStatus.forEach((l) => l(e)),
   queueChanged: (e: TrackerOfflineQueueChangedEvent) => listeners.queueChanged.forEach((l) => l(e)),
-  accountsChanged: (e: TrackerAccountsState) => listeners.accountsChanged.forEach((l) => l(e))
+  accountsChanged: (e: TrackerAccountsState) => listeners.accountsChanged.forEach((l) => l(e)),
+  detailsUpdated: (e: TrackerDetailsUpdatedEvent) => listeners.detailsUpdated.forEach((l) => l(e))
 }
 
 async function makeStore(): Promise<ReturnType<typeof useTrackersStore>> {
@@ -822,5 +826,58 @@ describe('useTrackersStore — held-title rate state', () => {
     emit.rateUpdated({ trackerId: 'shikimori', entry: entry('shikimori', 42, 6) })
     await flush()
     expect(getRateCalls()).toEqual([['shikimori', 42]])
+  })
+})
+
+describe('useTrackersStore — feature sources and details (#706)', () => {
+  const D = (description: string): TrackerDetails => ({
+    description,
+    genres: [],
+    status: 'ongoing',
+    episodes: 12,
+    episodesAired: 6,
+    kind: 'tv'
+  })
+
+  it('a tracker:details-updated event upserts detailsFor(trackerId, malId) without touching other trackers', async () => {
+    const store = await makeStore()
+    emit.detailsUpdated({ trackerId: 'mal', malId: 1, details: D('mal 1') })
+    emit.detailsUpdated({ trackerId: 'anilist', malId: 1, details: D('anilist 1') })
+    emit.detailsUpdated({ trackerId: 'anilist', malId: 2, details: D('anilist 2') })
+    emit.detailsUpdated({ trackerId: 'anilist', malId: 1, details: D('anilist 1 again') })
+    expect(store.detailsFor('anilist', 1)?.description).toBe('anilist 1 again')
+    expect(store.detailsFor('anilist', 2)?.description).toBe('anilist 2')
+    expect(store.detailsFor('mal', 1)?.description).toBe('mal 1')
+    expect(store.detailsFor('shikimori', 1)).toBeNull()
+    expect(store.detailsFor('mal', 2)).toBeNull()
+  })
+
+  it('featureSource resolves over the store state: override, primary, then the fixed order', async () => {
+    const all = [account('shikimori', 1), account('anilist', 2), account('mal', 3)]
+    installApi({
+      accounts: { ...accountsState(all, 'mal'), featureSources: { details: 'anilist' } }
+    })
+    const store = await makeStore()
+    expect(store.featureSource('details')).toBe('anilist')
+    expect(store.featureSource('chronology')).toBe('mal')
+    expect(store.featureSource('airing')).toBe('shikimori')
+    expect(store.canAutoDl).toBe(true)
+  })
+
+  it('canAutoDl: an expired session keeps its source; MAL-only and no account resolve null', async () => {
+    installApi({ accounts: accountsState([account('shikimori', 1, { hasCredentials: false })]) })
+    const expired = await makeStore()
+    expect(expired.featureSource('airing')).toBe('shikimori')
+    expect(expired.canAutoDl).toBe(true)
+
+    installApi({ accounts: accountsState([account('mal', 3)]) })
+    const malOnly = await makeStore()
+    expect(malOnly.anyAccount).toBe(true)
+    expect(malOnly.featureSource('airing')).toBeNull()
+    expect(malOnly.canAutoDl).toBe(false)
+
+    installApi({})
+    const none = await makeStore()
+    expect(none.canAutoDl).toBe(false)
   })
 })

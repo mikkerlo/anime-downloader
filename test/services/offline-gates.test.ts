@@ -39,7 +39,8 @@ describe('auto-download ticks', () => {
   async function boot(): Promise<{
     autoDl: typeof import('../../src/main/auto-downloader')
     smotret: ReturnType<typeof makeSmotretApiStub>
-    refresh: Mock
+    /** The `airing` dep's read (#706): the tick's only path to the network for an aired count. */
+    getAiringInfo: Mock
     dlMgr: ReturnType<typeof makeDownloadManagerStub>
   }> {
     vi.resetModules()
@@ -62,27 +63,26 @@ describe('auto-download ticks', () => {
     })
     const smotret = makeSmotretApiStub()
     const dlMgr = makeDownloadManagerStub()
-    const refresh = vi.fn(async () => null)
+    const getAiringInfo = vi.fn(async () => null)
     const autoDl = await import('../../src/main/auto-downloader')
     autoDl.initAutoDownloader({
       store: h.store as never,
       smotretApi: smotret as never,
       downloadManager: dlMgr as never,
       broadcast: h.broadcast,
-      isShikimoriLoggedIn: () => true,
-      refreshShikimoriDetails: refresh,
+      airing: { source: () => 'shikimori', hasCredentials: () => true, getAiringInfo },
       isOffline
     })
-    return { autoDl, smotret, refresh, dlMgr }
+    return { autoDl, smotret, getAiringInfo, dlMgr }
   }
 
   it.each(['startup', 'timer', 'manual'] as const)(
     'a %s tick returns before touching the network',
     async (reason) => {
-      const { autoDl, smotret, refresh, dlMgr } = await boot()
+      const { autoDl, smotret, getAiringInfo, dlMgr } = await boot()
       const result = await autoDl.runAutoDownloadTick(reason)
       expect(result.enqueued).toBe(0)
-      expect(refresh).not.toHaveBeenCalled()
+      expect(getAiringInfo).not.toHaveBeenCalled()
       expect(smotret.getAnime).not.toHaveBeenCalled()
       expect(dlMgr.enqueue).not.toHaveBeenCalled()
       expect(fetchSpy).not.toHaveBeenCalled()
@@ -90,19 +90,19 @@ describe('auto-download ticks', () => {
   )
 
   it('an offline tick does not take the re-entrancy lock, so the next online tick runs', async () => {
-    const { autoDl, refresh } = await boot()
+    const { autoDl, getAiringInfo } = await boot()
     await autoDl.runAutoDownloadTick('timer')
     offline = false
     await autoDl.runAutoDownloadTick('timer')
-    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(getAiringInfo).toHaveBeenCalledTimes(1)
   })
 
   it('the 15-minute timer ticks make no network call while offline', async () => {
     vi.useFakeTimers()
-    const { autoDl, refresh } = await boot()
+    const { autoDl, getAiringInfo } = await boot()
     autoDl.startAutoDownloaderTimer()
     await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
-    expect(refresh).not.toHaveBeenCalled()
+    expect(getAiringInfo).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

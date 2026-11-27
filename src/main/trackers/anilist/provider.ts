@@ -203,6 +203,48 @@ export function episodesAiredOf(media: AniListMedia | null | undefined): number 
   return 0
 }
 
+/** AniList's `MediaStatus` in Shikimori's words (#706); a status with none is unknown. */
+const STATUS_WORDS: Readonly<Record<string, TrackerDetails['status']>> = {
+  FINISHED: 'released',
+  RELEASING: 'ongoing',
+  HIATUS: 'ongoing',
+  NOT_YET_RELEASED: 'anons'
+}
+
+/** `description(asHtml: false)` still carries `<br>` and `<i>`: plain text, or null. */
+export function plainDescription(text: string | null | undefined): string | null {
+  if (!text) return null
+  // Until nothing changes, so a tag spliced from two halves goes too. The
+  // renderer shows it as text either way.
+  let stripped = text.replace(/<br\s*\/?>/gi, '\n')
+  let prev: string
+  do {
+    prev = stripped
+    stripped = stripped.replace(/<[^>]*>/g, '')
+  } while (stripped !== prev)
+  const plain = stripped
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return plain || null
+}
+
+/** An `anilistAnimeDetails` entry as `tracker:get-details` returns it (#706). */
+export function trackerDetailsOf(d: Omit<AniListDetails, 'at' | 'anilistId'>): TrackerDetails {
+  return {
+    description: plainDescription(d.description),
+    genres: d.genres ?? [],
+    status: (d.status && STATUS_WORDS[d.status]) || null,
+    episodes: d.episodes ?? null,
+    episodesAired: d.episodesAired ?? null,
+    kind: d.kind ? d.kind.toLowerCase() : null
+  }
+}
+
 export function titleOf(media: AniListMedia | null | undefined): string {
   return media?.title?.english || media?.title?.romaji || ''
 }
@@ -258,6 +300,11 @@ export interface AniListProviderDeps {
    * and calls `notifyAccountsChanged()` (#696 § 6).
    */
   onSessionExpired?: () => void
+  /**
+   * After each `anilistAnimeDetails` write, with the entry normalized (#706):
+   * `index.ts` passes the sync instance's `broadcastDetails`.
+   */
+  onDetailsWritten?: (malId: number, details: TrackerDetails) => void
   now?: () => number
   log?: Pick<Console, 'log' | 'warn'>
   /** The rewatch shift; tests run a non-zero one. */
@@ -306,6 +353,11 @@ export interface AniListProvider extends TrackerSyncProvider<
   getFriendsActivity(session: AniListSession): Promise<unknown[]>
   /** The list titles' details, in batches of 50 at `prefetch`. Never beyond the list (ToU). */
   prefetchDetails(): Promise<void>
+  /**
+   * A `tracker:get-details` miss (#706): joins the running prefetch, else starts
+   * one; nothing for a title not on the list.
+   */
+  requestPrefetch(malId: number): Promise<void>
   /** Aborts a running prefetch; its queued requests leave the limiter. */
   abortPrefetch(): void
   /** `refreshRates` wrote `anilistUserRates`: the list cache's age for `getAiringInfo`. */
@@ -600,6 +652,12 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     } catch (err) {
       // "Not found" comes through `errors`: the drain takes its create branch.
       if (isNotFound(err)) return null
+      // A refused token (a 400 or 401 `Invalid token`, an `errors[].status`
+      // 401, the limiter's dead-token rejection) is the session gone, so
+      // `tracker:get-rate` and the cold-cache read answer as they do once the
+      // credential is cleared (#740). `onTokenRejected` clears it on its own.
+      if (classifyAnilistError(err) === 'auth')
+        throw new AniListSessionError(undefined, { cause: err })
       throw err
     }
     return data?.MediaList ? toEntry(ref.malId, data.MediaList) : null
@@ -769,15 +827,42 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     }
     const fetched = (await fetchDetails([malId], 'interactive')).get(malId)
     if (!fetched) return null
+    const { anilistId: _id, ...details } = fetched
     // Stored for a list title only (ToU clauses 2 and 3).
     if (cachedRows().some((r) => malIdOfRow(r) === malId)) {
       store.set(DETAILS_KEY, { ...detailsStore(), [String(malId)]: { ...fetched, at: now() } })
+      deps.onDetailsWritten?.(malId, trackerDetailsOf(details))
     }
-    const { anilistId: _id, ...details } = fetched
     return details
   }
 
-  async function prefetchDetails(): Promise<void> {
+  function cachedDetails(malId: number): TrackerDetails | null {
+    const cached = detailsStore()[String(malId)]
+    return cached ? trackerDetailsOf(cached) : null
+  }
+
+  // The prefetch in flight, which a `tracker:get-details` miss joins (#706).
+  let prefetchRun: Promise<void> | null = null
+
+  function prefetchDetails(): Promise<void> {
+    const run = walkDetails()
+    prefetchRun = run
+    const clear = (): void => {
+      if (prefetchRun === run) prefetchRun = null
+    }
+    run.then(clear, clear)
+    return run
+  }
+
+  // A details miss (#706): nothing for a title off the list, which the
+  // prefetch never fetches (ToU); the running prefetch if there is one, so a
+  // miss never restarts it (Prepare-offline awaits it); else a new one.
+  function requestPrefetch(malId: number): Promise<void> {
+    if (!cachedRows().some((r) => malIdOfRow(r) === malId)) return Promise.resolve()
+    return prefetchRun ?? prefetchDetails()
+  }
+
+  async function walkDetails(): Promise<void> {
     if (deps.isOffline?.()) return
     prefetchController?.abort()
     const controller = new AbortController()
@@ -802,6 +887,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
         const next = { ...detailsStore() }
         for (const [malId, d] of fetched) next[String(malId)] = { ...d, at }
         store.set(DETAILS_KEY, next)
+        for (const [malId, d] of fetched) deps.onDetailsWritten?.(malId, trackerDetailsOf(d))
       }
     } finally {
       if (prefetchController === controller) prefetchController = null
@@ -953,6 +1039,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     resolveRef,
     getAiringInfo,
     getDetails,
+    cachedDetails,
     getCalendar,
     getRelated,
     getRelatedBatch,
@@ -960,6 +1047,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     getFriendsRates,
     getFriendsActivity,
     prefetchDetails,
+    requestPrefetch,
     abortPrefetch: () => prefetchController?.abort(),
     markRatesFetched: () => void (ratesFetched = now()),
     ratesFetchedAt: () => ratesFetched,

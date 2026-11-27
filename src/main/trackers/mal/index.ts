@@ -20,7 +20,7 @@ import {
   createMalProvider,
   type MalCachedRow,
   type MalListStatus,
-  type MalProvider
+  type MalProviderWithDetails
 } from './provider'
 import { createMalSetup, type MalSetup } from './setup'
 
@@ -41,6 +41,11 @@ export interface MalTrackerDeps {
   /** `malLoopbackPort(process.env, app.isPackaged)`. */
   port: number
   lookupByMalIds?: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
+  /**
+   * `tracker:details-updated` (#706): every `myanimelistAnimeDetails` write is
+   * broadcast on it. A `tracker:get-details` miss kicks the on-demand fetch.
+   */
+  detailsUpdatedChannel?: string
   /** Tests pass one with no spacing. */
   client?: MalClient
   timeoutMs?: number
@@ -49,7 +54,7 @@ export interface MalTrackerDeps {
 export interface MalTracker {
   client: MalClient
   auth: MalAuth
-  provider: MalProvider
+  provider: MalProviderWithDetails
   sync: TrackerSyncService<MalListStatus, MalCachedRow>
   setup: MalSetup
   /** Sets MAL's primary branch on the fan-out (`setPrimaryWriter('mal', …)`). */
@@ -82,7 +87,9 @@ export function createMalTracker(deps: MalTrackerDeps): MalTracker {
     client,
     auth,
     generation: deps.generation,
-    lookupByMalIds: deps.lookupByMalIds
+    lookupByMalIds: deps.lookupByMalIds,
+    // Each details-cache write goes out on `tracker:details-updated` (#706).
+    onDetailsWritten: (malId, details) => sync.broadcastDetails(malId, details)
   })
   const sync: TrackerSyncService<MalListStatus, MalCachedRow> = createTrackerSyncService(
     provider,
@@ -102,7 +109,14 @@ export function createMalTracker(deps: MalTrackerDeps): MalTracker {
       ratesRefreshedChannel: deps.channels.ratesRefreshed,
       isOffline: deps.isOffline,
       // "Needs setup" is on the sync status and the accounts state: both go out.
-      onNeedsSetupChanged: accountStateChanged
+      onNeedsSetupChanged: accountStateChanged,
+      // The details read (#706). No `onRatesRefreshed`: MAL has no
+      // `getAiringInfo`, so it can never be the `airing` source.
+      detailsUpdatedChannel: deps.detailsUpdatedChannel,
+      prefetchDetails: (malId) =>
+        void provider
+          .requestPrefetch(malId)
+          .catch((err) => console.warn('[mal] details fetch failed:', err))
     }
   )
   const setup = createMalSetup({ store, client, auth })

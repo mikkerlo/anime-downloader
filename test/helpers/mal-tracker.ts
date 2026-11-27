@@ -87,7 +87,8 @@ export async function malTrackerRig(
     notifyAccountsChanged: () => lifecycle.notifyAccountsChanged(),
     queuedAfter: () => trackerRates.queuedAfter('mal'),
     port: 0,
-    client: createMalClient({ spacingMs: 0, sleep: async () => {} })
+    client: createMalClient({ spacingMs: 0, sleep: async () => {} }),
+    detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
   })
   const fan = createTrackerFanOut({
     store,

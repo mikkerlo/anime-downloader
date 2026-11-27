@@ -16,8 +16,10 @@
 // - A primary switch drops the form's edits and reloads from the new primary.
 //
 // Still Shikimori-only, as before: the Shikimori user read (`shikiUser`,
-// `shikiUserChecked`), the friends' rates (#712 moves them) and the details
-// (#706 moves them). Each is one block below.
+// `shikiUserChecked`), the friends' rates (#712 moves them) and Shikimori's
+// details. A non-Shikimori `details` / `airing` source's details are read
+// through `tracker:get-details` and the trackers store (#706). Each is one
+// block below.
 //
 // Lifecycle hooks are NOT registered here: the component calls
 // loadTrackerData() from its own onMounted. The watchers bind to the caller's
@@ -45,6 +47,11 @@ export function useTrackerRate(deps: {
   shikimoriStore: ReturnType<typeof useShikimoriStore>
   trackersStore: ReturnType<typeof useTrackersStore>
 }): {
+  /**
+   * A non-Shikimori `details` or `airing` source's details (#706), or null for
+   * Shikimori, no source, or a miss not yet filled by `tracker:details-updated`.
+   */
+  trackerDetailsFor: (id: TrackerId | null) => TrackerDetails | null
   /** The last loaded, saved or live rate of the primary for this title. */
   rate: Ref<TrackerRateResult | null>
   /** The rate came from main's cached list (#570): offline, or the read failed. */
@@ -342,7 +349,68 @@ export function useTrackerRate(deps: {
     }
   )
 
+  // ---- A non-Shikimori `details` / `airing` source (#706) -------------------
+  // Read once per source from main's cache (`tracker:get-details`, which kicks
+  // the prefetch on a miss), then rewritten from the trackers store's
+  // `tracker:details-updated` entries, as the Shikimori watch above is. Keyed
+  // on the resolved sources as well as the MAL id, so a source switch reads
+  // the new tracker.
+  const trackerDetails = ref<Partial<Record<TrackerId, TrackerDetails>>>({})
+  const otherSources = computed<TrackerId[]>(() => {
+    const ids = new Set<TrackerId>()
+    for (const feature of ['details', 'airing'] as const) {
+      const id = trackers.featureSource(feature)
+      if (id && id !== 'shikimori') ids.add(id)
+    }
+    return [...ids]
+  })
+  let detailsMalId: number | null = null
+
+  watch(
+    () => [malIdOf() ?? null, otherSources.value.join(',')] as const,
+    ([malId]) => {
+      if (malId !== detailsMalId) {
+        detailsMalId = malId
+        trackerDetails.value = {}
+      }
+      if (!malId) return
+      for (const id of otherSources.value) {
+        if (trackerDetails.value[id]) continue
+        void window.api
+          .trackerGetDetails(malId, id)
+          .then((details) => {
+            // A newer broadcast, or another title, wins over this read.
+            if (!details || detailsMalId !== malId || trackerDetails.value[id]) return
+            trackerDetails.value = { ...trackerDetails.value, [id]: details }
+          })
+          .catch((err) => console.error('Failed to load tracker details:', err))
+      }
+    },
+    { immediate: true }
+  )
+
+  watch(
+    () => {
+      const malId = malIdOf()
+      if (!malId) return []
+      return otherSources.value.map((id) => [id, trackers.detailsFor(id, malId)] as const)
+    },
+    (entries) => {
+      for (const [id, details] of entries) {
+        if (details && trackerDetails.value[id] !== details) {
+          trackerDetails.value = { ...trackerDetails.value, [id]: details }
+        }
+      }
+    }
+  )
+
+  function trackerDetailsFor(id: TrackerId | null): TrackerDetails | null {
+    if (!id || id === 'shikimori') return null
+    return trackerDetails.value[id] ?? null
+  }
+
   return {
+    trackerDetailsFor,
     rate,
     rateStale,
     mediaId,

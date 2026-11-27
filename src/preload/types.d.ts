@@ -361,6 +361,9 @@ interface Api {
   onTrackerOfflineQueueChanged: (
     callback: (data: TrackerOfflineQueueChangedEvent) => void
   ) => Unsubscribe
+  // Details (#706)
+  trackerGetDetails: (malId: number, trackerId?: TrackerId) => Promise<TrackerDetails | null>
+  onTrackerDetailsUpdated: (callback: (data: TrackerDetailsUpdatedEvent) => void) => Unsubscribe
   // Accounts, auth and logout (#695)
   trackerListAccounts: () => Promise<TrackerAccountsState>
   trackerBeginAuth: (trackerId: TrackerId) => Promise<TrackerAuthResult>

@@ -8,42 +8,17 @@
 // write and no broadcast. `docs/trackers.md` § Primary, mirrors and feature
 // sources describes the rules.
 
+import { isCapable, isFeatureKey } from '@shared/trackers/feature-source'
 import type { StorageService } from '../../store/types'
 import type { TrackerLifecycle } from '../../trackers/lifecycle'
 import { isConnected } from '../../trackers/primary'
-import {
-  TRACKER_LABELS,
-  type TrackerCapabilities,
-  type TrackerCapability
-} from '../../trackers/types'
+import { TRACKER_LABELS } from '../../trackers/types'
 import type { TrackerFanOut } from './fan-out'
-
-/**
- * The capability each feature needs. #706 (T11a) or #701 (T5b), whichever
- * lands first, moves the setter's check onto the static matrix in
- * `src/shared/trackers/feature-source.ts`; until then it reads each
- * provider's own `TrackerCapabilities`.
- */
-export const FEATURE_CAPABILITY: Readonly<Record<TrackerFeature, TrackerCapability>> = {
-  calendar: 'getCalendar',
-  chronology: 'getRelated',
-  forYou: 'getRecommendations',
-  details: 'getDetails',
-  airing: 'getAiringInfo'
-}
-
-export const TRACKER_FEATURES = Object.keys(FEATURE_CAPABILITY) as readonly TrackerFeature[]
-
-export function isTrackerFeature(value: unknown): value is TrackerFeature {
-  return typeof value === 'string' && (TRACKER_FEATURES as readonly string[]).includes(value)
-}
 
 export interface TrackerChoicesDeps {
   store: StorageService
   trackers: Pick<TrackerFanOut, 'discardQueue' | 'mirrorQueueCount'>
   lifecycle: Pick<TrackerLifecycle, 'accountsState' | 'primary' | 'notifyAccountsChanged'>
-  /** Each landed provider, for its capabilities. A tracker missing here is capable of nothing. */
-  providers: Partial<Record<TrackerId, { capabilities: TrackerCapabilities }>>
   log?: Pick<Console, 'error'>
 }
 
@@ -62,7 +37,10 @@ export interface TrackerChoices {
     enabled: boolean,
     opts?: TrackerSetMirrorOptions
   ): Promise<TrackerSetMirrorResult>
-  /** Stores (or with null clears) an override. #706 resolves it. */
+  /**
+   * Stores (or with null clears) an override. Rejects a tracker the capability
+   * matrix says can't back the feature. `resolveFeatureSource` resolves it.
+   */
   setFeatureSource(feature: TrackerFeature, trackerId: TrackerId | null): TrackerAccountsState
 }
 
@@ -133,7 +111,7 @@ export function createTrackerChoices(deps: TrackerChoicesDeps): TrackerChoices {
   }
 
   function setFeatureSource(feature: TrackerFeature, id: TrackerId | null): TrackerAccountsState {
-    if (!isTrackerFeature(feature)) throw new Error(`Unknown feature: ${String(feature)}`)
+    if (!isFeatureKey(feature)) throw new Error(`Unknown feature: ${String(feature)}`)
     const current = sources()
     if (id === null) {
       if (current[feature] === undefined) return lifecycle.accountsState()
@@ -143,7 +121,8 @@ export function createTrackerChoices(deps: TrackerChoicesDeps): TrackerChoices {
       return applied()
     }
     assertConnected(id)
-    if (!deps.providers[id]?.capabilities[FEATURE_CAPABILITY[feature]]) {
+    // The static matrix (#706), which the renderer's dropdowns read too.
+    if (!isCapable(feature, id)) {
       throw new Error(`${TRACKER_LABELS[id]} can't be the ${feature} source`)
     }
     if (current[feature] === id) return lifecycle.accountsState()

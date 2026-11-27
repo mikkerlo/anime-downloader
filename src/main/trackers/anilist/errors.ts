@@ -29,11 +29,12 @@ export const ANILIST_SESSION_EXPIRED_MESSAGE =
 /**
  * `auth()` found no usable token: the credential was cleared by a 401, or it
  * can't be decrypted. A 401-class error, so the drain aborts and keeps the
- * queue, and `isSessionGone` stops the timer.
+ * queue, and `isSessionGone` stops the timer. `getEntry` also throws it, with
+ * the refusal as its `cause`, for a read the server refused as `auth` (#740).
  */
 export class AniListSessionError extends AniListApiError {
-  constructor(message: string = ANILIST_SESSION_EXPIRED_MESSAGE) {
-    super(message, 401, '', 401)
+  constructor(message: string = ANILIST_SESSION_EXPIRED_MESSAGE, options?: { cause?: unknown }) {
+    super(message, 401, '', 401, options)
     this.name = 'AniListSessionError'
   }
 }

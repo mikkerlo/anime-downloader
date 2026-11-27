@@ -92,7 +92,11 @@ describe('the § 7 table (#703)', () => {
       ['a timeout', () => Object.assign(new Error('t'), { name: 'TimeoutError' }), 'network'],
       ['OfflineError', () => new OfflineError(), 'network'],
       ['HTTP 401 (expired / missing token)', () => api(401, body('invalid-token-401')), 'auth'],
-      ['an Invalid token error with status 400', () => api(400, body('invalid-token-400')), 'auth'],
+      [
+        'a revoked token: an Invalid token error with status 400 (the shape #734 observed)',
+        () => api(400, body('invalid-token-400')),
+        'auth'
+      ],
       ['an Invalid token error on a 200', () => api(200, body('invalid-token-400')), 'auth'],
       [
         'any errors[].status 401, not the first',

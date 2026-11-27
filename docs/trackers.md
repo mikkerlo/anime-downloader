@@ -104,7 +104,9 @@ rows included (`test/ipc/t4b-golden.test.ts`).
 ### The Shikimori adapter
 
 `src/main/trackers/shikimori.provider.ts` (`createShikimoriProvider({ store,
-lookupByMalIds? })`) wraps `src/main/shikimori.ts` and adds no behaviour. Every
+lookupByMalIds?, refreshDetails? })`) wraps `src/main/shikimori.ts` and adds no
+behaviour. Its one capability member, `getAiringInfo` (#706), is the
+auto-downloader's cache-first details read, moved here unchanged. Every
 member calls the same function with the same positional arguments as today's
 call sites, taken from the session it is given, through the module namespace
 (so a `vi.mock` of `src/main/shikimori` intercepts it). `auth()` reads
@@ -196,10 +198,10 @@ Each classifier lives beside its adapter, not in `errors.ts`: it needs
   it is there.
   - `network`: the fetch threw, timed out, or `OfflineError`.
   - `auth`: HTTP 401, any `errors[].status` 401, or an `Invalid token` message
-    **whatever its status** (the revoked-token and truncated-paste shapes are
-    unverified; a status-only read of a 400 would drop every queued entry one at
-    a time). Also `auth()`'s session-gone error and the limiter's dead-token
-    rejection.
+    **whatever its status** (a revoked token answers HTTP 400 with
+    `errors[0].status` 400, so a status-only read would drop every queued entry
+    one at a time; the truncated-paste shape is unverified). Also `auth()`'s
+    session-gone error and the limiter's dead-token rejection.
   - `rate-limit`: 403 (AniList answers 403 when the API is down, so every
     request fails; under `server` the drain would keep sending and drop the
     whole queue after 24 h) and a 429 after the limiter's retries.
@@ -730,12 +732,115 @@ broadcast and no `offerReconcile`).
 capable tracker, or `null` to clear the override. Capable reads the tracker
 provider's `TrackerCapabilities`: `calendar` → `getCalendar`, `chronology` →
 `getRelated`, `forYou` → `getRecommendations`, `details` → `getDetails`,
-`airing` → `getAiringInfo`. Until #706 (T11a) or #701 (T5b) moves the check
-onto the static matrix in `src/shared/trackers/feature-source.ts`, no provider
-declares a capability yet, so every override is refused in a build today. It
-writes `trackerFeatureSource` and broadcasts; the stored value again is a
-no-op. An override naming a tracker that later disconnects is kept, and #706's
-resolver skips it, so a reconnect restores it. Resolution is #706's.
+`airing` → `getAiringInfo`. Since #706 the check reads the static matrix in
+`src/shared/trackers/feature-source.ts` (`isCapable`), the one the renderer's
+dropdowns read, not each provider's `TrackerCapabilities`. It writes
+`trackerFeatureSource` and broadcasts; the stored value again is a no-op. An
+override naming a tracker that later disconnects is kept, and the resolver
+skips it, so a reconnect restores it.
+
+### Feature sources
+
+#706 (T11a) resolves each feature's tracker. `src/shared/trackers/feature-source.ts`
+holds one pure resolver and one static capability matrix, shared by main and
+the renderer so the two can't disagree:
+
+- **`resolveFeatureSource(feature, { connected, primary, overrides, capabilities? })`**,
+  for a `FeatureKey` in `calendar | chronology | forYou | details | airing`
+  (the ambient `TrackerFeature`), picks the override if it is connected and
+  capable, else the primary if it is, else the first connected capable tracker
+  in `TRACKER_ORDER` (`shikimori`, `anilist`, `mal`), else null. `capabilities`
+  defaults to `CAPABILITY_MATRIX`; only `test/shared/feature-source.test.ts`
+  passes another.
+- **"Connected" means an account is present** (`<provider>User` set), never
+  "credentials are present", so an expired session keeps its source rather
+  than handing the feature to another tracker.
+- **`CAPABILITY_MATRIX`**, keyed by capability:
+
+  | Feature | Capability | Shikimori | AniList | MyAnimeList |
+  |---|---|---|---|---|
+  | `calendar` | `getCalendar` | ✅ | ✅ | ❌ |
+  | `chronology` | `getRelated` | ✅ | ✅ | ✅ |
+  | `forYou` | `getRecommendations` | ✅ | ✅ | ✅ |
+  | `details` | `getDetails` | ✅ | ✅ | ✅ |
+  | `airing` | `getAiringInfo` | ✅ | ✅ | ❌ |
+  | *(no feature key)* | `getFriends` | ✅ | ✅ | ❌ |
+
+  The `getFriends` row isn't a `FeatureKey`: the sidebar's Friends gate (T9)
+  and the friends fan-out (T12) read it, and the resolver never does. A
+  provider's `TrackerCapabilities` says which members it implements today; it
+  never claims one the matrix lacks (the matrix test checks every real
+  provider).
+- **Main** calls it through `src/main/trackers/feature-source.ts`:
+  `storedFeatureSource(store, feature)` reads `trackerFeatureSource`, the
+  primary as `resolvePrimary` answers it and each `<provider>User`. **The
+  renderer** calls it through `useTrackersStore().featureSource(feature)` over
+  the accounts state. Neither passes `capabilities`.
+- **With no tracker connected every feature is null.** A caller with an
+  account-less path (Shikimori's public franchise endpoint for chronology)
+  falls back to it, not to "hide the feature".
+
+**The `airing` source and auto-download.** The auto-downloader's one `airing`
+dep is `createAiringDep({ store, providers })`: `source()` (the resolved
+`airing` source at call time), `hasCredentials(id)` (`<provider>Credentials`
+stored; for Shikimori, the tick's gate before #706, unchanged) and
+`getAiringInfo(id, malId)`, that provider's member or null. The tick runs only
+while the resolved source has credentials, never "any tracker has": an active
+AniList session doesn't open it while an expired Shikimori is the source.
+MyAnimeList can't be the source, so a MyAnimeList-only user's tick returns at
+the gate with the same empty result as a signed-out one.
+
+**`getAiringInfo` is cache-first for every provider** (`AiringInfo`'s doc
+comment in `src/main/trackers/types.ts`, the contract #703 meets). It answers
+from the tracker's own cached data (its list cache, then its details cache)
+when that is no older than `AIRING_FRESHNESS_MS` (6 h), and makes a network
+call only when there is none that fresh. AniList answers an on-list title from
+`anilistUserRates`, with no request. It returns `{ episodesAired, episodes }`,
+`episodes` null meaning "no cap", or null when the tracker has no data for the
+title (the tick's `no-episodes-aired`). A read that throws (AniList's client on a
+429, a 5xx or a dropped network) is that subscription's `error` outcome: the
+tick goes on to the next one, saves `lastCheckedAt` and broadcasts its result,
+and `setSubscription` refuses (null). Shikimori's is the auto-downloader's
+read before #706, moved into the adapter: the `shikimoriAnimeDetails` entry,
+refreshed through `refreshDetails` (`refreshShikimoriDetailsForMalId`) when it
+is missing or older than 6 h.
+
+**The `'rates-refreshed'` trigger.** Shikimori keeps its call in
+`ipc/shikimori.ipc.ts` (`afterBackgroundRefresh`), so a Shikimori refresh
+ticks once. For AniList, `createTickIfAiringSource({ store, runTick })` returns
+`tickIfAiringSource(id)`, which runs one `'rates-refreshed'` tick only while
+`id` is the resolved `airing` source; the AniList construction in `index.ts`
+passes it as its instance's `onRatesRefreshed` (T2a's hook), which
+`createAniListSyncService` chains after stamping `ratesFetchedAt`. MyAnimeList's
+doesn't get it.
+
+**Details.** `tracker:get-details(malId, trackerId?)` reads AniList's or
+MyAnimeList's details cache (`anilistAnimeDetails`, `myanimelistAnimeDetails`)
+and never calls the network. Each provider keeps that cache in its own shape
+and normalizes an entry to the ambient `TrackerDetails` in its
+`cachedDetails(malId)` member: plain-text `description`, `genres`, `status` in
+Shikimori's words (`anons` / `ongoing` / `released`, null when unknown),
+`episodes`, `episodesAired` and `kind`. `trackerId` defaults to the `details`
+source; for Shikimori it is null, since Shikimori's details stay on
+`shikimori:get-anime-details`. A miss kicks that instance's `prefetchDetails`
+(except offline), and the write arrives as `tracker:details-updated`. The
+generic sync service carries both halves:
+
+- `cachedDetails(malId)` (the provider's member) and `requestDetails(malId)`
+  behind the handler;
+- `broadcastDetails(malId, details)`: the `{ trackerId, malId, details }`
+  broadcast on `detailsUpdatedChannel`, which a provider's details writer
+  calls after its `store.set`. AniList's provider takes it as
+  `onDetailsWritten`, called for each entry the prefetch or an on-list
+  `getDetails` writes;
+- the deps `detailsUpdatedChannel` and `prefetchDetails`, which the AniList
+  construction in `index.ts` passes (`requestPrefetch(malId)`: nothing for a
+  title off the list, which the list prefetch never fetches; the running
+  prefetch if there is one, so a miss never restarts the one Prepare for
+  offline awaits; else a new one). MyAnimeList's construction passes them
+  when #702 wires its provider, and its `getDetails` write calls
+  `broadcastDetails`. The Shikimori construction doesn't get the channel, so
+  its details are never double-emitted.
 
 **`tracker:accounts-changed`** carries the same `TrackerAccountsState` as
 `tracker:list-accounts`, built by the same `accountsState()`, so a field added
@@ -791,6 +896,12 @@ has the details).
   connected tracker for that title, refetched for every connected tracker on
   a rate update for it, a queue change that adds, changes or removes its
   entry, any `tracker:rates-refreshed`, and a primary change.
+- **Feature sources (#706).** `featureSource(feature)` is the shared resolver
+  over the store's `connected`, `primary` and `featureSources`. `canAutoDl`
+  is the account half of the detail page's Auto-download gate: the `airing`
+  source resolves (so that tracker has a user). `detailsFor(trackerId, malId)`
+  reads `detailsByTracker`, which the eager `tracker:details-updated`
+  subscriber upserts per tracker.
 - **`accountsLoaded`** (#704) goes true in the same step that applies the
   first accounts payload (the init read, or a broadcast that beat it), or when
   that read fails, and never goes back. The detail page gates its rate panel
@@ -1054,7 +1165,18 @@ The primary branch is `services/trackers/anilist-primary.ts`.
   row, untouched, and the cache row is `{ entry: native, smotretAnime }`.
 - **`getEntry`** reads `MediaList(userId, mediaId) { id status
   score(format: POINT_100) progress repeat updatedAt }`; its "not found"
-  (`errors[].status` 404) is null, the drain's create branch.
+  (`errors[].status` 404) is null, the drain's create branch. An `auth`-class
+  refusal (the revoke's 400, a 401, the dead-token rejection) is rethrown as the
+  session-gone error with the refusal as its `cause` (#740), so the read that
+  finds the token refused answers as every later one does once the credential
+  is cleared: `tracker:get-rate` from the cache, stale, and the primary
+  branch's cold-cache read with the create rule, queued. It doesn't wait for
+  the clear (`onTokenRejected` runs it on its own), and `isSessionGone` and
+  the sync service's `isQueueableError` are unchanged. The drain still aborts
+  on it as `auth`, but its `lastSyncError` is now the session-expired message
+  ("AniList session expired — sign in again in Settings → Trackers"), no
+  longer `AniList API error: 400 — Invalid token`; the raw refusal still
+  reaches the drain's `console.warn` as the error's `cause`.
 - **`upsertEntry`** sends `SaveMediaListEntry(mediaId, …)` with only the
   changed fields: `status`, `progress` for `episodes`, `scoreRaw = appScore ×
   10` for `score` (never `score`), and `repeat` for `rewatches`. With nothing
@@ -1118,7 +1240,13 @@ a title not on AniList throws; a mark-watched for one is null.
   the list (ToU clauses 2 and 3), returns early offline, and is abortable
   (`abortPrefetch`). It is the AniList entry's `prefetch` on the online edge
   and the third phase of the `anilist-rates` step, and a logout or a switch
-  aborts it. T11a wires the `tracker:details-updated` emit.
+  aborts it. A `tracker:get-details` miss goes through `requestPrefetch`,
+  which joins a running prefetch rather than restarting it. Each entry it
+  writes, and an on-list `getDetails` write, is broadcast as
+  `tracker:details-updated` through `onDetailsWritten` (#706);
+  `cachedDetails(malId)` maps an entry's AniList status (`FINISHED` →
+  `released`, `RELEASING` / `HIATUS` → `ongoing`, `NOT_YET_RELEASED` →
+  `anons`, `CANCELLED` → unknown) and strips the description's markup.
 - **`getCalendar`**: `Page.media(id_in)` with `nextAiringEpisode`, chunked by
   50, matched on `id`, adult titles filtered by `displayAdultContent`.
 - **`getRelated(ref)`** returns `Media.relations` edges with MANGA dropped,
@@ -1144,16 +1272,27 @@ None of these could be run in #703 (no real AniList account, and no live
 requests). Until a real-account check answers them, the code takes the
 conservative default named in each:
 
-- **The token-rejection shapes** for a revoked token and a truncated paste.
-  Only an expired or missing token was probed (HTTP 401, `errors[0].status`
-  401). Default: an `Invalid token` message is `auth` whatever its status; the
-  400 fixture (`invalid-token-400.json`) is a guess, not a capture.
+- **The token-rejection shape for a truncated paste.** An expired or missing
+  token answers HTTP 401 with `errors[0].status` 401 (the epic's probe), and a
+  revoked one HTTP 400 with `errors[0] = {status: 400, message: "Invalid
+  token"}` (settled below). Default: an `Invalid token` message is `auth`
+  whatever its status.
 - **Whether `repeat` counts a rewatch at its start.** Default:
   `ANILIST_REPEAT_SHIFT = 0`. The round-trip test runs both shifts.
 - **Whether `Page.media` filters adult titles implicitly** for a viewer with
   `displayAdultContent: false` and unauthenticated. Default: no `isAdult`
   argument anywhere; if the probe finds a filter, the disabling argument goes
   into `ID_MAP_LOOKUP`.
+
+### Verify tasks settled
+
+- **The token-rejection shape for a revoked token** (observed 2026-11-27 on
+  #734's real-account check): HTTP 400, `errors[0] = {status: 400, message:
+  "Invalid token"}`. The classifier files it as `auth` by its message, as the
+  default above assumed, and `test/fixtures/anilist/invalid-token-400.json` has
+  that shape. The same check found the read that discovered the revoke
+  rejecting to the renderer instead of answering from the cache; `getEntry`'s
+  rethrow fixes that (#740).
 
 ## Statuses and scores
 
@@ -1348,11 +1487,19 @@ the translation the identity.
 `myanimelistAnimeDetails[malId] = { details, fetchedAt }` (the shape of
 `shikimoriAnimeDetails`), keeping the 300 most recently fetched titles
 (`MAL_DETAILS_CACHE_MAX`): every write rewrites the store file, so the cache
-is capped, and the oldest fetch is evicted first. Their consumers are T11a,
-T11c and T11d, which wire the details emit and the feature-source
-construction. No `getAiringInfo` or `getCalendar` (MAL has a total and a
-status only, so it is never the `airing` source and MAL-only users get no
-auto-download) and no friends.
+is capped, and the oldest fetch is evicted first. In T11a's details read
+(#706), `cachedDetails(malId)` normalizes that entry to `TrackerDetails`
+(synopsis, genre names, the airing status in Shikimori's words, the total,
+the aired count when finished, `media_type`); a `tracker:get-details` miss
+kicks `requestPrefetch(malId)`, which fetches only a title on the user's list
+(the API agreement isn't settled for caching beyond it) and joins a fetch for
+that title already in flight; each write is broadcast on
+`tracker:details-updated` (`sync.broadcastDetails`). `createMalTracker` passes
+`detailsUpdatedChannel` and `prefetchDetails`, and no `onRatesRefreshed`.
+T11c and T11d consume the relations and recommendations reads. No
+`getAiringInfo` or `getCalendar` (MAL has a total and a status only, so it is
+never the `airing` source and MAL-only users get no auto-download) and no
+friends.
 
 ### The sync instance and the primary
 

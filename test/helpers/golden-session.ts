@@ -66,6 +66,8 @@ import {
 import type { TrackerSyncService } from '../../src/main/services/trackers/sync'
 import { createGenericTracker } from './generic-tracker'
 import * as autoDownloader from '../../src/main/auto-downloader'
+import { createAiringDep } from '../../src/main/trackers/feature-source'
+import { createShikimoriProvider } from '../../src/main/trackers/shikimori.provider'
 import { register as registerShikimori } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc'
 import type { AnimeDetail } from '../../src/main/smotret-api'
@@ -416,8 +418,16 @@ export async function runGoldenSession(): Promise<GoldenCapture> {
       smotretApi: smotretApi as never,
       downloadManager: downloadManager as never,
       broadcast,
-      isShikimoriLoggedIn: () => Boolean(store.get('shikimoriCredentials')),
-      refreshShikimoriDetails: (malId) => sync.refreshShikimoriDetailsForMalId(malId),
+      // As `index.ts` builds it (#706): the resolved `airing` source, Shikimori here.
+      airing: createAiringDep({
+        store,
+        providers: {
+          shikimori: createShikimoriProvider({
+            store,
+            refreshDetails: (malId) => sync.refreshShikimoriDetailsForMalId(malId)
+          })
+        }
+      }),
       isOffline
     })
 

@@ -266,15 +266,60 @@ export interface MalProviderDeps {
   /** The lifecycle's MAL session generation. */
   generation: () => number
   lookupByMalIds?: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
+  /**
+   * After a `myanimelistAnimeDetails` write, with the normalized entry (#706):
+   * `createMalTracker` passes the sync instance's `broadcastDetails`.
+   */
+  onDetailsWritten?: (malId: number, details: TrackerDetails) => void
+}
+
+/** MAL's airing status in the app's words (`TrackerDetails.status`). */
+const MAL_STATUS_WORDS: Readonly<Record<string, TrackerDetails['status']>> = {
+  finished_airing: 'released',
+  currently_airing: 'ongoing',
+  not_yet_aired: 'anons'
+}
+
+/** A `/anime/{id}` details read as `tracker:get-details` returns it (#706). */
+export function malTrackerDetailsOf(raw: unknown): TrackerDetails {
+  const d = (raw ?? {}) as {
+    synopsis?: string | null
+    genres?: { name?: string }[]
+    status?: string
+    num_episodes?: number
+    media_type?: string
+  }
+  const total = d.num_episodes ? d.num_episodes : null
+  return {
+    description: d.synopsis?.trim() || null,
+    genres: (d.genres ?? []).map((g) => g.name ?? '').filter(Boolean),
+    status: (d.status && MAL_STATUS_WORDS[d.status]) || null,
+    episodes: total,
+    // As the list's rule: only a finished title's total is its aired count.
+    episodesAired: d.status === 'finished_airing' ? total : null,
+    kind: d.media_type ?? null
+  }
+}
+
+/** The MAL provider plus its details-miss hook (#706). */
+export interface MalProviderWithDetails extends MalProvider {
+  /**
+   * A `tracker:get-details` miss: fetches that title's details unless it is
+   * off the user's list (the API agreement isn't settled for caching beyond
+   * it, #702), joining a fetch for it already in flight.
+   */
+  requestPrefetch(malId: number): Promise<void>
 }
 
 function bearer(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
 }
 
-export function createMalProvider(deps: MalProviderDeps): MalProvider {
+export function createMalProvider(deps: MalProviderDeps): MalProviderWithDetails {
   const { store, client, auth } = deps
   const base = (): string => malApiBase()
+  // The details fetch in flight per title, which a second miss joins (#706).
+  const inFlightDetails = new Map<number, Promise<void>>()
 
   // A user call: the session's token, and rule 1's one retry.
   function userRequest<T>(
@@ -301,7 +346,7 @@ export function createMalProvider(deps: MalProviderDeps): MalProvider {
     return `${first}&offset=${encodeURIComponent(offset)}`
   }
 
-  return {
+  const provider: MalProviderWithDetails = {
     id: 'mal',
     capabilities: CAPABILITIES,
 
@@ -423,7 +468,27 @@ export function createMalProvider(deps: MalProviderDeps): MalProvider {
       // The new entry always stays: the others make room for it.
       const kept = capDetails(others, MAL_DETAILS_CACHE_MAX - 1)
       store.set('myanimelistAnimeDetails', { ...kept, [id]: { details, fetchedAt: Date.now() } })
+      deps.onDetailsWritten?.(malId, malTrackerDetailsOf(details))
       return details
+    },
+
+    cachedDetails(malId) {
+      const cache = store.get('myanimelistAnimeDetails') as Record<string, MalCachedDetails> | null
+      const entry = cache?.[String(malId)]
+      return entry ? malTrackerDetailsOf(entry.details) : null
+    },
+
+    requestPrefetch(malId) {
+      const rows = (store.get('myanimelistUserRates') as MalCachedRow[] | null) ?? []
+      if (!rows.some((r) => r.node?.id === malId)) return Promise.resolve()
+      const running = inFlightDetails.get(malId)
+      if (running) return running
+      const run = provider.getDetails!(malId)
+        .then(() => undefined)
+        .finally(() => inFlightDetails.delete(malId))
+      inFlightDetails.set(malId, run)
+      return run
     }
   }
+  return provider
 }

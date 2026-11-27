@@ -1185,9 +1185,10 @@ later slice keeps green.
   online-edge tests. `createTestAniList` builds the provider on its own
   limiter with a real vault over the fake safeStorage.
   The fixtures are built from AniList's documented shapes and the epic's live
-  probe of an expired token; none was captured from a real account, and the
-  revoked-token and truncated-paste shapes are still unverified
-  ([Trackers](trackers.md#verify-tasks-still-open)).
+  probe of an expired token. `invalid-token-400.json` has the revoked-token
+  shape #734's real-account check observed on 2026-11-27 (HTTP 400,
+  `errors[0] = {status: 400, message: "Invalid token"}`); the truncated-paste
+  shape is still unverified ([Trackers](trackers.md#verify-tasks-still-open)).
 - **`ANIME_DL_ANILIST_ORIGIN`** points AniList's GraphQL client at a stub
   server in an unpackaged build, like `ANIME_DL_SHIKIMORI_ORIGIN`; packaged
   builds ignore it (`lib/api-bases.ts`).

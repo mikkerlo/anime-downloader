@@ -225,7 +225,6 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
     store,
     trackers: fan,
     lifecycle,
-    providers,
     log: choicesLog
   })
 

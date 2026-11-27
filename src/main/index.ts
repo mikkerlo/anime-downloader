@@ -86,6 +86,7 @@ import { createTrackerLifecycle } from './trackers/lifecycle'
 import { connectedAccounts } from './trackers/primary'
 import { createTrackerAuthSessions } from './trackers/auth-session'
 import { createShikimoriProvider } from './trackers/shikimori.provider'
+import { createAiringDep, createTickIfAiringSource } from './trackers/feature-source'
 import { createAniListProvider } from './trackers/anilist/provider'
 import { createAniListSyncService } from './trackers/anilist/sync'
 import { createAniListEventBridge } from './trackers/anilist/events'
@@ -429,7 +430,10 @@ const mal = createMalTracker({
   notifyAccountsChanged: () => trackerLifecycle.notifyAccountsChanged(),
   queuedAfter: () => trackerRates.queuedAfter('mal'),
   port: malLoopbackPort(process.env, app.isPackaged),
-  lookupByMalIds: (malIds) => lookupByMalIds(malIds)
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  // The details read (#706): a miss fetches the title on demand, and each
+  // write is broadcast on this channel. No airing tick: MAL has no airing source.
+  detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
 })
 // AniList (#703): its provider, on the module-level host limiter, and its sync
 // instance, which emits `tracker:*` only through its own bridge. A token
@@ -443,7 +447,9 @@ const anilistProvider = createAniListProvider({
   onSessionExpired: () => {
     anilistSync.broadcastSyncStatus()
     trackerLifecycle.notifyAccountsChanged()
-  }
+  },
+  // Each `anilistAnimeDetails` write goes out as `tracker:details-updated` (#706).
+  onDetailsWritten: (malId, details) => anilistSync.broadcastDetails(malId, details)
 })
 const anilistSync = createAniListSyncService(anilistProvider, {
   store,
@@ -464,7 +470,21 @@ const anilistSync = createAniListSyncService(anilistProvider, {
   rateUpdatedChannel: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
   ratesRefreshedChannel: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
   isOffline,
-  onNeedsSetupChanged: () => trackerLifecycle.notifyAccountsChanged()
+  onNeedsSetupChanged: () => trackerLifecycle.notifyAccountsChanged(),
+  // The details read (#706): a `tracker:get-details` miss for a list title
+  // joins the running list prefetch or starts one, and each write it makes is
+  // broadcast on this channel.
+  detailsUpdatedChannel: EVENT_CHANNELS.TRACKER_DETAILS_UPDATED,
+  prefetchDetails: (malId) =>
+    void anilistProvider
+      .requestPrefetch(malId)
+      .catch((err) => console.warn('[anilist] details prefetch failed:', err)),
+  // A refresh of AniList's list ticks auto-download while AniList is the
+  // `airing` source (#706). Shikimori's tick stays in `ipc/shikimori.ipc.ts`.
+  onRatesRefreshed: createTickIfAiringSource({
+    store,
+    runTick: () => runAutoDownloadTick('rates-refreshed')
+  })
 })
 // AniList's primary branch (#703): queue-first, through the instance's drain.
 const anilistPrimary = createAniListPrimary({
@@ -522,9 +542,15 @@ trackerLifecycle.setSteps('anilist', {
   broadcastStatus: () => anilistSync.broadcastSyncStatus(),
   broadcastQueue: () => anilistSync.broadcastQueueChanged()
 })
-// The sign-in flows, and the capabilities `tracker:set-feature-source` checks (#696).
+// The sign-in flows, the capabilities `tracker:set-feature-source` checks
+// (#696), and the feature sources' reads (#706). MyAnimeList (#702) has no
+// `getAiringInfo`, so its sync construction passes `detailsUpdatedChannel` but
+// no `onRatesRefreshed` tick: it can't be the `airing` source.
 const trackerProviders = {
-  shikimori: createShikimoriProvider({ store }),
+  shikimori: createShikimoriProvider({
+    store,
+    refreshDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId)
+  }),
   anilist: anilistProvider,
   mal: mal.provider
 }
@@ -538,8 +564,7 @@ const trackerAuth = createTrackerAuthSessions({
 const trackerChoices = createTrackerChoices({
   store,
   trackers: trackerFanOut,
-  lifecycle: trackerLifecycle,
-  providers: trackerProviders
+  lifecycle: trackerLifecycle
 })
 let downloadManager: DownloadManager
 
@@ -1205,8 +1230,8 @@ async function bootstrap(): Promise<void> {
     smotretApi,
     downloadManager,
     broadcast: broadcastToAll,
-    isShikimoriLoggedIn: () => Boolean(store.get('shikimoriCredentials')),
-    refreshShikimoriDetails: (malId) => shikimoriSyncService.refreshShikimoriDetailsForMalId(malId),
+    // The resolved `airing` source and its provider (#706).
+    airing: createAiringDep({ store, providers: trackerProviders }),
     isOffline
   })
   offlineKickoff = createOfflineKickoff({

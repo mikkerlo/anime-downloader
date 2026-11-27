@@ -1,0 +1,134 @@
+{
+  "data": {
+    "MediaListCollection": {
+      "hasNextChunk": true,
+      "lists": [
+        {
+          "isCustomList": false,
+          "entries": [
+            {
+              "id": 9001,
+              "mediaId": 101,
+              "status": "CURRENT",
+              "score": 85,
+              "progress": 7,
+              "repeat": 0,
+              "updatedAt": 1764000000,
+              "media": {
+                "id": 101,
+                "idMal": 1,
+                "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+                "coverImage": {
+                  "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg"
+                },
+                "format": "TV",
+                "episodes": 26,
+                "status": "FINISHED",
+                "nextAiringEpisode": null
+              }
+            }
+          ]
+        },
+        {
+          "isCustomList": false,
+          "entries": [
+            {
+              "id": 9003,
+              "mediaId": 103,
+              "status": "REPEATING",
+              "score": 90,
+              "progress": 4,
+              "repeat": 2,
+              "updatedAt": 1764000300,
+              "media": {
+                "id": 103,
+                "idMal": 3,
+                "title": { "romaji": "One Piece", "english": "ONE PIECE" },
+                "coverImage": {
+                  "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx103.jpg"
+                },
+                "format": "TV",
+                "episodes": null,
+                "status": "RELEASING",
+                "nextAiringEpisode": { "episode": 1101 }
+              }
+            }
+          ]
+        },
+        {
+          "isCustomList": false,
+          "entries": [
+            {
+              "id": 9002,
+              "mediaId": 102,
+              "status": "COMPLETED",
+              "score": 70,
+              "progress": 12,
+              "repeat": 1,
+              "updatedAt": 1764000200,
+              "media": {
+                "id": 102,
+                "idMal": 2,
+                "title": { "romaji": "Romaji Only", "english": null },
+                "coverImage": {
+                  "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx102.jpg"
+                },
+                "format": "TV",
+                "episodes": 12,
+                "status": "FINISHED",
+                "nextAiringEpisode": null
+              }
+            }
+          ]
+        },
+        {
+          "isCustomList": true,
+          "entries": [
+            {
+              "id": 9001,
+              "mediaId": 101,
+              "status": "CURRENT",
+              "score": 85,
+              "progress": 7,
+              "repeat": 0,
+              "updatedAt": 1764000000,
+              "media": {
+                "id": 101,
+                "idMal": 1,
+                "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+                "coverImage": {
+                  "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg"
+                },
+                "format": "TV",
+                "episodes": 26,
+                "status": "FINISHED",
+                "nextAiringEpisode": null
+              }
+            },
+            {
+              "id": 9009,
+              "mediaId": 109,
+              "status": "CURRENT",
+              "score": 0,
+              "progress": 1,
+              "repeat": 0,
+              "updatedAt": 1764000900,
+              "media": {
+                "id": 109,
+                "idMal": 9,
+                "title": { "romaji": "Custom Only", "english": null },
+                "coverImage": {
+                  "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx109.jpg"
+                },
+                "format": "TV",
+                "episodes": 12,
+                "status": "FINISHED",
+                "nextAiringEpisode": null
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

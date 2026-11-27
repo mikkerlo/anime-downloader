@@ -1,0 +1,11 @@
+{
+  "data": {
+    "Viewer": {
+      "id": 5001,
+      "name": "alice",
+      "avatar": { "medium": "https://s4.anilist.co/file/anilistcdn/user/avatar/medium/b5001.png" },
+      "options": { "displayAdultContent": false },
+      "mediaListOptions": { "scoreFormat": "POINT_100" }
+    }
+  }
+}

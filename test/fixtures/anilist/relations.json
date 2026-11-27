@@ -1,0 +1,41 @@
+{
+  "data": {
+    "Media": {
+      "id": 101,
+      "relations": {
+        "edges": [
+          {
+            "relationType": "SEQUEL",
+            "node": {
+              "id": 111,
+              "idMal": 11,
+              "type": "ANIME",
+              "format": "TV",
+              "startDate": { "year": 2021, "month": 10, "day": 10 },
+              "title": { "romaji": "Kimetsu no Yaiba: Yuukaku-hen", "english": null },
+              "coverImage": {
+                "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx111.jpg"
+              },
+              "siteUrl": "https://anilist.co/anime/111"
+            }
+          },
+          {
+            "relationType": "SOURCE",
+            "node": {
+              "id": 87216,
+              "idMal": 96299,
+              "type": "MANGA",
+              "format": "MANGA",
+              "startDate": { "year": 2016, "month": 2, "day": 15 },
+              "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+              "coverImage": {
+                "large": "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx87216.jpg"
+              },
+              "siteUrl": "https://anilist.co/manga/87216"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

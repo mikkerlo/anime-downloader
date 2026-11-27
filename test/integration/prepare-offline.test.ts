@@ -1350,7 +1350,7 @@ describe('the per-tracker rates steps, registered as index.ts registers them (#6
     )
     const shikimori = src.indexOf('createShikimoriRatesStep({')
     const trackers = src.indexOf(
-      'registerTrackerRatesSteps(prepareOffline, { store, trackers: () => trackerFanOut.syncServices() })'
+      'registerTrackerRatesSteps(prepareOffline, {\n  store,\n  trackers: () => trackerFanOut.syncServices(),'
     )
     const metadata = src.indexOf('createMetadataStep(')
     expect(shikimori).toBeGreaterThan(-1)

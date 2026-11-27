@@ -75,11 +75,10 @@ function rig(
   opts: {
     instances?: readonly ('anilist' | 'mal')[]
     seed?: Record<string, unknown>
-    /** `AppDeps.newTrackerCardsEnabled` (#702): on unless a test turns it off. */
-    newTrackerCards?: boolean
+    /** `AppDeps.newTrackerCardsEnabled` (#703, #702): on unless a test turns it off. */
+    newTrackerCardsEnabled?: boolean
   } = {}
 ) {
-  const newTrackerCards = opts.newTrackerCards ?? true
   const store = new InMemoryStorage({
     ...(structuredClone(STORE_DEFAULTS) as Record<string, unknown>),
     installId: 'pc',
@@ -151,7 +150,7 @@ function rig(
     vault,
     trackerRates,
     cancelAttempt: (id) => auth.cancel(id),
-    newTrackerCardsEnabled: newTrackerCards
+    newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true
   })
   const auth = createTrackerAuthSessions({
     lifecycle,
@@ -174,7 +173,7 @@ function rig(
     trackerRates,
     trackerLifecycle: lifecycle,
     trackerAuth: auth,
-    newTrackerCardsEnabled: newTrackerCards,
+    newTrackerCardsEnabled: opts.newTrackerCardsEnabled ?? true,
     lookupByMalIds: vi.fn(async () => ({})),
     maybeBroadcastCleanupPrompt: vi.fn(async () => {}),
     runAutoDownloadTick: vi.fn(async () => ({})),
@@ -763,25 +762,27 @@ describe('the vault on a Shikimori-only profile', () => {
 })
 
 // #702: flipped through `AppDeps.newTrackerCardsEnabled`, never by re-mocking `electron`.
-describe('the new-tracker-cards flag', () => {
-  it('off: BEGIN(mal) is refused with no bind and no browser, and the accounts state says false', async () => {
-    const r = rig({ newTrackerCards: false })
+describe('the new-tracker-cards flag (MAL)', () => {
+  it('off: BEGIN(mal) and a pasted URL are refused with no bind and no browser, and the accounts state says false', async () => {
+    const r = rig({ newTrackerCardsEnabled: false })
     await r.invoke(CHANNELS.TRACKER_SET_CLIENT_CONFIG, 'mal', { clientId: 'cid' })
     const begin = vi.spyOn(r.auth, 'begin')
-    const result = await r.invoke<TrackerAuthResult>(CHANNELS.TRACKER_BEGIN_AUTH, 'mal')
-    expect(result).toMatchObject({ status: 'error', kind: 'config' })
+    await expect(r.invoke(CHANNELS.TRACKER_BEGIN_AUTH, 'mal')).rejects.toThrow(
+      "MyAnimeList sign-in isn't available in this build yet"
+    )
+    await expect(r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'mal', malUrl('s', 'c'))).rejects.toThrow(
+      "MyAnimeList sign-in isn't available in this build yet"
+    )
     expect(begin).not.toHaveBeenCalled()
     expect(r.openExternal).not.toHaveBeenCalled()
     expect(r.fakes.mal.signIn.begun).toHaveLength(0)
     expect(
       (await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)).newTrackerCardsEnabled
     ).toBe(false)
-    // Shikimori's sign-in isn't behind the flag.
-    expect(r.lifecycle.accountsState().newTrackerCardsEnabled).toBe(false)
   })
 
   it('on: BEGIN(mal) proceeds, and the accounts state says true', async () => {
-    const r = rig({ newTrackerCards: true })
+    const r = rig({ newTrackerCardsEnabled: true })
     await r.invoke(CHANNELS.TRACKER_SET_CLIENT_CONFIG, 'mal', { clientId: 'cid' })
     const pending = r.invoke<TrackerAuthResult>(CHANNELS.TRACKER_BEGIN_AUTH, 'mal')
     await vi.waitFor(() => expect(r.openExternal).toHaveBeenCalledTimes(1))
@@ -919,5 +920,45 @@ describe('argument validation', () => {
     await expect(
       r.invoke(CHANNELS.TRACKER_LOGOUT, 'anilist', { pending: 'later' })
     ).rejects.toThrow(/pending/)
+  })
+})
+
+describe('the new-tracker-cards flag (#703 § 8), through AppDeps', () => {
+  it('off: tracker:begin-auth and tracker:complete-auth refuse AniList, and the state says false', async () => {
+    const r = rig({ newTrackerCardsEnabled: false })
+    signsInAs(r, 'anilist', 'tok', A)
+    await expect(r.invoke(CHANNELS.TRACKER_BEGIN_AUTH, 'anilist')).rejects.toThrow(
+      "AniList sign-in isn't available in this build yet"
+    )
+    await expect(r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'anilist', 'tok')).rejects.toThrow(
+      "AniList sign-in isn't available in this build yet"
+    )
+    expect(r.openExternal).not.toHaveBeenCalled()
+    expect(r.store.get('anilistUser')).toBeNull()
+    expect(r.spies.encrypt).not.toHaveBeenCalled()
+    const state = await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)
+    expect(state.newTrackerCardsEnabled).toBe(false)
+  })
+
+  it('off: a Shikimori sign-in still goes through', async () => {
+    const r = rig({ newTrackerCardsEnabled: false })
+    signsInAs(r, 'shikimori', 'code', A)
+    expect(await r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'shikimori', 'code')).toMatchObject({
+      status: 'connected'
+    })
+  })
+
+  it('on: both proceed, and the state says true', async () => {
+    const r = rig({ newTrackerCardsEnabled: true })
+    signsInAs(r, 'anilist', 'tok', A)
+    const begin = r.invoke<TrackerAuthResult>(CHANNELS.TRACKER_BEGIN_AUTH, 'anilist')
+    await vi.waitFor(() => expect(r.openExternal).toHaveBeenCalledTimes(1))
+    expect(await r.invoke(CHANNELS.TRACKER_COMPLETE_AUTH, 'anilist', 'tok')).toMatchObject({
+      status: 'connected',
+      account: { trackerId: 'anilist', user: A }
+    })
+    expect(await begin).toMatchObject({ status: 'connected' })
+    const state = await r.invoke<TrackerAccountsState>(CHANNELS.TRACKER_LIST_ACCOUNTS)
+    expect(state.newTrackerCardsEnabled).toBe(true)
   })
 })

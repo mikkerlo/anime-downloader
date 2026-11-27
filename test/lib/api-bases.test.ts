@@ -1,6 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { malAuthorizeUrl } from '../../src/main/trackers/mal/auth'
 import {
+  ANILIST_ORIGIN,
+  ANILIST_ORIGIN_ENV,
+  anilistOrigin,
   MAL_API_BASE,
   MAL_API_BASE_ENV,
   MAL_OAUTH_BASE,
@@ -19,6 +22,8 @@ import {
 import { SHIKIMORI_ORIGIN } from '../../src/shared/shikimori'
 import { SmotretApi } from '../../src/main/smotret-api'
 import * as shikimori from '../../src/main/shikimori'
+import { createAniListClient, deadTokenError } from '../../src/main/trackers/anilist/client'
+import { createAniListLimiter } from '../../src/main/trackers/anilist/limiter'
 
 const STUBS = {
   [SMOTRET_API_BASE_ENV]: 'http://127.0.0.1:4001/api/',
@@ -114,6 +119,20 @@ describe('API base overrides (#567)', () => {
     await shikimori.getUser('tok')
     expect(String(stub.mock.calls[0][0])).toMatch(/^http:\/\/127\.0\.0\.1:4002\/api\//)
     expect(shikimori.getAuthUrl()).toMatch(/^http:\/\/127\.0\.0\.1:4002\/oauth\/authorize\?/)
+  })
+
+  // #703: AniList's GraphQL origin.
+  it('ANIME_DL_ANILIST_ORIGIN applies unpackaged and is ignored packaged', async () => {
+    expect(anilistOrigin()).toBe(ANILIST_ORIGIN)
+    expect(ANILIST_ORIGIN).toBe('https://graphql.anilist.co')
+    applyApiBaseOverrides({ [ANILIST_ORIGIN_ENV]: 'http://127.0.0.1:4005/' }, false)
+    expect(anilistOrigin()).toBe('http://127.0.0.1:4005')
+    const stub = captureFetch({ data: { Page: { media: [] } } })
+    const client = createAniListClient({ limiter: createAniListLimiter({ deadTokenError }) })
+    await client.request('query X { x }', {}, { priority: 'interactive' })
+    expect(String(stub.mock.calls[0][0])).toBe('http://127.0.0.1:4005')
+    applyApiBaseOverrides({ [ANILIST_ORIGIN_ENV]: 'http://127.0.0.1:4005' }, true)
+    expect(anilistOrigin()).toBe(ANILIST_ORIGIN)
   })
 })
 

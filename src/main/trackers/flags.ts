@@ -1,13 +1,12 @@
-// Build flags for the multi-tracker rollout (epic #688). Functions of
-// `isPackaged`, not import-time constants, so a test flips one by building
-// `AppDeps` instead of re-mocking `electron`. `index.ts` calls each once with
-// `app.isPackaged`.
+// Build flags for the trackers epic (#688). Each is a function of
+// `app.isPackaged`, called once by `index.ts` and passed through `AppDeps`, so
+// a test flips it by building deps instead of re-mocking `electron`.
 
 /**
- * The MyAnimeList (#702) and AniList (#703) cards in Settings → Trackers. Off
- * in packaged builds until #698 (T4b), #699 (T4c) and #704 (T8a) have landed;
- * a one-line follow-up lifts it. Main refuses `tracker:begin-auth` for a
- * hidden card's tracker, so the gate isn't the renderer's alone.
+ * The AniList (#703) and MyAnimeList (#702) cards: on in an unpackaged build,
+ * off in a packaged one until #698 (T4b), #699 (T4c) and #704 (T8a) have
+ * landed and a one-line follow-up flips it. While it is off, main refuses
+ * `tracker:begin-auth` and `tracker:complete-auth` for both.
  */
 export function newTrackerCardsEnabled(isPackaged: boolean): boolean {
   return !isPackaged

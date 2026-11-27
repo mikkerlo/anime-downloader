@@ -63,11 +63,11 @@ export type PrimaryWriter<T = unknown> = (
 
 /**
  * What each tracker's primary branch returns: Shikimori's is the rate its
- * handlers reply with. AniList's and MAL's are typed by T7 and T6.
+ * handlers reply with; AniList's (#703) is the values it queued. MAL's is typed by T6.
  */
 export interface PrimaryResults {
   shikimori: ShikiUserRate
-  anilist: unknown
+  anilist: RateValues
   mal: unknown
 }
 

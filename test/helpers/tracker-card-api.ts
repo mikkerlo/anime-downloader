@@ -15,8 +15,10 @@ export interface FakeTrackerMain {
   queueLength: number
   /** The `shikimori:get-sync-status` queue length, which the card must not read. */
   legacyQueueLength: number
-  /** The accounts state's card flag (#702). */
-  newTrackerCardsEnabled: boolean
+  /** The AniList / MAL cards' flag (#703, #702), as main reports it. */
+  newTrackerCardsEnabled?: boolean
+  /** The account's `sessionExpiresAt` (AniList's token `exp`, #703). */
+  sessionExpiresAt?: number
 }
 
 const IDS: TrackerId[] = ['shikimori', 'anilist', 'mal']
@@ -27,8 +29,7 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
     sessionExpired: false,
     needsSetup: false,
     queueLength: 0,
-    legacyQueueLength: 0,
-    newTrackerCardsEnabled: false
+    legacyQueueLength: 0
   }
   const listeners = {
     accountsChanged: [] as Listener<TrackerAccountsState>[],
@@ -57,13 +58,18 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
           hasCredentials: user !== null && !main.sessionExpired,
           sessionExpired: mine && main.sessionExpired,
           needsSetup: mine && main.needsSetup,
-          credentialState: user !== null && !main.sessionExpired ? 'ok' : 'none'
-        }
+          credentialState: user !== null && !main.sessionExpired ? 'ok' : 'none',
+          ...(mine && user !== null && main.sessionExpiresAt !== undefined
+            ? { sessionExpiresAt: main.sessionExpiresAt }
+            : {})
+        } satisfies TrackerAccount
       }),
       primary: main.user ? trackerId : null,
       mirror: {},
       featureSources: {},
-      newTrackerCardsEnabled: main.newTrackerCardsEnabled
+      ...(main.newTrackerCardsEnabled !== undefined
+        ? { newTrackerCardsEnabled: main.newTrackerCardsEnabled }
+        : {})
     }
   }
 

@@ -133,8 +133,9 @@ export interface AppDeps {
   /** The primary, mirror and feature-source setters (#696). */
   trackerChoices: TrackerChoices
   /**
-   * `newTrackerCardsEnabled(app.isPackaged)` (`trackers/flags.ts`): while
-   * false, `tracker:begin-auth` refuses MyAnimeList (#702; #703 adds AniList).
+   * The AniList and MyAnimeList cards (`trackers/flags.ts`, #703/#702),
+   * computed once from `app.isPackaged`. While false, `tracker:begin-auth` and
+   * `tracker:complete-auth` refuse both trackers.
    */
   newTrackerCardsEnabled: boolean
   /** The MAL card's redirect URL and client-ID Test (#702). */

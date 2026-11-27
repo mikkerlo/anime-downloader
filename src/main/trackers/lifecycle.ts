@@ -115,7 +115,11 @@ export interface TrackerLifecycleDeps {
    * claim and merges the owner's libraries. Shikimori's router sets its own.
    */
   afterLogin?: (trackerId: TrackerId) => void
-  /** `newTrackerCardsEnabled(app.isPackaged)` (`trackers/flags.ts`), reported on the accounts state. */
+  /**
+   * The AniList and MyAnimeList cards' flag (`trackers/flags.ts`), computed
+   * once by `index.ts`: the accounts state carries it as
+   * `newTrackerCardsEnabled`. Absent means off.
+   */
   newTrackerCardsEnabled?: boolean
 }
 
@@ -343,13 +347,18 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
     // credential never calls the vault.
     const locked = hasCredentials && credKey !== null && vault.isLocked(credKey)
     const missingClientId = id === 'mal' && !getClientConfig(store).clientId
+    // AniList's token `exp`, mirrored in plain text on its user (#703): no decrypt.
+    const expiresAt = (user as { tokenExpiresAt?: unknown } | null)?.tokenExpiresAt
     return {
       trackerId: id,
       user,
       hasCredentials,
       sessionExpired: user !== null && !hasCredentials,
       needsSetup: missingClientId || (trackerRates.instance(id)?.needsSetup() ?? false),
-      credentialState: !hasCredentials ? 'none' : locked ? 'locked' : 'ok'
+      credentialState: !hasCredentials ? 'none' : locked ? 'locked' : 'ok',
+      ...(id === 'anilist' && hasCredentials && typeof expiresAt === 'number'
+        ? { sessionExpiresAt: expiresAt }
+        : {})
     }
   }
 
@@ -365,7 +374,7 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
       featureSources:
         (store.get('trackerFeatureSource') as TrackerAccountsState['featureSources'] | undefined) ??
         {},
-      newTrackerCardsEnabled: deps.newTrackerCardsEnabled ?? false
+      newTrackerCardsEnabled: deps.newTrackerCardsEnabled === true
     }
   }
 

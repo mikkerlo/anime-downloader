@@ -47,10 +47,10 @@ describe('the MAL card and the flag', () => {
     expect(w.findAll('.tracker-account-card')).toHaveLength(1)
   })
 
-  it('with the flag on, it renders under Shikimori’s with the setup steps open', async () => {
+  it('with the flag on, it renders after Shikimori’s and AniList’s with the setup steps open', async () => {
     const w = await mountTab()
     const ids = w.findAll('.tracker-account-card').map((c) => c.attributes('data-tracker-id'))
-    expect(ids).toEqual(['shikimori', 'mal'])
+    expect(ids).toEqual(['shikimori', 'anilist', 'mal'])
     const steps = byTest(w, 'mal-setup-steps')
     expect(steps.exists()).toBe(true)
     // The redirect URL comes from main, with its port.

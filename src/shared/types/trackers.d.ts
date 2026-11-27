@@ -137,7 +137,8 @@ interface TrackerAccount {
   sessionExpired: boolean
   needsSetup: boolean
   credentialState: 'none' | 'ok' | 'locked'
-  // When the session ends, in ms, from a provider that knows it (AniList, #703).
+  // When the session ends, in ms, from a provider that knows it: AniList's
+  // token `exp` (#703), absent when the token's payload couldn't be decoded.
   sessionExpiresAt?: number
 }
 
@@ -151,9 +152,10 @@ interface TrackerAccountsState {
   primary: TrackerId | null
   mirror: Partial<Record<TrackerId, boolean>>
   featureSources: Partial<Record<TrackerFeature, TrackerId>>
-  // Whether the MyAnimeList and AniList cards show in Settings → Trackers
-  // (#702, #703): false in packaged builds until the flag lifts.
-  newTrackerCardsEnabled: boolean
+  // The AniList and MyAnimeList cards (#703, #702): true in an unpackaged
+  // build, false in a packaged one until the flag lifts. Main always sends it;
+  // a payload without it reads as false.
+  newTrackerCardsEnabled?: boolean
 }
 
 // What `tracker:begin-auth` and `tracker:complete-auth` resolve to.

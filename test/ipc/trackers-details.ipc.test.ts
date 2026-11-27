@@ -27,7 +27,13 @@ const DETAILS: TrackerDetails = {
   kind: 'tv'
 }
 
-function rig(opts: { seed?: Record<string, unknown> } = {}) {
+function rig(
+  opts: {
+    seed?: Record<string, unknown>
+    /** A `detailsStale` on that tracker's fake provider (#744); neither fake has one. */
+    detailsStale?: Partial<Record<'anilist' | 'mal', (malId: number) => boolean>>
+  } = {}
+) {
   const store = new InMemoryStorage({
     ...(structuredClone(STORE_DEFAULTS) as Record<string, unknown>),
     ...opts.seed
@@ -35,8 +41,12 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
   const offline = { value: false }
   const broadcast = vi.fn()
   const prefetch = { anilist: vi.fn(), mal: vi.fn() }
-  const generic = (id: 'anilist' | 'mal') =>
-    createGenericTracker(id, store as never, {
+  const generic = (id: 'anilist' | 'mal') => {
+    const fake = createFakeTracker(id)
+    const stale = opts.detailsStale?.[id]
+    if (stale) fake.provider.detailsStale = stale
+    return createGenericTracker(id, store as never, {
+      fake,
       isOffline: () => offline.value,
       deps: {
         broadcast,
@@ -44,6 +54,7 @@ function rig(opts: { seed?: Record<string, unknown> } = {}) {
         prefetchDetails: prefetch[id]
       }
     })
+  }
   const anilist = generic('anilist')
   const mal = generic('mal')
   const fan = createTrackerFanOut({
@@ -126,6 +137,34 @@ describe('tracker:get-details', () => {
     r.anilist.fake.detailsCache.set(1, DETAILS)
     expect(await r.getDetails(1, 'anilist')).toEqual(DETAILS)
     expect(r.prefetch.anilist).not.toHaveBeenCalled()
+    expect(serverReads(r)).toEqual([])
+  })
+
+  // #744: the guard for a provider without `detailsStale` (AniList's case, and
+  // both fakes here): the instance answers false. Mutation: defaulting it to
+  // true kicks a prefetch on every hit.
+  it('a cache hit on a provider with no detailsStale kicks no prefetch, for either tracker', async () => {
+    const r = rig()
+    expect('detailsStale' in r.anilist.fake.provider).toBe(false)
+    r.anilist.fake.detailsCache.set(1, DETAILS)
+    r.mal.fake.detailsCache.set(1, DETAILS)
+    expect(r.anilist.sync.detailsStale(1)).toBe(false)
+    expect(await r.getDetails(1, 'anilist')).toEqual(DETAILS)
+    expect(await r.getDetails(1, 'mal')).toEqual(DETAILS)
+    expect(r.prefetch.anilist).not.toHaveBeenCalled()
+    expect(r.prefetch.mal).not.toHaveBeenCalled()
+  })
+
+  // #744: red on main, which kicked only on a miss.
+  it('a stale hit answers the cached details and kicks the prefetch; offline it kicks none', async () => {
+    const r = rig({ detailsStale: { mal: (m) => m === 1 } })
+    r.mal.fake.detailsCache.set(1, DETAILS)
+    expect(r.mal.sync.detailsStale(1)).toBe(true)
+    expect(await r.getDetails(1, 'mal')).toEqual(DETAILS)
+    expect(r.prefetch.mal).toHaveBeenCalledExactlyOnceWith(1)
+    r.offline.value = true
+    expect(await r.getDetails(1, 'mal')).toEqual(DETAILS)
+    expect(r.prefetch.mal).toHaveBeenCalledTimes(1)
     expect(serverReads(r)).toEqual([])
   })
 

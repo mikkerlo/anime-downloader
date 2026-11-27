@@ -62,3 +62,84 @@ describe('MyAnimeList details through tracker:get-details', () => {
     expect(detailsEmits(r)).toHaveLength(0)
   })
 })
+
+// #744 (3): `fetchedAt` past `DETAILS_STALE_MS` refetches on read. Red on main:
+// a cached entry was answered forever, with no request.
+describe('a stale MyAnimeList details entry', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  // Cached while airing: what a refetch replaces.
+  const OLD = {
+    ...malFixture<object>('details.json'),
+    status: 'currently_airing',
+    synopsis: 'Cached while airing.'
+  }
+  const OLD_NORMALIZED: TrackerDetails = {
+    ...NORMALIZED,
+    description: 'Cached while airing.',
+    status: 'ongoing',
+    episodesAired: null
+  }
+  const seeded = (malId: number, entry: object, opts: { offline?: boolean } = {}) =>
+    malTrackerRig({
+      offline: opts.offline,
+      seed: { myanimelistUserRates: [ON_LIST], myanimelistAnimeDetails: { [malId]: entry } }
+    })
+  const settle = () => new Promise((res) => setTimeout(res, 20))
+
+  beforeEach(() => {
+    fake.on('GET', /^\/v2\/anime\/\d+$/, { json: malFixture('details.json') })
+  })
+
+  it('8 days old: answers the cached details, then fetches once and broadcasts the fresh ones', async () => {
+    const r = await seeded(5114, { details: OLD, fetchedAt: Date.now() - 8 * DAY })
+    expect(await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')).toEqual(OLD_NORMALIZED)
+    await expect.poll(() => detailsEmits(r).length).toBe(1)
+    expect(fake.callsTo('GET', '/v2/anime/5114')).toHaveLength(1)
+    expect(detailsEmits(r)[0][1]).toEqual({ trackerId: 'mal', malId: 5114, details: NORMALIZED })
+    // Fresh now: the next read is the new entry, with no request.
+    expect(await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')).toEqual(NORMALIZED)
+    await settle()
+    expect(fake.callsTo('GET', '/v2/anime/5114')).toHaveLength(1)
+  })
+
+  it('two reads back to back make one request: the second joins the first', async () => {
+    const r = await seeded(5114, { details: OLD, fetchedAt: Date.now() - 8 * DAY })
+    await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')
+    await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')
+    await expect.poll(() => detailsEmits(r).length).toBe(1)
+    await settle()
+    expect(fake.callsTo('GET', '/v2/anime/5114')).toHaveLength(1)
+  })
+
+  it('an entry with no fetchedAt is stale: one request', async () => {
+    const r = await seeded(5114, { details: OLD })
+    expect(await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')).toEqual(OLD_NORMALIZED)
+    await expect.poll(() => fake.callsTo('GET', '/v2/anime/5114').length).toBe(1)
+  })
+
+  // Guards: green on main, each red under the mutation named.
+  it('guard: 1 day old is fresh: no request', async () => {
+    const r = await seeded(5114, { details: OLD, fetchedAt: Date.now() - DAY })
+    expect(await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')).toEqual(OLD_NORMALIZED)
+    await settle()
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('guard: a title off the list stays stale, as intended: answered, no request', async () => {
+    const r = await seeded(21, { details: OLD, fetchedAt: Date.now() - 8 * DAY })
+    expect(await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 21, 'mal')).toEqual(OLD_NORMALIZED)
+    await settle()
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('guard: offline, a stale entry is answered with no request', async () => {
+    const r = await seeded(
+      5114,
+      { details: OLD, fetchedAt: Date.now() - 8 * DAY },
+      { offline: true }
+    )
+    expect(await r.invoke(CHANNELS.TRACKER_GET_DETAILS, 5114, 'mal')).toEqual(OLD_NORMALIZED)
+    await settle()
+    expect(fake.calls).toHaveLength(0)
+  })
+})

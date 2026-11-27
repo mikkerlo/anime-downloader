@@ -3,21 +3,18 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { TRACKER_LABELS } from '@shared/trackers/labels';
 import { useLibraryStore, type LibraryView } from '../../stores/library';
-import { useShikimoriStore } from '../../stores/shikimori';
 import { labelOf, useTrackersStore, type TrackerSyncBreakdownRow } from '../../stores/trackers';
 import { useDownloadsStore } from '../../stores/downloads';
 import { useOfflineStore } from '../../stores/offline';
 import SidebarUpdateBanner from './SidebarUpdateBanner.vue';
+import { anyConnectedSource, resolvedSourceRenders } from './view-sources';
 
 const libraryStore = useLibraryStore();
-const shikimoriStore = useShikimoriStore();
 const trackersStore = useTrackersStore();
 const downloadsStore = useDownloadsStore();
 const offlineStore = useOfflineStore();
 const { currentView } = storeToRefs(libraryStore);
-// The nav group stays on the Shikimori login until #707 replaces it.
-const { loggedIn } = storeToRefs(shikimoriStore);
-const { accounts, primary, anyAccount, aggregateSyncState } = storeToRefs(trackersStore);
+const { accounts, primary, connected, anyAccount, aggregateSyncState } = storeToRefs(trackersStore);
 const { groups } = storeToRefs(downloadsStore);
 const { isOffline, isManual, retrying } = storeToRefs(offlineStore);
 
@@ -64,12 +61,11 @@ const primaryItems: MenuItem[] = [
   }
 ];
 
-const shikimoriItems: MenuItem[] = [
-  {
-    id: 'shikimori',
-    label: 'Shikimori',
-    icon: 'M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z'
-  },
+const listIcon =
+  'M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z';
+
+// The tracker-backed views, in the group's order after the list page.
+const trackerViewItems: MenuItem[] = [
   {
     id: 'recommendations',
     label: 'For You',
@@ -92,6 +88,33 @@ const settingsItem: MenuItem = {
   label: 'Settings',
   icon: 'M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a6.759 6.759 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
 };
+
+// The "Lists" group (#707). The list page is named after the primary, so a
+// Shikimori-only user still reads "Shikimori". The other items show only for
+// a view that can render a connected tracker (`view-sources.ts`).
+function itemVisible(id: LibraryView): boolean {
+  switch (id) {
+    // CalendarView reads `featureSource('calendar')` since #709.
+    case 'calendar':
+      return resolvedSourceRenders('calendar', trackersStore.featureSource('calendar'));
+    case 'recommendations':
+      return anyConnectedSource('forYou', connected.value);
+    case 'friends':
+      return anyConnectedSource('friends', connected.value);
+    default:
+      return true;
+  }
+}
+
+const listsItems = computed<MenuItem[]>(() => {
+  const listTracker = primary.value ?? connected.value[0] ?? null;
+  const listItem: MenuItem = {
+    id: 'tracker-list',
+    label: listTracker ? TRACKER_LABELS[listTracker] : 'Lists',
+    icon: listIcon
+  };
+  return [listItem, ...trackerViewItems.filter((item) => itemVisible(item.id))];
+});
 
 // Active downloads + subtitles still in flight — surfaced as the count pill.
 const downloadCount = computed(
@@ -219,10 +242,10 @@ onBeforeUnmount(unlisten);
       </button>
     </nav>
 
-    <nav v-if="loggedIn" class="nav-group">
-      <div class="nav-label">Shikimori</div>
+    <nav v-if="anyAccount" class="nav-group">
+      <div class="nav-label">Lists</div>
       <button
-        v-for="item in shikimoriItems"
+        v-for="item in listsItems"
         :key="item.id"
         class="nav-item"
         :class="{ active: currentView === item.id }"

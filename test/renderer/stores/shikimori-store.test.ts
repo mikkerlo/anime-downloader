@@ -513,17 +513,17 @@ describe('useShikimoriStore', () => {
     expect(store.rateByMalId(0)).toBeNull()
   })
 
-  it('rateByMalId falls back to shikiAnime.id when a cached entry has a null target_id (regression: pre-fix caches never matched)', async () => {
+  // #707: the facade reads no `shikiAnime.*`. A legacy null-`target_id` row's
+  // MAL id comes from the codec's normalized `malId` (useTrackersStore).
+  it('rateByMalId matches on rate.target_id only, never shikiAnime.id', async () => {
     const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
     const store = useShikimoriStore()
-    // Mimics an entry written before the target_id fix: target_id is null but
-    // the anime id is present under shikiAnime.id.
     const legacyEntry = {
       rate: { id: 1, target_id: null, episodes: 9, status: 'completed', score: 10 },
       shikiAnime: { id: 54595 },
       smotretAnime: null
     } as unknown as ShikiAnimeRateEntry
     captured.ratesRefreshed[0]([legacyEntry])
-    expect(store.rateByMalId(54595)?.rate.episodes).toBe(9)
+    expect(store.rateByMalId(54595)).toBeNull()
   })
 })

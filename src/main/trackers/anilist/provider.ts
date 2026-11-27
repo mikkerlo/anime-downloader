@@ -252,6 +252,8 @@ function animeOf(media: AniListMedia | null | undefined): TrackerRateEntryPayloa
   return {
     title: titleOf(media),
     poster: media?.coverImage?.large ?? null,
+    // `large` is the biggest cover the queries ask for.
+    posterOriginal: media?.coverImage?.large ?? null,
     kind: media?.format ?? null,
     episodes: media?.episodes ?? null,
     episodesAired: media ? episodesAiredOf(media) : null,

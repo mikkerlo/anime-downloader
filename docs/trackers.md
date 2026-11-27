@@ -85,6 +85,13 @@ kind, episodes, episodesAired, status }, smotretAnime, native }`.
   rail's pick (#698): `preview`, then `x96`, then `original`, with a relative
   path prefixed with `SHIKIMORI_ORIGIN`. AniList's and MAL's are absolute
   already, so continue-watching uses the poster as it is.
+- **`anime.posterOriginal` (optional) is the provider's largest image** (#707),
+  absolute, for the list page, which reads it before `poster`. Shikimori's is
+  `image.original`, made absolute the same way, so the list page keeps the
+  poster 6.0.21's `ShikimoriView` showed while the Home rail keeps its
+  preview-first pick. AniList's is `coverImage.large`, and MAL's is
+  `main_picture.large`, else `medium`. Both are the same as their `poster`,
+  because no query asks for a bigger image.
 
 ### The primary's entries: `primaryEntries()`
 
@@ -934,10 +941,11 @@ has the details).
   its user, so it stays connected and in `aggregateSyncState`. A changed
   `user.id` on a tracker that stays connected (an account switch) is a drop
   followed by a reload.
-- **The queued overlay.** `rateFor(id, malId)` and `primaryRates` read the
-  tracker's cache with its last queued `after` laid over it, as `projectRate`
-  does in main. A title only in the queue reaches `rateFor` but isn't a row of
-  `primaryRates`, since it has no `anime` block.
+- **The queued overlay.** `rateFor(id, malId)`, `ratesFor(id)` (any connected
+  tracker's rows: the list page, #707) and `primaryRates` (`ratesFor(primary)`)
+  read the tracker's cache with its last queued `after` laid over it, as
+  `projectRate` does in main. A title only in the queue reaches `rateFor` but
+  isn't a row of `ratesFor` / `primaryRates`, since it has no `anime` block.
 - **Loads.** `refreshRates(trackerId)` asks for the whole list (no `status`),
   applies the snapshot itself (a cold cache answers without broadcasting) and
   reuses a pending load. A drop moves the tracker's epoch, so a reply sent

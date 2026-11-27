@@ -15,7 +15,7 @@ import SettingsView from './components/views/SettingsView.vue';
 import DownloadsView from './components/views/DownloadsView.vue';
 import WatchTogetherView from './components/views/WatchTogetherView.vue';
 import AnimeDetailView from './components/views/AnimeDetailView.vue';
-import ShikimoriView from './components/views/ShikimoriView.vue';
+import TrackerListView from './components/views/TrackerListView.vue';
 import FriendsActivityView from './components/views/FriendsActivityView.vue';
 import CalendarView from './components/views/CalendarView.vue';
 import RecommendationsView from './components/views/RecommendationsView.vue';
@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
         <HomeView v-show="currentView === 'home' && !activeAnimeId" />
         <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" />
         <LibraryView v-if="currentView === 'library' && !activeAnimeId" />
-        <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" />
+        <TrackerListView v-show="currentView === 'tracker-list' && !activeAnimeId" />
         <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" />
         <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" />
         <RecommendationsView v-if="currentView === 'recommendations' && !activeAnimeId" />

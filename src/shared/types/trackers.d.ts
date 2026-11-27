@@ -45,7 +45,10 @@ interface TrackerRateEntry {
   updatedAt: number | null
   anime: {
     title: string
+    // The Home rail's pick (#698); `posterOriginal` is the largest image, for
+    // the list page (#707).
     poster: string | null
+    posterOriginal?: string | null
     kind: string | null
     episodes: number | null
     episodesAired: number | null

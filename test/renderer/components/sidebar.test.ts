@@ -6,6 +6,7 @@ import Sidebar from '../../../src/renderer/src/components/shared/Sidebar.vue'
 import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
 import { useSettingsStore } from '../../../src/renderer/src/stores/settings'
+import { VIEW_SOURCES } from '../../../src/renderer/src/components/shared/view-sources'
 
 // The chip reads `useTrackersStore` (#699): the primary account's user, and
 // `aggregateSyncState` across every connected tracker.
@@ -116,6 +117,18 @@ async function mountSidebar(): Promise<VueWrapper> {
 
 const popover = (w: VueWrapper) => w.find('[data-testid="sync-popover"]')
 
+// The "Lists" group: the nav group with a heading.
+const listsGroup = (w: VueWrapper) =>
+  w.findAll('nav.nav-group').find((n) => n.find('.nav-label').exists())
+const listItems = (w: VueWrapper): string[] =>
+  listsGroup(w)
+    ?.findAll('.nav-item span')
+    .map((s) => s.text()) ?? []
+const listButton = (w: VueWrapper, label: string) =>
+  listsGroup(w)!
+    .findAll('.nav-item')
+    .find((b) => b.text() === label)!
+
 beforeEach(() => {
   stubApi(accountsState({}, null))
   setActivePinia(createPinia())
@@ -143,19 +156,102 @@ describe('Sidebar', () => {
     expect(activeLabel()).toBe('Library')
   })
 
-  it('hides the Shikimori nav group and user chip until logged in', async () => {
-    const shiki = useShikimoriStore()
+  it('hides the "Lists" nav group and user chip until a tracker is connected', async () => {
     const w = await mountSidebar()
     expect(w.find('.nav-label').exists()).toBe(false)
     expect(w.find('.user-chip').exists()).toBe(false)
 
-    // The nav group is still the Shikimori login's (#707); the chip is the
-    // trackers store's.
-    shiki.user = { id: 1, nickname: 'mikkerlo', avatar: '' }
+    // The group is the trackers store's `anyAccount` (#707), like the chip.
     rig.emitAccounts(accountsState({ shikimori: SHIKI_USER }, 'shikimori'))
     await flushPromises()
-    expect(w.find('.nav-label').text()).toBe('Shikimori')
+    expect(w.find('.nav-label').text()).toBe('Lists')
+    expect(listItems(w)).toEqual(['Shikimori', 'For You', 'Friends', 'Calendar'])
     expect(w.find('.user-chip').exists()).toBe(true)
+  })
+
+  describe('the "Lists" group (#707): one item per view a connected tracker can fill', () => {
+    const MAL_USER: TrackerUser = { id: 3, nickname: 'mal-me', avatar: null }
+    const saved = { ...VIEW_SOURCES }
+    afterEach(() => {
+      Object.assign(VIEW_SOURCES, saved)
+    })
+
+    it('a Shikimori user keeps the four items, and the list item opens the list page', async () => {
+      // The Shikimori login alone no longer gates anything here.
+      useShikimoriStore().user = null
+      stubApi(accountsState({ shikimori: SHIKI_USER }, 'shikimori'))
+      const library = useLibraryStore()
+      const w = await mountSidebar()
+
+      expect(w.find('.nav-label').text()).toBe('Lists')
+      expect(listItems(w)).toEqual(['Shikimori', 'For You', 'Friends', 'Calendar'])
+      await listButton(w, 'Shikimori').trigger('click')
+      expect(library.currentView).toBe('tracker-list')
+      expect(listButton(w, 'Shikimori').classes()).toContain('active')
+    })
+
+    it('AniList-only: the group shows with an "AniList" list item and Calendar (#709 widened it)', async () => {
+      stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
+      const w = await mountSidebar()
+
+      expect(w.find('.nav-label').text()).toBe('Lists')
+      // For You and Friends still read Shikimori only (T11d, T12).
+      expect(listItems(w)).toEqual(['AniList', 'Calendar'])
+    })
+
+    it('AniList-only with the calendar row back at its T9 value: no Calendar', async () => {
+      // #709's mutation control: the Calendar item is there only because the
+      // row was created widened.
+      VIEW_SOURCES.calendar = ['shikimori']
+      stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
+      const w = await mountSidebar()
+      expect(listItems(w)).toEqual(['AniList'])
+    })
+
+    it('widening a row makes its item appear: friends gains AniList as T12 will', async () => {
+      VIEW_SOURCES.friends = ['shikimori', 'anilist']
+      VIEW_SOURCES.forYou = ['shikimori', 'anilist', 'mal']
+      stubApi(accountsState({ anilist: ANILIST_USER }, 'anilist'))
+      const w = await mountSidebar()
+      expect(listItems(w)).toEqual(['AniList', 'For You', 'Friends', 'Calendar'])
+    })
+
+    it('MAL-only: the list item, and no Calendar or Friends (MAL has neither)', async () => {
+      stubApi(accountsState({ mal: MAL_USER }, 'mal'))
+      const w = await mountSidebar()
+      expect(w.find('.nav-label').text()).toBe('Lists')
+      expect(listItems(w)).toEqual(['MyAnimeList'])
+    })
+
+    it('MAL-only with MAL in VIEW_SOURCES.friends: still no Friends (getFriends marks MAL ❌)', async () => {
+      VIEW_SOURCES.friends = ['shikimori', 'anilist', 'mal']
+      stubApi(accountsState({ mal: MAL_USER }, 'mal'))
+      const w = await mountSidebar()
+      expect(listItems(w)).not.toContain('Friends')
+    })
+
+    it('MAL-only with MAL in VIEW_SOURCES.calendar: still no Calendar (getCalendar marks MAL ❌)', async () => {
+      VIEW_SOURCES.calendar = ['shikimori', 'anilist', 'mal']
+      stubApi(accountsState({ mal: MAL_USER }, 'mal'))
+      const w = await mountSidebar()
+      expect(listItems(w)).not.toContain('Calendar')
+    })
+
+    it('Shikimori + AniList, AniList primary: Calendar, For You and Friends all show', async () => {
+      // `featureSource('forYou')` is AniList here, which For You can't render
+      // yet; the T9 rule asks whether any connected tracker can.
+      stubApi(accountsState({ shikimori: SHIKI_USER, anilist: ANILIST_USER }, 'anilist'))
+      const w = await mountSidebar()
+      expect(listItems(w)).toEqual(['AniList', 'For You', 'Friends', 'Calendar'])
+    })
+
+    it('with no account the group is hidden, and the null-source gates evaluate without error', async () => {
+      VIEW_SOURCES.calendar = ['shikimori', 'anilist', 'mal']
+      VIEW_SOURCES.forYou = ['shikimori', 'anilist', 'mal']
+      const w = await mountSidebar()
+      expect(w.find('.nav-label').exists()).toBe(false)
+      expect(listItems(w)).toEqual([])
+    })
   })
 
   describe('one tracker: the chip as it always was, no popover', () => {
@@ -214,7 +310,7 @@ describe('Sidebar', () => {
       })
       const w = await mountSidebar()
 
-      expect(w.find('.nav-label').exists()).toBe(false)
+      expect(w.find('.nav-label').text()).toBe('Lists')
       expect(w.find('.u-name').text()).toBe('ani-fan')
       expect(w.find('img.user-avatar').attributes('src')).toBe('https://anilist/b.png')
       expect(w.find('.u-sync').text()).toBe('1 pending')

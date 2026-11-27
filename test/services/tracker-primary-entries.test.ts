@@ -113,6 +113,8 @@ describe('trackerRates.primaryEntries (#698)', () => {
         title: 'Стальной алхимик: Братство',
         // The Home rail's pick: the preview, absolute.
         poster: `${SHIKIMORI_ORIGIN}/p/5114.jpg`,
+        // The list page's pick (#707): the original, absolute.
+        posterOriginal: `${SHIKIMORI_ORIGIN}/o/5114.jpg`,
         kind: 'tv',
         episodes: 64,
         episodesAired: 64,

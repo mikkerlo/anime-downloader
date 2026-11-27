@@ -1,0 +1,69 @@
+{
+  "data": [
+    {
+      "node": {
+        "id": 5114,
+        "title": "Fullmetal Alchemist: Brotherhood",
+        "main_picture": {
+          "medium": "https://cdn.myanimelist.net/images/anime/1208/94745.jpg",
+          "large": "https://cdn.myanimelist.net/images/anime/1208/94745l.jpg"
+        },
+        "num_episodes": 64,
+        "status": "finished_airing",
+        "media_type": "tv"
+      },
+      "list_status": {
+        "status": "completed",
+        "score": 10,
+        "num_episodes_watched": 64,
+        "is_rewatching": false,
+        "updated_at": "2026-03-01T10:00:00+00:00",
+        "num_times_rewatched": 2
+      }
+    },
+    {
+      "node": {
+        "id": 21,
+        "title": "One Piece",
+        "main_picture": {
+          "medium": "https://cdn.myanimelist.net/images/anime/1244/138851.jpg",
+          "large": "https://cdn.myanimelist.net/images/anime/1244/138851l.jpg"
+        },
+        "num_episodes": 0,
+        "status": "currently_airing",
+        "media_type": "tv"
+      },
+      "list_status": {
+        "status": "watching",
+        "score": 8,
+        "num_episodes_watched": 1100,
+        "is_rewatching": false,
+        "updated_at": "2026-11-20T18:30:00+00:00",
+        "num_times_rewatched": 0
+      }
+    },
+    {
+      "node": {
+        "id": 1535,
+        "title": "Death Note",
+        "main_picture": {
+          "medium": "https://cdn.myanimelist.net/images/anime/1079/138100.jpg"
+        },
+        "num_episodes": 37,
+        "status": "finished_airing",
+        "media_type": "tv"
+      },
+      "list_status": {
+        "status": "watching",
+        "score": 9,
+        "num_episodes_watched": 5,
+        "is_rewatching": true,
+        "updated_at": "2026-11-25T09:00:00+00:00",
+        "num_times_rewatched": 1
+      }
+    }
+  ],
+  "paging": {
+    "next": "https://api.myanimelist.net/v2/users/@me/animelist?offset=3&fields=list_status&limit=1000&nsfw=true"
+  }
+}

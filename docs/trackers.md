@@ -174,12 +174,20 @@ Each classifier lives beside its adapter, not in `errors.ts`: it needs
     request fails; under `server` the drain would keep sending and drop the
     whole queue after 24 h) and 429.
   - `server`: 5xx. `item`: any other 4xx.
-- **MyAnimeList** (`src/main/trackers/mal/classify.ts`; #702, T6, extends it):
-  - `config`: 400 "Invalid client id", and `invalid_client` on refresh.
+- **MyAnimeList** (`src/main/trackers/mal/classify.ts`; #702, T6, extended it):
+  - `network`: as above, plus `MalSessionChangedError` (a login or logout
+    landed while `auth()` read the vault: not the account's failure).
+  - `auth`: `MalSessionGoneError` (the refresh's `invalid_grant`, nothing
+    stored, or a locked blob), any body with `invalid_grant` (a reused code on
+    the exchange is an attempt error, never "Session expired"), and 401
+    (`invalid_token`, after the one refresh-and-retry).
+  - `config`: `MalConfigError` (no client ID saved, a locked client secret),
+    `invalid_client` on refresh, and 400 "Invalid client id".
   - 403: a body containing "DoS detected" (Akamai throttling) is transient,
     `rate-limit`; any other 403 (`forbidden`, a missing or blocked client
     header, or a body it doesn't recognise) is `config`.
-  - `auth`: 401 (`invalid_token`, after T6's refresh retry).
+  - `rate-limit`: 429 too (MAL sends no rate-limit headers; before #702 a 429
+    fell through to `item` and dropped the entry).
   - `server`: 5xx. `item`: any other 4xx.
 
 ## The sync service
@@ -408,7 +416,7 @@ is a shared function in `src/main/services/trackers/rates.ts`
   checks: an expired session still queues `update-rate` and
   `mark-episode-watched`, serves `get-rate` from the cache and reports
   `sessionExpired: true`. "No instance" means only a provider that hasn't
-  landed (AniList and MAL before T6/T7).
+  landed (AniList before T7; MAL has one since #702).
 - **With no instance**, `get-rate` answers `null`, `get-rates` an empty
   snapshot, `trigger-sync` does nothing, and `update-rate` throws
   `Not logged in to <Tracker>`. `get-sync-status` returns a default idle status
@@ -775,8 +783,9 @@ carries the row. Nothing in the drain triggers one; this is accepted for now.
 #700 (T5a) moves the Shikimori account out of Settings → Connectors (which
 keeps the Anime 365 token) into a Trackers tab right after it
 (`TrackersTab.vue`), as a generic `TrackerAccountCard` keyed by `trackerId`.
-T6 and T7 add the MyAnimeList and AniList cards, and T5b the multi-account
-controls; a Shikimori-only user sees the one card.
+#702 adds the MyAnimeList card under it (behind the new-tracker-cards flag,
+[below](#the-mal-card)), T7 the AniList card and T5b the multi-account
+controls; a Shikimori-only user of a packaged build sees the one card.
 
 - **States** come from `useTrackersStore` for the card's tracker: the
   account's `user` (Connected, or not connected), and from its
@@ -845,8 +854,10 @@ means the tracker's `<provider>User` key is set (`isTrackerConnected`).
   disconnects mid-run has already joined, and its step reports "Not logged
   in". `shikimori-rates` is unchanged and always joins.
 
-Until T6/T7 add the AniList and MAL instances, the fan-out's `syncServices()`
-holds Shikimori's alone, so nothing new registers or drains in production.
+Since #702 the fan-out's `syncServices()` holds Shikimori's and MAL's
+instances (AniList's joins with #703), so `mal-rates` registers and the MAL
+queue takes part in the boot drain and the online edge, each only while MAL is
+connected. A Shikimori-only profile never joins either.
 
 ## Statuses and scores
 
@@ -881,6 +892,246 @@ The drain's drift ranking, `STATUS_ORDER`, lives beside `RateValues` in
   format would round a stale low raw to 0. Otherwise the stored raw is kept
   (`anilistRawToStore`), so it is never part of `changedFields` and never a
   reconcile diff.
+
+## MyAnimeList
+
+#702 (T6) adds MyAnimeList as a provider, under `src/main/trackers/mal/`:
+`client.ts` (every request), `auth.ts` (sign-in and tokens), `provider.ts`
+(the `TrackerProvider`, its codec and capabilities), `classify.ts`,
+`events.ts` (the broadcasts), `setup.ts` (the card's Test) and `index.ts`
+(`createMalTracker`, the construction `index.ts` and the tests share). The app
+ships no MAL credentials (MAL's API agreement §2(a)): each user registers their
+own app, and `myanimelistClientConfig` holds its client ID in plain text.
+
+### Requests
+
+- **Two hosts, two overrides.** REST is `api.myanimelist.net/v2`
+  (`malApiBase()`, `ANIME_DL_MAL_API_BASE`), the authorize and token endpoints
+  `myanimelist.net/v1/oauth2` (`malOauthBase()`, `ANIME_DL_MAL_OAUTH_BASE`).
+  Packaged builds ignore both, like the other API base overrides.
+- **One client.** Every MAL request goes through `client.ts`, so through
+  `fetchWithTimeout` (offline refusal, timeouts, the network observer) and one
+  limiter: request starts at least 1 s apart, and on a transient answer (429,
+  5xx, a 403 "DoS detected") an exponential backoff from 2 s, at most 3
+  retries and 60 s, which every later request waits out too. MAL sends no
+  rate-limit headers. The drain's own item delay applies on top. Bodies are
+  `x-www-form-urlencoded`.
+- **Headers.** User calls send `Authorization: Bearer <token>`. The public
+  reads by id (`getRelated`, `getRecommendations`, `getDetails`) and the card's
+  Test send `X-MAL-CLIENT-ID` and no token.
+
+### Sign-in
+
+PKCE `plain` (MAL's only method) over a loopback redirect, inside
+`auth-session.ts`'s state machine ([above](#accounts-and-sign-in)):
+
+- **The verifier** is 96 random bytes in base64url, exactly 128 characters of
+  RFC 7636's unreserved set, and the challenge *is* the verifier. A random
+  `state` is checked on the callback and on a paste.
+- **The fixed port is 41753 (`MAL_LOOPBACK_PORT`). Never change it.** Every
+  user registers `http://localhost:41753/callback` as the one redirect URL of
+  their MAL app, and MAL matches `redirect_uri` exactly, so a new value would
+  silently break every existing registration. A test pins it. Unpackaged,
+  `ANIME_DL_MAL_LOOPBACK_PORT` overrides it (tests pass `0`), and the authorize
+  URL is built after the bind, with the port the loopback got.
+- **The loopback** binds `127.0.0.1` and `::1` before the browser opens; only
+  `EADDRNOTAVAIL` / `EAFNOSUPPORT` on `::1` are skipped, and any other bind
+  failure is `port-busy`, which never opens the browser (the card offers Open
+  anyway, Copy link and the paste field). It answers `GET /callback` only
+  (any other path or method is a 404), every answer carries
+  `Connection: close`, and teardown calls `closeAllConnections()` as well as
+  `close()`, so no kept-alive browser socket outlives the attempt. A waiting
+  attempt is dropped after 10 minutes (`MAL_AUTH_TIMEOUT_MS`), and `BEGIN`
+  resolves `error` saying so.
+- **The paste** takes only the full redirect URL, so `state` can be checked;
+  a bare code is refused.
+- **The exchange** posts `authorization_code` with the code, the verifier and
+  the attempt's `redirect_uri`, and `client_secret` only when the user saved
+  one (never empty). A failed exchange (a reused code's `invalid_grant`
+  included) is an attempt `error`: it never sets `myanimelistSessionExpired`
+  or touches stored credentials. Then `GET /users/@me` gives the
+  `TrackerUser` (`{ id, nickname: name, avatar: picture }`).
+- **Credentials** in the vault: `{ access_token, refresh_token, expires_in,
+  obtainedAt }`, `obtainedAt` stamped locally (MAL's token response has no
+  `created_at`). An attempt lives in memory only: a restart means Connect again.
+
+### The session and the four refresh rules
+
+`auth()` returns `MalSession` `{ token, userId, generation }`. It reads
+`myanimelistUser` and the lifecycle's MAL generation before its first await,
+so `userId` is the owner the drain read; no user throws
+`Not logged in to MyAnimeList`. Every data member takes the session first and
+sends `session.token`; none re-reads the user or the credentials, except rule
+1's one retry. A login or logout landing during the vault read throws
+`MalSessionChangedError` (`network`: the drain sees the owner change or tries
+again next tick).
+
+1. **A 401 retries once.** A refresh revokes the old token, so on a 401 a data
+   member reads the stored token: if it differs from the one it sent, it
+   retries with that; otherwise it joins one single-flight refresh and retries
+   with its token. Only while the session's `generation` is still current:
+   after a logout or a switch the 401 is thrown as is (`auth`) and the drain's
+   owner guard ends the run, so A's item never goes out with B's token.
+2. **Refresh past half-life:** `now ≥ obtainedAt + expires_in × 1000 / 2`, not
+   at expiry (the refresh token's month and the observed ~28-day
+   `expires_in` are too close for a lazy refresh).
+3. **`obtainedAt` is the clock at store time.**
+4. **`invalid_client` on refresh is setup, not expiry.** It is thrown as is,
+   classifies `config`, and the token step sets "Needs setup"; the credentials
+   and the expired flag stay. **`invalid_grant`** is the expiry: the
+   credentials are cleared, `myanimelistSessionExpired` set, the user and the
+   queue kept, then the sync status and `notifyAccountsChanged()` go out
+   (`createMalTracker`'s `onSessionExpired`), and the refresh throws
+   `MalSessionGoneError` (`isSessionGone`: the timer stops).
+
+**The logout race.** The refresh captures the generation when it starts, and
+stores the new tokens through the vault's conditional write
+(`write(key, value, { if: () => generation unchanged })`), whose guard runs in
+the same synchronous step as the commit, after the encrypt. A logout (or a
+logout and a login) during the encrypt wins. The single-flight promise is held
+until that store lands, so a caller arriving between the POST and the store
+joins it instead of re-posting the rotated refresh token. An `invalid_grant`
+clears the credentials only while the generation is unchanged too.
+
+### The list
+
+- **Reads.** `listEntries` reads `/users/@me/animelist` with the
+  `list_status{…}` fields named (`num_times_rewatched` reportedly only comes
+  back when named), `num_episodes,status,media_type,main_picture`,
+  `limit=1000` (the maximum) and `nsfw=true`, following `paging.next`; a next
+  link off the configured base is rebuilt from its `offset`, so a stubbed run
+  never leaves the stub. A status filter is applied locally. `getEntry` reads
+  `/anime/{id}?fields=my_list_status{…},num_episodes,status&nsfw=true`; no
+  `my_list_status` is `null` (not on the list: the drain's create branch).
+  `nsfw=true` on every list and title read, so a gray or black title never
+  looks "not on list".
+- **Normalization.** `malId` and `remoteId` are the node id (MAL needs no id
+  map); `updatedAt` is `list_status.updated_at` in ms; `anime` is `title`,
+  `poster` (`main_picture.large`, else `medium`: absolute URLs), `kind`
+  (`media_type`), `episodes` (`num_episodes`, 0 read as `null`, MAL's
+  "unknown"), `episodesAired` (`num_episodes` when `finished_airing`, else
+  `null`: MAL has no aired count for an airing title) and `status`.
+  `smotretAnime` is the `lookupByMalIds` join. `native` is the `data[]`
+  element as read, `{ node, list_status }`.
+- **The cache.** `myanimelistUserRates` rows are `native` plus its
+  `smotretAnime` (`malRateCache.fromEntries`); a patch writes the values back
+  in MAL's own form (`status` + `is_rewatching`, `num_episodes_watched`,
+  `score`, `num_times_rewatched`). `entryOf` gives the `tracker:*` payload.
+- **Writes.** `upsertEntry` PATCHes `/anime/{id}/my_list_status` (the same
+  call creates a missing entry) with `changedFields` only: `episodes` →
+  `num_watched_episodes` (the write key; the read key is
+  `num_episodes_watched`), `status` → `status` + `is_rewatching` (and
+  `num_times_rewatched`, below), `score` → `score` (MAL's 0–10 integers are
+  the app's), `rewatches` → `num_times_rewatched`. No changed field makes no
+  request. `deleteEntry` DELETEs it; a 404 is already gone.
+
+| Canonical | MAL read | MAL write |
+|---|---|---|
+| `planned` | `plan_to_watch` | `status=plan_to_watch&is_rewatching=false` |
+| `watching` | `watching` | `status=watching&is_rewatching=false` |
+| `rewatching` | any status with `is_rewatching=true` | `status=watching&is_rewatching=true` |
+| `completed` | `completed` | `status=completed&is_rewatching=false` |
+| `on_hold` | `on_hold` | `status=on_hold&is_rewatching=false` |
+| `dropped` | `dropped` | `status=dropped&is_rewatching=false` |
+
+**The rewatch shift (`MAL_REWATCH_SHIFT = 1`).** The app counts a rewatch when
+it starts (`nextWatchedRate`); MAL, by community reports, counts one when it is
+completed. So on a `rewatching` entry a read adds one (`app = native + 1`) and
+a write takes one off (`native = max(0, app − 1)`), keyed on the canonical
+status after the write; other statuses pass through. A status write entering
+or leaving `rewatching` moves MAL's count even when the app's `rewatches`
+doesn't change, so every status write also sends `num_times_rewatched`, as
+part of the one changed field. **Not verified against a real account** (see
+the verify list below); if MAL counts at the start, the shift becomes 0 and
+the translation the identity.
+
+**Capabilities.** `getRelated(ref)` reads the title's own `media_type` and
+`start_date` beside its raw `related_anime` (T11c's walk calls it per node);
+`getRecommendations(seeds)` reads each seed's `recommendations`;
+`getDetails(malId)` reads synopsis, genres and the rest on demand and writes
+the response into `myanimelistAnimeDetails[malId]`. Their consumers are T11a,
+T11c and T11d, which wire the details emit and the feature-source
+construction. No `getAiringInfo` or `getCalendar` (MAL has a total and a
+status only, so it is never the `airing` source and MAL-only users get no
+auto-download) and no friends.
+
+### The sync instance and the primary
+
+- **One instance** (`createTrackerSyncService` with `MYANIMELIST_KEYS`) in
+  the fan-out beside Shikimori's. Its broadcasts are `tracker:*` only, with
+  `trackerId: 'mal'` (`events.ts` reshapes the instance's payloads: the rate
+  rows through `entryOf`, the status with `needsSetup`, the queue with
+  `queuedAfter`). The emit order holds: rate, then queue.
+- **"Needs setup"** is set by a `config` result (item step or token step) and
+  by a missing client ID (the accounts state reads that from the config). No
+  drain runs while it is set. `tracker:set-client-config` clears it after a
+  save and `tracker:test-client-config` on `{ ok: true }`, through
+  `clearNeedsSetup()`, which kicks one drain. Each transition broadcasts the
+  sync status and `notifyAccountsChanged()` (`onNeedsSetupChanged`).
+- **The primary branch** (`services/trackers/mal-primary.ts`, set by
+  `registerPrimary` with `setPrimaryWriter('mal', …)`), shaped after
+  Shikimori's: a user change to MAL as the primary (update-rate, the player's
+  mark-watched) is sent live with one session (the live entry, then
+  `upsertEntry` with the fields that differ from it), stamps the clock and
+  patches the cache; a title new to the list refreshes the list in the
+  background. A failure the queue would survive (any class whose policy keeps
+  the entry: `network`, `auth`, `rate-limit`, `server`, `config`) queues the
+  whole rate against the cached row instead, parked for its owner after a
+  switch; an `item` failure throws. A change that reaches `completed` runs the
+  cleanup prompt with the MAL row's own `smotretAnime`. The body of #702 named
+  no primary writer; it was added because without one a MAL-only user's
+  update-rate and mark-watched throw `MyAnimeList has no primary write path`.
+
+### The MAL card
+
+`MalConnectForm.vue`, the MAL body of a `TrackerAccountCard`, shown while
+`TrackerAccountsState.newTrackerCardsEnabled` is true:
+`newTrackerCardsEnabled(app.isPackaged)` (`trackers/flags.ts`), off in packaged
+builds until #698, #699 and #704 have landed. Main refuses
+`tracker:begin-auth('mal')` while it is off. The body:
+
+1. The setup steps, expanded until a client ID is saved and again on "Needs
+   setup": a link to `myanimelist.net/apiconfig/create` and a copy button per
+   value (App Name `anime-dl personal sync`, App Type **other**, a 50–500
+   character description, **exactly one** redirect URL line,
+   `http://localhost:<port>/callback` with main's port from
+   `tracker:get-client-config`'s `redirectUri`, the repo as homepage,
+   non-commercial, hobbyist), then "Return to list → Edit" for the Client ID. It
+   says to reuse an existing client ID (MAL allows 5 per account).
+2. The Client ID (plain, `tracker:set-client-config`) and an optional secret:
+   a password field with no reveal, write-only (the renderer only ever sees
+   `hasSecret`: "A secret is saved", Remove).
+3. Test (`tracker:test-client-config`): "Client ID works", the `config`
+   message, or the network message.
+4. Connect, disabled until a client ID is saved; then "Waiting for
+   MyAnimeList in your browser…" with Cancel and the paste field, or on
+   `port-busy` the warning naming the port, Open anyway (the only place the
+   authorize URL is opened from) and Copy link. Leaving the tab doesn't cancel.
+
+The card shows its body while "Needs setup" too, so a connected account can fix
+its client ID. #701 (T5b)'s second-tracker gate isn't in the card yet: the
+flag doesn't exist on main; T5b adds it.
+
+### Verify list (open)
+
+Nothing below was verified: there was no real MAL account, and
+`myanimelist.net` reset the connection when the API agreement was fetched. The
+fixtures are written from documented and community-reported shapes
+([Testing](./testing.md)). Each item stays open until a manual run with a
+self-registered client captures it:
+
+- the real `expires_in` and refresh-token lifetime (the half-life rule assumes
+  the ~28-day sample);
+- the refresh error bodies (`invalid_grant`, `invalid_client`), the 400
+  "Invalid client id" and 403 bodies;
+- PATCH vs PUT on `my_list_status` (PATCH, per the docs);
+- whether `num_times_rewatched` counts at the start or at completion (the
+  shift above assumes completion) and which status a rewatch reads as;
+- whether the list hides gray/black titles without `nsfw=true`;
+- the API agreement: attribution, caching candidate details (#711), and
+  whether §4(b) and §4(f) fall on each user as the registrant (a legal call,
+  not made here);
+- that a `localhost` redirect registers and a second redirect line errors.
 
 ## Store keys, key maps and the credential vault
 

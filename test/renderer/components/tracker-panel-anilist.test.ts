@@ -117,7 +117,8 @@ function installApi(opts: { expired?: boolean; queueLength?: number } = {}) {
       accounts: [signedOut('shikimori'), anilistAccount(opts), signedOut('mal')],
       primary: 'anilist',
       mirror: {},
-      featureSources: {}
+      featureSources: {},
+      newTrackerCardsEnabled: false
     } satisfies TrackerAccountsState),
     trackerGetRates: vi.fn(async (trackerId: TrackerId) => ({
       trackerId,

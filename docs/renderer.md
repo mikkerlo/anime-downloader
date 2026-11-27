@@ -101,6 +101,8 @@ src/renderer/src/
                                 Disconnect, kept changes; the connect body is the tracker's own component
                                 (`tracker-connect-form.ts` has the contract)
       ShikimoriConnectForm.vue  Shikimori's code paste, on `shikimori:get-auth-url` / `shikimori:exchange-code`
+      MalConnectForm.vue        MyAnimeList's body (#702): the guided app setup, client ID + write-only secret,
+                                Test, Connect over the loopback, and the port-busy / paste fallback
       TrackerPendingDialog.vue  Keep/Discard prompt for a tracker's unsynced changes (#588), labelled per tracker
       PrepareOfflinePanel.vue   Prepare for offline (#592): a row per step, Cancel, the summary; details
                                 with a title link to its page; the library-sync row's Review (N) opens

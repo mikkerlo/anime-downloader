@@ -88,6 +88,9 @@ import { createTrackerAuthSessions } from './trackers/auth-session'
 import { createShikimoriProvider } from './trackers/shikimori.provider'
 import { bootDrain, edgeTrackers, kickoffTrackers } from './services/trackers/edges'
 import type { TrackerSyncService } from './services/trackers/sync'
+import { newTrackerCardsEnabled } from './trackers/flags'
+import { malLoopbackPort } from './trackers/mal/auth'
+import { createMalTracker } from './trackers/mal'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
@@ -401,15 +404,43 @@ shikimori.setOnSessionExpired(() => {
   shikimoriSyncService.broadcastSyncStatus()
   trackerLifecycle.notifyAccountsChanged()
 })
+// The MyAnimeList and AniList cards' build flag (#702, #703).
+const newTrackerCards = newTrackerCardsEnabled(app.isPackaged)
+// MyAnimeList (#702): its client, sign-in, provider, sync instance and card
+// setup (`trackers/mal/index.ts`). The lifecycle and `trackerRates` are
+// declared below; every getter here runs at call or emit time, never while
+// this module is set up.
+const mal = createMalTracker({
+  store,
+  vault: credentialVault,
+  broadcast: broadcastToAll,
+  channels: {
+    rateUpdated: EVENT_CHANNELS.TRACKER_RATE_UPDATED,
+    ratesRefreshed: EVENT_CHANNELS.TRACKER_RATES_REFRESHED,
+    syncStatus: EVENT_CHANNELS.TRACKER_SYNC_STATUS,
+    offlineQueueChanged: EVENT_CHANNELS.TRACKER_OFFLINE_QUEUE_CHANGED
+  },
+  isOffline,
+  generation: () => trackerLifecycle.generation('mal'),
+  notifyAccountsChanged: () => trackerLifecycle.notifyAccountsChanged(),
+  queuedAfter: () => trackerRates.queuedAfter('mal'),
+  port: malLoopbackPort(process.env, app.isPackaged),
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds)
+})
 // The fan-out writer (#692): one entry per tracker whose sync service has
-// landed, Shikimori only for now. The Shikimori router sets its primary branch.
+// landed. The Shikimori router sets its primary branch; MAL's is set below.
 // Its primary is the lifecycle's (#696 § 0), read at call time: the lifecycle
 // is declared below, and nothing writes a rate while this module is set up.
 const trackerFanOut = createTrackerFanOut({
   store,
-  trackers: [{ sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> }],
+  trackers: [
+    { sync: shikimoriSyncService.tracker as TrackerSyncService<unknown, unknown> },
+    { sync: mal.sync as TrackerSyncService<unknown, unknown> }
+  ],
   primary: () => trackerLifecycle.primary()
 })
+// MyAnimeList as the primary (#702): sent live, queued when the queue would survive the failure.
+mal.registerPrimary(trackerFanOut, maybeBroadcastCleanupPrompt)
 // The reads and writes behind the `tracker:*` channels and their `shikimori:*` aliases (#694).
 const trackerRates = createTrackerRates({ store, trackers: trackerFanOut, isOffline })
 // The account lifecycle per tracker and the sign-in attempts (#695). Each
@@ -423,6 +454,7 @@ const trackerLifecycle = createTrackerLifecycle({
   cancelAttempt: (id) => trackerAuth.cancel(id),
   broadcast: broadcastToAll,
   accountsChangedChannel: EVENT_CHANNELS.TRACKER_ACCOUNTS_CHANGED,
+  newTrackerCardsEnabled: newTrackerCards,
   // An AniList or MAL login runs the Shared Library login run too (#714), as
   // Shikimori's does from its own steps: it drops a claim, then merges.
   afterLogin: () =>
@@ -430,9 +462,9 @@ const trackerLifecycle = createTrackerLifecycle({
       ?.runAll('login')
       .catch((err) => console.error('[sync] the login run failed:', err))
 })
-// AniList (#703) and MyAnimeList (#702) add their providers here: the sign-in
-// flows, and the capabilities `tracker:set-feature-source` checks (#696).
-const trackerProviders = { shikimori: createShikimoriProvider({ store }) }
+// The sign-in flows, and the capabilities `tracker:set-feature-source` checks
+// (#696). AniList (#703) adds its provider here.
+const trackerProviders = { shikimori: createShikimoriProvider({ store }), mal: mal.provider }
 const trackerAuth = createTrackerAuthSessions({
   lifecycle: trackerLifecycle,
   providers: trackerProviders,
@@ -863,6 +895,8 @@ function registerIpcHandlers(): void {
     trackerLifecycle,
     trackerAuth,
     trackerChoices,
+    newTrackerCardsEnabled: newTrackerCards,
+    malSetup: mal.setup,
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,

@@ -103,6 +103,8 @@ export const useTrackersStore = defineStore('trackers', () => {
   const mirror = ref<TrackerAccountsState['mirror']>({})
   // The stored overrides only; resolving them is #706's.
   const featureSources = ref<TrackerAccountsState['featureSources']>({})
+  // Whether the MyAnimeList and AniList cards show in Settings (#702, #703).
+  const newTrackerCardsEnabled = ref(false)
   const ratesByTracker = ref<PerTracker<TrackerRateEntry[]>>({})
   const queuedAfterByTracker = ref<PerTracker<Record<number, TrackerRateValues>>>({})
   const syncByTracker = ref<PerTracker<TrackerSyncStatus>>({})
@@ -328,6 +330,7 @@ export const useTrackersStore = defineStore('trackers', () => {
     primary.value = next.primary
     mirror.value = next.mirror
     featureSources.value = next.featureSources
+    newTrackerCardsEnabled.value = next.newTrackerCardsEnabled
     accountsLoaded.value = true
   }
 
@@ -415,6 +418,7 @@ export const useTrackersStore = defineStore('trackers', () => {
     accountsLoaded,
     mirror,
     featureSources,
+    newTrackerCardsEnabled,
     ratesByTracker,
     queuedAfterByTracker,
     syncByTracker,

@@ -69,7 +69,13 @@ function episodeDetail(translationId: number): EpisodeDetail {
 }
 
 function noAccounts(): TrackerAccountsState {
-  return { accounts: [], primary: null, mirror: {}, featureSources: {} }
+  return {
+    accounts: [],
+    primary: null,
+    mirror: {},
+    featureSources: {},
+    newTrackerCardsEnabled: false
+  }
 }
 
 function shikimoriOnly(): TrackerAccountsState {
@@ -86,7 +92,8 @@ function shikimoriOnly(): TrackerAccountsState {
     ],
     primary: 'shikimori',
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   }
 }
 

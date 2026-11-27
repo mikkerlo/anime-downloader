@@ -151,6 +151,9 @@ interface TrackerAccountsState {
   primary: TrackerId | null
   mirror: Partial<Record<TrackerId, boolean>>
   featureSources: Partial<Record<TrackerFeature, TrackerId>>
+  // Whether the MyAnimeList and AniList cards show in Settings → Trackers
+  // (#702, #703): false in packaged builds until the flag lifts.
+  newTrackerCardsEnabled: boolean
 }
 
 // What `tracker:begin-auth` and `tracker:complete-auth` resolve to.
@@ -170,7 +173,16 @@ type TrackerAuthResult =
 interface TrackerClientConfig {
   clientId: string | null
   hasSecret: boolean
+  // The one redirect URL the user registers, with main's loopback port (#702).
+  redirectUri?: string
 }
+
+// `tracker:test-client-config` (MAL only, #702): the saved client ID against
+// `GET /anime/1`. `kind` is the failure's class (`config` for a rejected ID,
+// `network` when MyAnimeList can't be reached).
+type TrackerTestClientConfigResult =
+  | { ok: true }
+  | { ok: false; kind: TrackerErrorClass; message: string }
 
 // `secret`: a string stores one, null clears it, and leaving it out keeps it.
 interface TrackerClientConfigInput {

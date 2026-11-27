@@ -83,7 +83,8 @@ function accountsState(
     accounts: ids.map((id) => byId.get(id) ?? account(id, null)),
     primary,
     mirror: {},
-    featureSources: {}
+    featureSources: {},
+    newTrackerCardsEnabled: false
   }
 }
 

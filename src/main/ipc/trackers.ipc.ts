@@ -102,14 +102,24 @@ function mirrorOptionsArg(value: unknown): TrackerSetMirrorOptions {
   return { confirm }
 }
 
+/** The trackers whose card `newTrackerCardsEnabled` hides (#702; #703 adds AniList). */
+const FLAGGED_CARDS: ReadonlySet<TrackerId> = new Set<TrackerId>(['mal'])
+
 export function register({
   store,
   credentialVault,
   trackerRates: rates,
   trackerLifecycle: lifecycle,
   trackerAuth: auth,
-  trackerChoices: choices
+  trackerChoices: choices,
+  newTrackerCardsEnabled,
+  malSetup
 }: AppDeps): void {
+  const clientConfigView = (): TrackerClientConfig => ({
+    ...getClientConfig(store),
+    ...(malSetup ? { redirectUri: malSetup.redirectUri() } : {})
+  })
+
   // Accounts, auth and logout (#695). `docs/trackers.md` § Accounts and sign-in.
   ipcMain.handle(
     CHANNELS.TRACKER_LIST_ACCOUNTS,
@@ -118,7 +128,18 @@ export function register({
 
   ipcMain.handle(
     CHANNELS.TRACKER_BEGIN_AUTH,
-    (_event, trackerId: unknown): Promise<TrackerAuthResult> => auth.begin(trackerIdArg(trackerId))
+    async (_event, trackerId: unknown): Promise<TrackerAuthResult> => {
+      const id = trackerIdArg(trackerId)
+      // The card is hidden in this build: no bind and no browser (#702).
+      if (FLAGGED_CARDS.has(id) && !newTrackerCardsEnabled) {
+        return {
+          status: 'error',
+          kind: 'config',
+          message: `${TRACKER_LABELS[id]} sign-in isn't available in this build yet`
+        }
+      }
+      return auth.begin(id)
+    }
   )
 
   ipcMain.handle(
@@ -170,22 +191,41 @@ export function register({
     CHANNELS.TRACKER_GET_CLIENT_CONFIG,
     (_event, trackerId: unknown): TrackerClientConfig => {
       malOnly(trackerId)
-      return getClientConfig(store)
+      return clientConfigView()
     }
   )
 
   // The only writer of `myanimelistClientConfig` and `myanimelistClientSecret`:
-  // the settings guard refuses both (#690). It doesn't clear the instance's
-  // "Needs setup"; T6 (#702) wires that. A saved client ID can end MAL's
-  // missing-client-ID "Needs setup", which the accounts state reports (#696).
+  // the settings guard refuses both (#690). A saved config clears the
+  // instance's "Needs setup" (#702), whose hook broadcasts the accounts state;
+  // otherwise a saved client ID can still end MAL's missing-client-ID "Needs
+  // setup", which this handler broadcasts itself (#696). One broadcast either way.
   ipcMain.handle(
     CHANNELS.TRACKER_SET_CLIENT_CONFIG,
     async (_event, trackerId: unknown, input: unknown): Promise<TrackerClientConfig> => {
       const id = malOnly(trackerId)
       const needsSetup = lifecycle.account(id).needsSetup
       await setClientConfig(store, credentialVault, clientConfigArg(input))
-      if (lifecycle.account(id).needsSetup !== needsSetup) lifecycle.notifyAccountsChanged()
-      return getClientConfig(store)
+      const t = rates.instance(id)
+      const instanceFlag = t?.needsSetup() ?? false
+      t?.clearNeedsSetup()
+      if (!instanceFlag && lifecycle.account(id).needsSetup !== needsSetup) {
+        lifecycle.notifyAccountsChanged()
+      }
+      return clientConfigView()
+    }
+  )
+
+  // The MAL card's Test of the saved client ID (#702). Success is a successful
+  // request, so it clears "Needs setup"; a failure leaves it as it is.
+  ipcMain.handle(
+    CHANNELS.TRACKER_TEST_CLIENT_CONFIG,
+    async (_event, trackerId: unknown): Promise<TrackerTestClientConfigResult> => {
+      const id = malOnly(trackerId)
+      if (!malSetup) throw new Error(`${TRACKER_LABELS[id]} setup isn't available`)
+      const result = await malSetup.testClientConfig()
+      if (result.ok) rates.instance(id)?.clearNeedsSetup()
+      return result
     }
   )
 

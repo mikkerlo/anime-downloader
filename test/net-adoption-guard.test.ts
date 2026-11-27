@@ -230,6 +230,8 @@ describe('net adoption guard — src/main', () => {
   it('finds every adopted site', () => {
     expect(countPerFile('adopted')).toEqual({
       'src/main/shikimori.ts': 1,
+      // Every MyAnimeList request, REST and OAuth (#702); the loopback server isn't a fetch.
+      'src/main/trackers/mal/client.ts': 1,
       'src/main/smotret-api.ts': 4,
       'src/main/ffmpeg-binaries.ts': 1,
       'src/main/fpcalc-binaries.ts': 1,

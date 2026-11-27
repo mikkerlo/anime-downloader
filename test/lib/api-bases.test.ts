@@ -1,5 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { malAuthorizeUrl } from '../../src/main/trackers/mal/auth'
 import {
+  MAL_API_BASE,
+  MAL_API_BASE_ENV,
+  MAL_OAUTH_BASE,
+  MAL_OAUTH_BASE_ENV,
+  malApiBase,
+  malOauthBase,
   SHIKIMORI_ORIGIN_ENV,
   SMOTRET_API_BASE,
   SMOTRET_API_BASE_ENV,
@@ -107,6 +114,39 @@ describe('API base overrides (#567)', () => {
     await shikimori.getUser('tok')
     expect(String(stub.mock.calls[0][0])).toMatch(/^http:\/\/127\.0\.0\.1:4002\/api\//)
     expect(shikimori.getAuthUrl()).toMatch(/^http:\/\/127\.0\.0\.1:4002\/oauth\/authorize\?/)
+  })
+})
+
+// #702: MAL has two hosts, so two overrides.
+describe('the MyAnimeList overrides (#702)', () => {
+  const MAL_STUBS = {
+    [MAL_API_BASE_ENV]: 'http://127.0.0.1:4005/v2/',
+    [MAL_OAUTH_BASE_ENV]: 'http://127.0.0.1:4006/v1/oauth2'
+  }
+
+  it('default to the two production hosts', () => {
+    expect(malApiBase()).toBe('https://api.myanimelist.net/v2')
+    expect(malOauthBase()).toBe('https://myanimelist.net/v1/oauth2')
+    expect([MAL_API_BASE, MAL_OAUTH_BASE]).toEqual([malApiBase(), malOauthBase()])
+  })
+
+  it('a packaged build ignores both', () => {
+    applyApiBaseOverrides(MAL_STUBS, true)
+    expect(malApiBase()).toBe(MAL_API_BASE)
+    expect(malOauthBase()).toBe(MAL_OAUTH_BASE)
+  })
+
+  it('unpackaged, both apply, and the authorize URL uses the OAuth override', () => {
+    applyApiBaseOverrides(MAL_STUBS, false)
+    expect(malApiBase()).toBe('http://127.0.0.1:4005/v2')
+    expect(malOauthBase()).toBe('http://127.0.0.1:4006/v1/oauth2')
+    const url = malAuthorizeUrl({
+      clientId: 'c',
+      verifier: 'v'.repeat(128),
+      state: 's',
+      redirectUri: 'http://localhost:41753/callback'
+    })
+    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:4006\/v1\/oauth2\/authorize\?/)
   })
 })
 

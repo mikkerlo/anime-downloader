@@ -15,6 +15,8 @@ export interface FakeTrackerMain {
   queueLength: number
   /** The `shikimori:get-sync-status` queue length, which the card must not read. */
   legacyQueueLength: number
+  /** The accounts state's card flag (#702). */
+  newTrackerCardsEnabled: boolean
 }
 
 const IDS: TrackerId[] = ['shikimori', 'anilist', 'mal']
@@ -25,7 +27,8 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
     sessionExpired: false,
     needsSetup: false,
     queueLength: 0,
-    legacyQueueLength: 0
+    legacyQueueLength: 0,
+    newTrackerCardsEnabled: false
   }
   const listeners = {
     accountsChanged: [] as Listener<TrackerAccountsState>[],
@@ -59,7 +62,8 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
       }),
       primary: main.user ? trackerId : null,
       mirror: {},
-      featureSources: {}
+      featureSources: {},
+      newTrackerCardsEnabled: main.newTrackerCardsEnabled
     }
   }
 
@@ -121,7 +125,26 @@ export function createTrackerCardApi(trackerId: TrackerId = 'shikimori') {
       throw new Error('no exchange stubbed')
     }),
     trackerBeginAuth: vi.fn(async (): Promise<TrackerAuthResult> => ({ status: 'cancelled' })),
-    trackerCompleteAuth: vi.fn(async (): Promise<TrackerAuthResult> => ({ status: 'cancelled' }))
+    trackerCompleteAuth: vi.fn(async (): Promise<TrackerAuthResult> => ({ status: 'cancelled' })),
+    trackerCancelAuth: vi.fn(async () => undefined),
+    // MyAnimeList's connect body (#702).
+    trackerGetClientConfig: vi.fn(
+      async (): Promise<TrackerClientConfig> => ({
+        clientId: null,
+        hasSecret: false,
+        redirectUri: 'http://localhost:41753/callback'
+      })
+    ),
+    trackerSetClientConfig: vi.fn(
+      async (_id: TrackerId, input: TrackerClientConfigInput): Promise<TrackerClientConfig> => ({
+        clientId: input.clientId,
+        hasSecret: typeof input.secret === 'string',
+        redirectUri: 'http://localhost:41753/callback'
+      })
+    ),
+    trackerTestClientConfig: vi.fn(
+      async (): Promise<TrackerTestClientConfigResult> => ({ ok: true })
+    )
   }
 
   /** The next sign-in resolves `user`, after announcing it as main does. */

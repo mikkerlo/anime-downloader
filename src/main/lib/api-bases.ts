@@ -15,9 +15,18 @@ export const LEGACY_SMOTRET_HOSTS: readonly string[] = [
 export const SMOTRET_API_BASE_ENV = 'ANIME_DL_SMOTRET_API_BASE'
 export const SHIKIMORI_ORIGIN_ENV = 'ANIME_DL_SHIKIMORI_ORIGIN'
 
+// MyAnimeList (#702) has two hosts: REST on `api.myanimelist.net`, the OAuth
+// authorize and token endpoints on `myanimelist.net`. One override each.
+export const MAL_API_BASE = 'https://api.myanimelist.net/v2'
+export const MAL_OAUTH_BASE = 'https://myanimelist.net/v1/oauth2'
+export const MAL_API_BASE_ENV = 'ANIME_DL_MAL_API_BASE'
+export const MAL_OAUTH_BASE_ENV = 'ANIME_DL_MAL_OAUTH_BASE'
+
 let smotretBase = SMOTRET_API_BASE
 let smotretSiteOrigin = SMOTRET_ORIGIN
 let shikiOrigin = SHIKIMORI_ORIGIN
+let malApi = MAL_API_BASE
+let malOauth = MAL_OAUTH_BASE
 
 /** The site root an API base was built from: `<root>/api` → `<root>`, else its origin. */
 function siteRootOf(apiBase: string): string {
@@ -37,6 +46,8 @@ export function applyApiBaseOverrides(env: NodeJS.ProcessEnv, isPackaged: boolea
   smotretBase = pick(SMOTRET_API_BASE_ENV, SMOTRET_API_BASE)
   smotretSiteOrigin = smotretBase === SMOTRET_API_BASE ? SMOTRET_ORIGIN : siteRootOf(smotretBase)
   shikiOrigin = pick(SHIKIMORI_ORIGIN_ENV, SHIKIMORI_ORIGIN)
+  malApi = pick(MAL_API_BASE_ENV, MAL_API_BASE)
+  malOauth = pick(MAL_OAUTH_BASE_ENV, MAL_OAUTH_BASE)
 }
 
 export function smotretApiBase(): string {
@@ -71,4 +82,14 @@ export function rewriteLegacySmotretUrl(url: string): string | null {
 
 export function shikimoriOrigin(): string {
   return shikiOrigin
+}
+
+/** MAL's REST base, `…/v2`: the list, entry, user and capability reads. */
+export function malApiBase(): string {
+  return malApi
+}
+
+/** MAL's OAuth base, `…/v1/oauth2`: `/authorize` and `/token`. */
+export function malOauthBase(): string {
+  return malOauth
 }

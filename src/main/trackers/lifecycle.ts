@@ -115,6 +115,8 @@ export interface TrackerLifecycleDeps {
    * claim and merges the owner's libraries. Shikimori's router sets its own.
    */
   afterLogin?: (trackerId: TrackerId) => void
+  /** `newTrackerCardsEnabled(app.isPackaged)` (`trackers/flags.ts`), reported on the accounts state. */
+  newTrackerCardsEnabled?: boolean
 }
 
 export interface TrackerLifecycle {
@@ -362,7 +364,8 @@ export function createTrackerLifecycle(deps: TrackerLifecycleDeps): TrackerLifec
       mirror: (store.get('trackerMirror') as TrackerAccountsState['mirror'] | undefined) ?? {},
       featureSources:
         (store.get('trackerFeatureSource') as TrackerAccountsState['featureSources'] | undefined) ??
-        {}
+        {},
+      newTrackerCardsEnabled: deps.newTrackerCardsEnabled ?? false
     }
   }
 

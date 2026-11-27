@@ -27,6 +27,18 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   carries a real-looking token (`Bearer …`, non-fake `access_token` /
   `refresh_token`). See `test/fixtures/shikimori/README.md` for the
   refresh + anonymization procedure.
+- **MyAnimeList** (#702): `test/fixtures/mal/` holds the list pages, entry
+  reads and writes, `/users/@me`, the capability reads, the token responses and
+  the error bodies (400 "Invalid client id", 403 `forbidden`, 403 "DoS
+  detected", `invalid_grant`, `invalid_client`, `invalid_token`, 404). They are
+  **written from MAL's documented and community-reported shapes, not captured**:
+  no real MAL account was used, and the slice's verify tasks (see
+  [Trackers › MyAnimeList](./trackers.md#myanimelist)) replace them with
+  captures. `test/helpers/fake-mal.ts` serves them as a fake `fetch` behind the
+  two unpackaged-only overrides `ANIME_DL_MAL_API_BASE` and
+  `ANIME_DL_MAL_OAUTH_BASE`; `ANIME_DL_MAL_LOOPBACK_PORT=0` gives the sign-in
+  loopback a free port. `test/helpers/mal-tracker.ts` builds MAL as `index.ts`
+  does (`createMalTracker`) for the drain and primary-branch tests.
 - **Modelled server** (`test/helpers/syncplay-min-election-server.ts`) — a
   cut-down Syncplay server for the one seam hand-fed frames cannot express:
   `Room.getPosition()`'s `min(watchers)` election and the link latency that

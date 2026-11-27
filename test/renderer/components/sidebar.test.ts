@@ -338,12 +338,27 @@ describe('Sidebar', () => {
       expect(popover(w).exists()).toBe(false)
       expect(document.activeElement).toBe(chip.element)
 
-      // An outside click closes it too.
+      // An outside click on nothing focusable closes it too, and focus comes
+      // back to the chip once the press's own focus change has landed.
+      const settle = () => new Promise((r) => setTimeout(r, 0))
       await chip.trigger('click')
       expect(popover(w).exists()).toBe(true)
+      ;(document.activeElement as HTMLElement | null)?.blur()
       document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
       await flushPromises()
       expect(popover(w).exists()).toBe(false)
+      await settle()
+      expect(document.activeElement).toBe(chip.element)
+
+      // An outside click on another control keeps that control's focus.
+      await chip.trigger('click')
+      expect(popover(w).exists()).toBe(true)
+      const nav = w.find('.nav-item').element as HTMLElement
+      nav.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      nav.focus()
+      await settle()
+      expect(popover(w).exists()).toBe(false)
+      expect(document.activeElement).toBe(nav)
 
       // The expired row's button is the deep link.
       await chip.trigger('click')

@@ -143,7 +143,7 @@ function onDocKeydown(e: KeyboardEvent): void {
 function onDocPointerdown(e: Event): void {
   const target = e.target as Node | null;
   if (target && (popoverRef.value?.contains(target) || chipRef.value?.contains(target))) return;
-  closePopover();
+  closePopover({ outside: true });
 }
 function unlisten(): void {
   document.removeEventListener('keydown', onDocKeydown);
@@ -155,11 +155,21 @@ function openPopover(): void {
   document.addEventListener('keydown', onDocKeydown);
   document.addEventListener('pointerdown', onDocPointerdown, true);
 }
-function closePopover(): void {
+function closePopover(opts: { outside?: boolean } = {}): void {
   if (!popoverOpen.value) return;
   popoverOpen.value = false;
   unlisten();
-  void nextTick(() => chipRef.value?.focus());
+  if (!opts.outside) {
+    void nextTick(() => chipRef.value?.focus());
+    return;
+  }
+  // An outside click: the press's own focus change lands after this handler,
+  // so look once it has. A click on another control keeps its focus; a click
+  // on nothing focusable returns focus to the chip.
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) chipRef.value?.focus();
+  });
 }
 function togglePopover(): void {
   if (popoverOpen.value) closePopover();

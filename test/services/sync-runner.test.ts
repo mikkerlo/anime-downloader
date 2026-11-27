@@ -32,10 +32,11 @@ import {
   server,
   trackerActor,
   vals,
-  type Pc
+  type Pc,
+  type Vals
 } from '../helpers/sync-runner'
 import { ANILIST_MEDIA_IDS, UNMAPPED_MAL_ID } from '../helpers/fake-tracker'
-import { ANILIST_KEYS } from '../../src/main/trackers/keys'
+import { ANILIST_KEYS, MYANIMELIST_KEYS } from '../../src/main/trackers/keys'
 import { conflictsFileOf } from '../../src/main/services/sync-runner/conflicts'
 import { overlay, pendingFileOf } from '../../src/main/services/sync-runner/pending'
 import type { SyncLogRecord } from '../../src/main/services/sync-runner/log'
@@ -2733,6 +2734,142 @@ describe('a MyAnimeList-owned library: the MAL leg (#715, after #702)', () => {
     expect(
       (await pc.bases.read(`mal-${MAL_USER.id}`))!.doc.titles[ID].rate!.episodes
     ).toMatchObject({ value: 6, origin: 'mal' })
+  })
+})
+
+// The non-Shikimori half of "a refresh replaced the patch" (#715 review): an
+// AniList or MAL patch moves the row's only time, so the cache showing a value
+// other than the pending one is what a refresh left there. Forget's revert,
+// `putPending`'s `prePatch` carry-forward and a drop's server value read it.
+const REFRESH_CASES = [
+  {
+    id: 'anilist' as const,
+    label: 'AniList',
+    owner: ANILIST_5,
+    keys: ANILIST_KEYS,
+    remote: ANILIST_MEDIA_IDS[MAL] * 10,
+    pc: (store: Record<string, unknown>) => makePc({ user: null, anilist: {}, store }),
+    tracker: (pc: Pc) => pc.anilist!
+  },
+  {
+    id: 'mal' as const,
+    label: 'MyAnimeList',
+    owner: MAL_5,
+    keys: MYANIMELIST_KEYS,
+    remote: MAL,
+    pc: (store: Record<string, unknown>) => makePc({ user: null, mal: {}, store }),
+    tracker: (pc: Pc) => pc.mal!
+  }
+]
+
+describe.each(REFRESH_CASES)('$label: a refresh replaced the patch (#715 review)', (tc) => {
+  const M2 = LIBS[0]
+  const L2 = LIBS[1]
+  const pendingPath = (pc: Pc) => path.join(pc.userData, 'sync-pending', `${tc.id}-5.json`)
+  const pendingOf = (pc: Pc) => JSON.parse(fs.readFileSync(pendingPath(pc), 'utf8')).rates
+  const row = (score: number, at: number) => ({
+    malId: MAL,
+    remoteId: tc.remote,
+    values: vals({ score }),
+    updatedAt: at,
+    smotretAnime: { id: ANIME }
+  })
+  const cached = (pc: Pc) =>
+    (pc.store.get(tc.keys.userRates) as { malId: number; values: Vals }[]).find(
+      (x) => x.malId === MAL
+    )!.values.score
+  /** A wholesale refresh: the cache becomes the server's row. */
+  const refresh = (pc: Pc, score: number, at: number) =>
+    pc.store.set(tc.keys.userRates, [row(score, at)])
+
+  /** M's 7 is pending (prePatch 6), then L's 8 overwrites it; `between` refreshes first. */
+  async function overwriteSetup(between: number | null) {
+    const m = await makeLibrary({
+      libraryId: M2,
+      tracker: tc.owner,
+      doc: titleDoc({ rate: r({ score: 7 }, T0 + 500) })
+    })
+    const l = await makeLibrary({
+      libraryId: L2,
+      tracker: tc.owner,
+      doc: titleDoc({ rate: r({ score: 8 }, T0 + 600) })
+    })
+    const pc = tc.pc({ [tc.keys.userRates]: [row(6, T0)] })
+    pc.offline.value = true
+    await pc.attach(m.root)
+    await pc.attach(l.root)
+    await seedBase(pc, M2, m.root, titleDoc({ rate: r({ score: 6 }) }))
+    await pc.runner.runLibrary(M2, 'plug')
+    expect(cached(pc)).toBe(7)
+    if (between !== null) refresh(pc, between, T0 + 2000)
+    await seedBase(pc, L2, l.root, titleDoc({ rate: r({ score: 7 }) }))
+    await pc.runner.runLibrary(L2, 'plug')
+    return { pc }
+  }
+
+  it('putPending: with no refresh the first prePatch is carried forward; after one it is the refreshed row', async () => {
+    const carried = await overwriteSetup(null)
+    expect(pendingOf(carried.pc)[MAL].score).toMatchObject({
+      value: 8,
+      prePatch: { value: 6, serverUpdatedAt: new Date(T0).toISOString() }
+    })
+    cleanup()
+    const fresh = await overwriteSetup(9)
+    expect(pendingOf(fresh.pc)[MAL].score).toMatchObject({
+      value: 8,
+      prePatch: { value: 9, serverUpdatedAt: new Date(T0 + 2000).toISOString() }
+    })
+    await fresh.pc.attached.forget(L2, { confirmDropPending: true })
+    expect(cached(fresh.pc)).toBe(9)
+  })
+
+  it('Forget keeps a value a refresh brought in after the patch, never reverting it to the stale prePatch', async () => {
+    const { pc } = await overwriteSetup(null)
+    expect(pendingOf(pc)[MAL].score).toMatchObject({ value: 8, prePatch: { value: 6 } })
+    refresh(pc, 9, T0 + 3000)
+    await pc.attached.forget(L2, { confirmDropPending: true })
+    expect(fs.existsSync(pendingPath(pc))).toBe(false)
+    expect(cached(pc)).toBe(9)
+  })
+
+  it('a held rejection’s server value is the refreshed cache’s, not the prePatch', async () => {
+    const lib = await makeLibrary({
+      tracker: tc.owner,
+      doc: titleDoc({ rate: r({ score: 6 }, T0 + 500) })
+    })
+    const pc = tc.pc({ [tc.keys.userRates]: [row(7, T0 + 3000)] })
+    tc.tracker(pc).fake.set(MAL, { score: 7 }, { at: T0 + 3000 })
+    await pc.attach(lib.root)
+    // Pending 11 over a prePatch of 6; a refresh since put the server's 7 in the cache.
+    fs.mkdirSync(path.dirname(pendingPath(pc)), { recursive: true })
+    fs.writeFileSync(
+      pendingPath(pc),
+      JSON.stringify({
+        version: 1,
+        ownerId: '5',
+        rates: { [MAL]: { score: pend(11, T0 + 10, lib.libraryId, [6, T0]) } }
+      })
+    )
+    tc.tracker(pc).fake.fail('item', { member: 'upsertEntry', times: 3 })
+    for (let i = 0; i < 3; i++) {
+      pc.store.set(tc.keys.updateQueue, [
+        {
+          malId: MAL,
+          rateId: tc.remote,
+          before: vals({ score: 7 }),
+          after: vals({ score: 11 }),
+          queuedAt: 10 + i,
+          fields: ['score'],
+          origin: { kind: 'sync-merge', provenance: { score: { libraryId: lib.libraryId } } }
+        }
+      ])
+      await tc.tracker(pc).sync.syncQueue()
+      await pc.runner.quiesce()
+    }
+    const held = JSON.parse(
+      fs.readFileSync(path.join(pc.userData, 'sync-state', `conflicts-${tc.id}.json`), 'utf8')
+    ).records
+    expect(held).toEqual([expect.objectContaining({ parties: { local: 11, [tc.id]: 7 } })])
   })
 })
 

@@ -10,6 +10,9 @@
 // session, and each has an `authFlow` (#695) driven through `signIn`. The
 // AniList and MAL error replies encode the epic's documented
 // behaviour only; #703 (T7) and #702 (T6) replace them with captured fixtures.
+// AniList has a cache-first `getAiringInfo` and AniList and MAL a `getDetails`
+// (#706), each recording the reads its server answered in `serverReads`, and a
+// `cachedDetails` over `detailsCache`.
 
 import { ShikiApiError, ShikiAuthError } from '../../src/main/shikimori'
 import type { RateValues } from '../../src/main/lib/shikimori-rate'
@@ -27,8 +30,11 @@ import {
   type AnilistStatus,
   type MalStatusPair
 } from '../../src/main/trackers/scores'
+import type { StorageService } from '../../src/main/store/types'
 import {
+  AIRING_FRESHNESS_MS,
   TRACKER_CAPABILITIES,
+  type AiringInfo,
   type TrackerAuthAttempt,
   type TrackerAuthFlow,
   type TrackerCapabilities,
@@ -160,9 +166,41 @@ const CLASSIFIERS: Record<TrackerId, (err: unknown) => TrackerErrorClass> = {
   mal: classifyMalError
 }
 
-const NO_CAPABILITIES = Object.fromEntries(
-  TRACKER_CAPABILITIES.map((c) => [c, false])
-) as unknown as TrackerCapabilities
+// The capability members each personality implements (#706): AniList's airing
+// and details reads, MyAnimeList's details read. Shikimori's real reads live in
+// its adapter, so its personality has none.
+const FAKE_MEMBERS: Record<TrackerId, readonly string[]> = {
+  shikimori: [],
+  anilist: ['getAiringInfo', 'getDetails'],
+  mal: ['getDetails']
+}
+
+function capabilitiesOf(id: TrackerId): TrackerCapabilities {
+  return Object.fromEntries(
+    TRACKER_CAPABILITIES.map((c) => [c, FAKE_MEMBERS[id].includes(c)])
+  ) as unknown as TrackerCapabilities
+}
+
+/**
+ * The fake's stand-in for AniList's list row (#703) in `anilistUserRates`: a
+ * row carries the airing data its list read brought, and when. Only the
+ * fake's cache-first `getAiringInfo` reads it.
+ */
+export interface FakeAiringRow {
+  malId: number
+  airing?: AiringInfo & { fetchedAt: number }
+}
+
+/** One read the fake's server answered (#706): what "no network call" counts. */
+export interface FakeServerRead {
+  member: 'getAiringInfo' | 'getDetails'
+  malId: number
+}
+
+export interface FakeTrackerOptions {
+  /** AniList: the store whose `anilistUserRates` `getAiringInfo` reads first. */
+  store?: Pick<StorageService, 'get'>
+}
 
 export interface FakeTracker<P extends TrackerId> {
   readonly id: P
@@ -170,6 +208,14 @@ export interface FakeTracker<P extends TrackerId> {
   /** The signed-in user's rows, by MAL id. */
   readonly rows: Map<number, FakeRow>
   readonly upserts: UpsertCall[]
+  /** The server's airing data by MAL id (AniList). A title missing here answers null. */
+  readonly airing: Map<number, AiringInfo>
+  /** The server's details by MAL id (AniList, MyAnimeList). */
+  readonly details: Map<number, TrackerDetails>
+  /** The provider's own details cache, normalized: what its `cachedDetails` answers. */
+  readonly detailsCache: Map<number, TrackerDetails>
+  /** Every read the server answered, in order. */
+  readonly serverReads: FakeServerRead[]
   user: TrackerUser & { token: string }
   set(malId: number, values: Partial<RateValues>, opts?: { at?: number; scoreRaw?: number }): void
   /** The next `times` calls of `member` (any data member when omitted) answer with `reply`. */
@@ -215,10 +261,42 @@ export function fakeCredentials(id: TrackerId, input: string): { access_token: s
   return { access_token: `${id}-token-for-${input}` }
 }
 
-export function createFakeTracker<P extends TrackerId>(id: P): FakeTracker<P> {
+export function createFakeTracker<P extends TrackerId>(
+  id: P,
+  opts: FakeTrackerOptions = {}
+): FakeTracker<P> {
   const replies = REPLIES[id] as Record<string, () => unknown>
   const rows = new Map<number, FakeRow>()
   const upserts: UpsertCall[] = []
+  const airing = new Map<number, AiringInfo>()
+  const details = new Map<number, TrackerDetails>()
+  const serverReads: FakeServerRead[] = []
+
+  /** `AiringInfo`'s contract: a list row no older than 6 h answers with no server read. */
+  function cachedAiring(malId: number): AiringInfo | null {
+    const list = (opts.store?.get('anilistUserRates') as FakeAiringRow[] | undefined) ?? []
+    const row = list.find((r) => r.malId === malId)?.airing
+    if (!row || Date.now() - row.fetchedAt > AIRING_FRESHNESS_MS) return null
+    return { episodesAired: row.episodesAired, episodes: row.episodes }
+  }
+
+  const capabilityReads: Partial<TrackerProvider<FakeSession, NativeOf[P], NativeOf[P]>> = {}
+  if (FAKE_MEMBERS[id].includes('getAiringInfo')) {
+    capabilityReads.getAiringInfo = async (malId) => {
+      const cached = cachedAiring(malId)
+      if (cached) return cached
+      serverReads.push({ member: 'getAiringInfo', malId })
+      return airing.get(malId) ?? null
+    }
+  }
+  const detailsCache = new Map<number, TrackerDetails>()
+  if (FAKE_MEMBERS[id].includes('getDetails')) {
+    capabilityReads.getDetails = async (malId) => {
+      serverReads.push({ member: 'getDetails', malId })
+      return details.get(malId) ?? null
+    }
+    capabilityReads.cachedDetails = (malId) => detailsCache.get(malId) ?? null
+  }
   let clock = T0 + 1_000_000
   let failures: { reply: string; times: number; member?: FakeMember }[] = []
 
@@ -372,6 +450,10 @@ export function createFakeTracker<P extends TrackerId>(id: P): FakeTracker<P> {
     id,
     rows,
     upserts,
+    airing,
+    details,
+    detailsCache,
+    serverReads,
     signIn,
     user: { id: 1, nickname: `${id}-user`, avatar: null, token: `fake-access-token-${id}` },
     set(malId, values, opts = {}) {
@@ -409,12 +491,17 @@ export function createFakeTracker<P extends TrackerId>(id: P): FakeTracker<P> {
     reset() {
       rows.clear()
       upserts.length = 0
+      airing.clear()
+      details.clear()
+      detailsCache.clear()
+      serverReads.length = 0
       failures = []
       clock = T0 + 1_000_000
     },
     provider: {
       id,
-      capabilities: NO_CAPABILITIES,
+      capabilities: capabilitiesOf(id),
+      ...capabilityReads,
       authFlow,
       async auth() {
         maybeFail('auth')

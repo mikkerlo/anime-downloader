@@ -197,9 +197,32 @@ interface TrackerLogoutResult {
   needsPrimaryChoice?: { candidates: TrackerId[] }
 }
 
-// A feature whose tracker `tracker:set-feature-source` can override (#706
-// resolves it).
+// A feature whose tracker `tracker:set-feature-source` can override. #706's
+// `resolveFeatureSource` (`src/shared/trackers/feature-source.ts`) resolves it.
 type TrackerFeature = 'calendar' | 'chronology' | 'forYou' | 'details' | 'airing'
+
+// ---- Details (#706) ----------------------------------------------------------
+
+// A title's details from a non-Shikimori tracker, normalized: what
+// `tracker:get-details` returns and `tracker:details-updated` carries.
+// `description` is plain text. `status` is in Shikimori's words, as rate
+// statuses are: `released` is a finished show; null is unknown.
+interface TrackerDetails {
+  description: string | null
+  genres: string[]
+  status: 'anons' | 'ongoing' | 'released' | null
+  episodes: number | null
+  episodesAired: number | null
+  kind: string | null
+}
+
+// `tracker:details-updated`: a write into AniList's or MyAnimeList's details
+// cache. Shikimori's stay on `shikimori:anime-details-updated`.
+interface TrackerDetailsUpdatedEvent {
+  trackerId: TrackerId
+  malId: number
+  details: TrackerDetails
+}
 
 interface TrackerSetMirrorOptions {
   // Switching off: without it nothing changes and the count comes back.

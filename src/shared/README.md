@@ -10,6 +10,7 @@ Reserved for the cross-cutting layer introduced by the
 - `types/*.d.ts` — shared domain types, declared as ambient globals so no call site needs an import
 - `shikimori.ts` — the Shikimori origin + its image hotlink filters
 - `episode-files.ts` — the episode-file extension sets and the regexes derived from them (#429)
+- `trackers/feature-source.ts` — the feature-source resolver and the static capability matrix main and the renderer both read (#706)
 - `storage-roots.ts` — `ROOT_KEYS`, the storage root key list read by `storage:clear-root`, `set-setting`'s denylist, `missingConfiguredRoot()` and the Storage tab (#454)
 - `trackers/labels.ts` — `TRACKER_LABELS`, each tracker's display name for UI copy (#700)
 

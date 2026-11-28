@@ -75,6 +75,7 @@ describe('PERSISTED_STORE_KEYS', () => {
     'anilistParkedQueues',
     'anilistAnimeDetails',
     'anilistIdMap',
+    'anilistFriends',
     'myanimelistCredentials',
     'myanimelistUser',
     'myanimelistSessionExpired',

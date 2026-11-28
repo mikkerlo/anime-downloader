@@ -15,6 +15,7 @@ export interface TrackersApi {
     onTrackerRateUpdated: (cb: (e: TrackerRateUpdatedEvent) => void) => () => void
     onTrackerRatesRefreshed: (cb: (e: TrackerRatesRefreshedEvent) => void) => () => void
     onTrackerSyncStatus: (cb: (e: TrackerSyncStatusEvent) => void) => () => void
+    onTrackerFriendsRefreshed: (cb: (e: TrackerFriendsRefreshedEvent) => void) => () => void
   }
   emitAccounts(state: TrackerAccountsState): void
   emitQueueChanged(e: TrackerOfflineQueueChangedEvent): void
@@ -118,7 +119,9 @@ export function trackersApi(
       onTrackerOfflineQueueChanged: subscribe(queue),
       onTrackerRateUpdated: () => () => {},
       onTrackerRatesRefreshed: subscribe(refreshed),
-      onTrackerSyncStatus: () => () => {}
+      onTrackerSyncStatus: () => () => {},
+      // The store's Friends subscription (#712).
+      onTrackerFriendsRefreshed: () => () => {}
     },
     emitAccounts: (s) => {
       for (const cb of [...accounts]) cb(s)

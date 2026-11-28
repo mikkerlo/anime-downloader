@@ -1,0 +1,15 @@
+{
+  "data": {
+    "Page": {
+      "pageInfo": { "hasNextPage": false },
+      "following": [
+        {
+          "id": 6003,
+          "name": "dave",
+          "avatar": { "medium": null },
+          "statistics": { "anime": { "count": 45, "meanScore": 85 } }
+        }
+      ]
+    }
+  }
+}

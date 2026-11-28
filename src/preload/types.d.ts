@@ -370,6 +370,11 @@ interface Api {
   onTrackerDetailsUpdated: (callback: (data: TrackerDetailsUpdatedEvent) => void) => Unsubscribe
   // The chronology (#710)
   trackerGetRelated: (malId: number) => Promise<ShikiRelatedEntry[]>
+  // Friends (#712)
+  trackerGetFriends: () => Promise<TrackerFriendsResult>
+  trackerGetFriendsActivity: () => Promise<TrackerFriendsActivityResult>
+  trackerGetFriendsRates: (malId: number) => Promise<TrackerFriendRates[]>
+  onTrackerFriendsRefreshed: (callback: (data: TrackerFriendsRefreshedEvent) => void) => Unsubscribe
   // Accounts, auth and logout (#695)
   trackerListAccounts: () => Promise<TrackerAccountsState>
   trackerBeginAuth: (trackerId: TrackerId) => Promise<TrackerAuthResult>

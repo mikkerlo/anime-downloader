@@ -240,6 +240,99 @@ type TrackerCalendarResult = ShikiSnapshotResult<CalendarEntry[]> & {
   trackerId: TrackerId | null
 }
 
+// ---- Friends (#712) ----------------------------------------------------------
+// One merged Friends page: every connected tracker with `getFriends` in the
+// capability matrix (Shikimori and AniList) contributes. People are not
+// de-duplicated across trackers.
+
+// How one source's read went. `error` is the message of a failed fetch, or of
+// an expired session (`sessionExpired`), beside whatever the cache still
+// served for it.
+interface TrackerFriendsSourceState {
+  status: 'ok' | 'error'
+  error?: string
+  sessionExpired?: boolean
+}
+
+// A friend card. Shikimori's is `ShikiFriendCard` plus `source` and
+// `presence: true`. AniList's (a followed user) has no presence (`online`
+// false, `lastOnlineAt` null), no `mutual` and no `watching`, and its `mean`
+// is on the 0–10 scale.
+interface TrackerFriendCard {
+  source: TrackerId
+  id: number
+  nickname: string
+  avatar: string
+  presence: boolean
+  lastOnlineAt: string | null
+  online: boolean
+  titles: number
+  mean: number
+  mutual: number | null
+  watching: ShikiFriendWatching | null
+}
+
+// `tracker:get-friends`: the merged cards (Shikimori's, then AniList's) and
+// each contributing source's state. No source: `{ cards: [], sources: {} }`.
+interface TrackerFriendsResult {
+  cards: TrackerFriendCard[]
+  sources: Partial<Record<TrackerId, TrackerFriendsSourceState>>
+}
+
+// `tracker:friends-refreshed`: one source's cards after a background refresh.
+interface TrackerFriendsRefreshedEvent {
+  trackerId: TrackerId
+  cards: TrackerFriendCard[]
+}
+
+// One activity item. Shikimori's keeps every `ShikiFriendActivityEntry` field.
+// An AniList item whose media has no MAL id has `malId: null` and no smotret
+// join, so it links to AniList only. `description` is plain text the app
+// builds; `friendUrl` and `titleUrl` are the source's pages.
+interface TrackerFriendActivityEntry {
+  source: TrackerId
+  friendId: number
+  friendNickname: string
+  friendAvatar: string
+  malId: number | null
+  animeName: string
+  animeImage: string
+  description: string
+  createdAt: string
+  smotretAnime: AnimeSearchResult | null
+  friendUrl: string
+  titleUrl: string | null
+}
+
+// One source's activity: its own snapshot result, and its state.
+type TrackerFriendsActivitySource = ShikiSnapshotResult<TrackerFriendActivityEntry[]> &
+  TrackerFriendsSourceState
+
+// `tracker:get-friends-activity`: every source's feed merged newest first.
+// `stale` when any contributing source is; `fetchedAt` is then the oldest
+// stale source's, and null when none of them has a snapshot.
+type TrackerFriendsActivityResult = ShikiSnapshotResult<TrackerFriendActivityEntry[]> & {
+  sources: Partial<Record<TrackerId, TrackerFriendsActivitySource>>
+}
+
+// A friend's rate on one title. `score` is 0–10 (AniList's POINT_100 / 10);
+// 0 means unscored.
+interface TrackerFriendRate {
+  source: TrackerId
+  nickname: string
+  avatar: string
+  status: ShikiUserRateStatus
+  score: number
+  episodes: number
+}
+
+// `tracker:get-friends-rates(malId)`: one list per contributing source, in
+// `shikimori`, `anilist` order.
+interface TrackerFriendRates extends TrackerFriendsSourceState {
+  source: TrackerId
+  rates: TrackerFriendRate[]
+}
+
 // ---- Details (#706) ----------------------------------------------------------
 
 // A title's details from a non-Shikimori tracker, normalized: what

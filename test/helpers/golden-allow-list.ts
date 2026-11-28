@@ -13,6 +13,7 @@ export const GOLDEN_NEW_KEYS: Readonly<Record<string, unknown>> = {
   anilistParkedQueues: {},
   anilistAnimeDetails: {},
   anilistIdMap: {},
+  anilistFriends: [],
   myanimelistCredentials: null,
   myanimelistUser: null,
   myanimelistSessionExpired: false,

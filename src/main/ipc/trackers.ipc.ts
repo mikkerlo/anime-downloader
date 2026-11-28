@@ -1,8 +1,9 @@
 // The `tracker:*` account, auth and logout channels (#695), the primary,
 // mirror and feature-source setters (#696), the rate, sync-status and
 // queue channels (#694, epic #688), the details read (#706), the calendar
-// (#709), the chronology (#710) and "Copy from primary" (#705). Each handler
-// validates its arguments, calls the shared function its `shikimori:*` alias calls too (in
+// (#709), the chronology (#710), "Copy from primary" (#705) and the merged
+// Friends reads (#712). Each handler validates its arguments, calls the shared
+// function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
 // `EVENT_CHANNELS.TRACKER_*` symbols: the bridge emits them, configured from
@@ -127,7 +128,8 @@ export function register({
   offlineService,
   anilistCalendar,
   anilistRelated,
-  malRelated
+  malRelated,
+  trackerFriends
 }: AppDeps): void {
   // `shikimori:get-calendar`'s body (#709): the same function, so the two
   // channels can't disagree while Shikimori is the `calendar` source.
@@ -367,6 +369,30 @@ export function register({
         return { trackerId: source, ...(await anilistCalendar.get(refetch)) }
       }
       return { trackerId: null, data: [], fetchedAt: null, stale: false }
+    }
+  )
+
+  // The merged Friends page and detail block (#712): every connected friends
+  // source, caught per source (`services/trackers/friends.ts`).
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_FRIENDS,
+    async (): Promise<TrackerFriendsResult> =>
+      trackerFriends ? trackerFriends.getFriends() : { cards: [], sources: {} }
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_FRIENDS_ACTIVITY,
+    async (): Promise<TrackerFriendsActivityResult> =>
+      trackerFriends
+        ? trackerFriends.getActivity()
+        : { data: [], fetchedAt: null, stale: false, sources: {} }
+  )
+
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_FRIENDS_RATES,
+    async (_event, malId: unknown): Promise<TrackerFriendRates[]> => {
+      const id = malIdArg(malId)
+      return trackerFriends ? trackerFriends.getRates(id) : []
     }
   )
 

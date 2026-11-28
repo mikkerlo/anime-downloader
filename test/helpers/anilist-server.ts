@@ -13,6 +13,8 @@
 //
 // Every reply carries `X-RateLimit-Limit: 60000` unless it sets its own, so
 // the limiter's spacing is 1 ms and real-timer tests aren't paced at 2 s.
+// A document that passes a nullable variable (or nothing) where the schema
+// wants a non-null argument (`NON_NULL_ARGS`) gets live AniList's 400 (#712).
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -67,6 +69,46 @@ export interface AniListServer {
 
 const OPERATION_RE = /^\s*(?:query|mutation)\s+(\w+)/
 
+/**
+ * The field arguments AniList's schema makes non-null, for the fields the app
+ * queries (#712): `Page.following(userId: Int!)` and `Page.followers(userId:
+ * Int!)`. Every other argument the app passes is nullable in the schema.
+ */
+export const NON_NULL_ARGS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  following: { userId: 'Int!' },
+  followers: { userId: 'Int!' }
+}
+
+/**
+ * What live AniList answers a document with, before running it, when a
+ * non-null argument is missing or bound to a nullable variable: the 400 and
+ * its message, or null when the document is valid on that count.
+ */
+export function variableTypeError(query: string): string | null {
+  const header = /^\s*(?:query|mutation)\s+\w+\s*\(([^)]*)\)/.exec(query)?.[1] ?? ''
+  const declared = new Map<string, string>()
+  for (const m of header.matchAll(/\$(\w+)\s*:\s*([[\]\w!]+)/g)) declared.set(m[1], m[2])
+  for (const [field, args] of Object.entries(NON_NULL_ARGS)) {
+    for (const use of query.matchAll(new RegExp(`\\b${field}\\s*(\\(([^)]*)\\))?`, 'g'))) {
+      const passed = new Map<string, string>()
+      for (const a of (use[2] ?? '').matchAll(/(\w+)\s*:\s*(\$?\w+)/g)) passed.set(a[1], a[2])
+      for (const [arg, type] of Object.entries(args)) {
+        const value = passed.get(arg)
+        if (value === undefined) {
+          return `Field "${field}" argument "${arg}" of type "${type}" is required but not provided.`
+        }
+        if (!value.startsWith('$')) continue
+        const name = value.slice(1)
+        const got = declared.get(name)
+        if (got !== type) {
+          return `Variable "$${name}" of type "${got}" used in position expecting type "${type}".`
+        }
+      }
+    }
+  }
+  return null
+}
+
 export function createAniListServer(route: AniListRoute): AniListServer {
   const calls: AniListCall[] = []
   const realFetch = globalThis.fetch
@@ -83,7 +125,12 @@ export function createAniListServer(route: AniListRoute): AniListServer {
       token: auth ? auth.replace(/^Bearer /, '') : null
     }
     calls.push(call)
-    const reply = await route(call)
+    // As live AniList: a document that misuses a non-null argument is a 400
+    // before any route sees it.
+    const invalid = variableTypeError(call.query)
+    const reply: AniListReply = invalid
+      ? { status: 400, body: { data: null, errors: [{ message: invalid, status: 400 }] } }
+      : await route(call)
     if (reply.throws !== undefined) throw reply.throws
     return new Response(JSON.stringify(reply.body ?? { data: null }), {
       status: reply.status ?? 200,

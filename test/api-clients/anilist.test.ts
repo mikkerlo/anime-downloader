@@ -12,9 +12,11 @@ import {
   createAniListServer,
   createAniListWorld,
   createTestAniList,
+  variableTypeError,
   type AniListServer,
   type AniListWorld
 } from '../helpers/anilist-server'
+import * as Q from '../../src/main/trackers/anilist/queries'
 import {
   ENTRY_SELECTION,
   MEDIA_LIST,
@@ -405,6 +407,37 @@ describe('DeleteMediaListEntry', () => {
     await expect(
       provider.deleteEntry!(SESSION, { malId: 1, remoteId: 9001 })
     ).resolves.toBeUndefined()
+  })
+})
+
+// Live AniList validates argument nullability before running a document
+// (#712's real-account check: `Following($userId: Int)` was a 400).
+describe('variable types', () => {
+  it('every document binds a non-null argument to a non-null variable', () => {
+    const docs = Object.entries(Q).filter(
+      (e): e is [string, string] =>
+        typeof e[1] === 'string' && /^\s*(?:query|mutation)\s/.test(e[1])
+    )
+    expect(docs.map(([name]) => name)).toContain('FOLLOWING')
+    for (const [name, doc] of docs) expect(variableTypeError(doc), name).toBeNull()
+  })
+
+  it('the fixture server answers a misused non-null argument with live AniList’s 400', async () => {
+    const bad = 'query F($userId: Int) { Page { following(userId: $userId) { id } } }'
+    expect(variableTypeError(bad)).toBe(
+      'Variable "$userId" of type "Int" used in position expecting type "Int!".'
+    )
+    expect(variableTypeError('query F { Page { following { id } } }')).toMatch(/is required/)
+    expect(
+      variableTypeError('query F($userId: Int!) { Page { following(userId: $userId) { id } } }')
+    ).toBeNull()
+    const s = serve(() => ({ body: { data: {} } }))
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      body: JSON.stringify({ query: bad, variables: { userId: 1 } })
+    })
+    expect(res.status).toBe(400)
+    expect(s.calls).toHaveLength(1)
   })
 })
 

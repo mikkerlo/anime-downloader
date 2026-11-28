@@ -158,6 +158,7 @@ async function anilistChronology(
 }
 
 describe('AniList: the MediaRelation table', () => {
+  // The fixture's 14 values match a live introspection of `MediaRelation` (2026-11-28, #753 review).
   it('every value in the introspection fixture has a row (exhaustiveness)', () => {
     const values = anilistFixture<{
       data: { __type: { enumValues: { name: string }[] } }
@@ -179,12 +180,14 @@ describe('AniList: the MediaRelation table', () => {
         'CONTAINS',
         'PARENT',
         'PREQUEL',
+        'SAME_UNIVERSE',
         'SEQUEL',
         'SIDE_STORY',
         'SPIN_OFF',
         'SUMMARY'
       ].sort()
     )
+    expect(ANILIST_RELATION_MAP.SAME_UNIVERSE).toBe('alternative_setting')
   })
 
   it('COMPILATION → summary and CONTAINS → full_story, read from the fixture’s edge pair', async () => {

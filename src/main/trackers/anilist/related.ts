@@ -30,6 +30,8 @@ import {
  * AniList's `MediaRelation` values onto the canonical relations. The last four
  * aren't walked. `A → B: COMPILATION` reads "B is a compilation of A", so B is
  * A's `summary`; `CONTAINS`, its inverse, makes B the `full_story`.
+ * `SAME_UNIVERSE` (schema v3) is what Shikimori and MAL call
+ * `alternative_setting`. The 14 values are a live introspection's (2026-11-28).
  */
 export const ANILIST_RELATION_MAP: Readonly<Record<string, string>> = {
   SEQUEL: 'sequel',
@@ -41,6 +43,7 @@ export const ANILIST_RELATION_MAP: Readonly<Record<string, string>> = {
   SPIN_OFF: 'spin_off',
   COMPILATION: 'summary',
   CONTAINS: 'full_story',
+  SAME_UNIVERSE: 'alternative_setting',
   CHARACTER: 'character',
   OTHER: 'other',
   ADAPTATION: 'adaptation',

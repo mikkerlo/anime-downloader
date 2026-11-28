@@ -16,7 +16,8 @@
         { "name": "OTHER" },
         { "name": "SOURCE" },
         { "name": "COMPILATION" },
-        { "name": "CONTAINS" }
+        { "name": "CONTAINS" },
+        { "name": "SAME_UNIVERSE" }
       ]
     }
   }

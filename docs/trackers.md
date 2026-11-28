@@ -987,7 +987,9 @@ queued during a walk waits behind at most one walk request. Only canonical
 edges are walked, and the graph stops at 40 nodes (`ANILIST_WALK_CAP`). Nodes
 with no `idMal` stay in the graph, so a special without one between two
 seasons doesn't cut the second season off. `ANILIST_RELATION_MAP` (a named
-export) maps `MediaRelation`:
+export) maps all 14 `MediaRelation` values, as a live introspection listed them
+on 2026-11-28 (`test/fixtures/anilist/media-relation-enum.json` holds the same
+list, and the exhaustiveness test fails on a value with no row):
 
 | `MediaRelation` | Canonical | Walked |
 |---|---|---|
@@ -997,6 +999,7 @@ export) maps `MediaRelation`:
 | `SUMMARY` / `SPIN_OFF` | `summary` / `spin_off` | yes |
 | `COMPILATION` | `summary` (`A → B: COMPILATION`: B compiles A) | yes |
 | `CONTAINS` | `full_story` (the inverse) | yes |
+| `SAME_UNIVERSE` | `alternative_setting` | yes |
 | `CHARACTER` / `OTHER` / `ADAPTATION` / `SOURCE` | the same, lowercased | no |
 
 `format` is the kind, lowercased (`TV_SHORT` is `tv`, `MUSIC` is `music`, which

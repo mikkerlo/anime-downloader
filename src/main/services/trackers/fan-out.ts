@@ -128,6 +128,12 @@ export interface TrackerFanOut {
   discardQueue(trackerId: TrackerId): Promise<number>
   /** The live `via: 'mirror'` entries of that tracker: T3c's "N changes won't be sent". */
   mirrorQueueCount(trackerId: TrackerId): number
+  /**
+   * That tracker's own view of a title (§ 3): its cached row with its live
+   * queue laid over it, the values every builder here diffs against. Null
+   * with no row, cached or queued. #705's `differs` and its copy read it.
+   */
+  projection(trackerId: TrackerId, malId: number): RateValues | null
   /** Every tracker's sync instance, in `shikimori`, `anilist`, `mal` order. */
   syncServices(): TrackerSyncService<unknown, unknown>[]
 }
@@ -387,6 +393,7 @@ export function createTrackerFanOut(deps: TrackerFanOutDeps): TrackerFanOut {
     primary,
     discardQueue,
     mirrorQueueCount: (id) => liveQueue(byId(id)).filter((q) => q.via === 'mirror').length,
+    projection: (id, malId) => projection(byId(id), malId)?.values ?? null,
     syncServices: () => trackers.map((t) => t.sync)
   }
 }

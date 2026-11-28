@@ -61,10 +61,19 @@ interface TrackerRateEntry {
 // the title; `stale` when it came from the cached list (offline, or a failure
 // a queued write survives). `mediaId` is the tracker's own media id where it
 // isn't the MAL id: absent for Shikimori and MAL, AniList's from #703.
+// `tracker:get-rate` always sets the three per-title signals (#705); only a
+// result the renderer builds itself leaves them out. `queued`: the tracker's
+// live queue holds an entry for the title. `unmapped`: a fresh negative
+// `anilistIdMap` entry only (a cold map is not). `differs`: where this
+// tracker's projection differs from the primary's, by main's shared rule;
+// [] for the primary, for an unmapped title, and when the primary has no row.
 interface TrackerRateResult {
   values: TrackerRateValues | null
   stale: boolean
   mediaId?: number
+  queued?: boolean
+  unmapped?: boolean
+  differs?: SyncRateField[]
 }
 
 // `tracker:get-rates`. `queuedAfter` is the last queued `after` per MAL id in

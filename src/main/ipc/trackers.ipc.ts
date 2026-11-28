@@ -1,9 +1,9 @@
 // The `tracker:*` account, auth and logout channels (#695), the primary,
 // mirror and feature-source setters (#696), the rate, sync-status and
 // queue channels (#694, epic #688), the details read (#706), the calendar
-// (#709), the chronology (#710) and the merged Friends reads (#712). Each
-// handler validates its
-// arguments, calls the shared function its `shikimori:*` alias calls too (in
+// (#709), the chronology (#710), "Copy from primary" (#705) and the merged
+// Friends reads (#712). Each handler validates its arguments, calls the shared
+// function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
 // `EVENT_CHANNELS.TRACKER_*` symbols: the bridge emits them, configured from
@@ -272,18 +272,29 @@ export function register({
         read = await rates.readRate(id, mal)
       } catch (err) {
         // A title AniList doesn't have: no row, and no media id (T8b's "not on AniList").
-        if (err instanceof AniListUnmappedError) return { values: null, stale: false }
+        if (err instanceof AniListUnmappedError) {
+          return { values: null, stale: false, ...rates.titleSignals(id, mal) }
+        }
         throw err
       }
       const t = rates.instance(id)
       if (!read || !t) return null
       // AniList's own media id, from a positive id-map entry only (#703 § 5).
       const mediaId = id === 'anilist' ? storedAnilistMediaId(store, mal) : null
-      const extra = mediaId !== null ? { mediaId } : {}
+      // The per-title signals (#705), read after the read: it can record a negative entry.
+      const extra = { ...(mediaId !== null ? { mediaId } : {}), ...rates.titleSignals(id, mal) }
       if (!read.stale)
         return { values: read.entry ? read.entry.values : null, stale: false, ...extra }
       return { values: read.row ? t.rateCache.read(read.row).values : null, stale: true, ...extra }
     }
+  )
+
+  // "Copy from primary" (#705 § 3): main reads the primary's projection, so a
+  // copy never sends values the renderer saw before a queued edit landed.
+  ipcMain.handle(
+    CHANNELS.TRACKER_COPY_FROM_PRIMARY,
+    (_event, trackerId: unknown, malId: unknown): Promise<TrackerRateValues | null> =>
+      rates.copyFromPrimary(trackerIdArg(trackerId), malIdArg(malId))
   )
 
   ipcMain.handle(

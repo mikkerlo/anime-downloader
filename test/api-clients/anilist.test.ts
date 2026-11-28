@@ -926,16 +926,20 @@ describe('tracker:get-rate carries AniList’s mediaId (§ 5)', () => {
     expect(await getRate(1)).toEqual({
       values: { episodes: 7, status: 'watching', score: 9, rewatches: 0 },
       stale: false,
-      mediaId: 101
+      mediaId: 101,
+      queued: false,
+      unmapped: false,
+      differs: []
     })
   })
 
-  it('an unmapped title (a negative entry) carries none, and reads as no row', async () => {
+  it('an unmapped title (a negative entry) carries none, and reads as no row, unmapped (#705)', async () => {
+    const unmapped = { values: null, stale: false, queued: false, unmapped: true, differs: [] }
     // MAL 2's lookup omits it: a negative entry.
-    expect(await getRate(2)).toEqual({ values: null, stale: false })
+    expect(await getRate(2)).toEqual(unmapped)
     expect(world.server.of('IdMap')).toHaveLength(1)
     // Asked again, the negative entry answers: no second lookup.
-    expect(await getRate(2)).toEqual({ values: null, stale: false })
+    expect(await getRate(2)).toEqual(unmapped)
     expect(world.server.of('IdMap')).toHaveLength(1)
   })
 
@@ -984,9 +988,13 @@ describe('tracker:get-rate carries AniList’s mediaId (§ 5)', () => {
     } as unknown as AppDeps)
     const h = new Map((ipcMain.handle as unknown as Mock).mock.calls.map(([c, fn]) => [c, fn]))
     const out = (await h.get(CHANNELS.TRACKER_GET_RATE)!({}, 'anilist', 5)) as TrackerRateResult
+    // A cold map is not unmapped (#705).
     expect(out).toEqual({
       values: { episodes: 2, status: 'watching', score: 0, rewatches: 0 },
-      stale: true
+      stale: true,
+      queued: false,
+      unmapped: false,
+      differs: []
     })
   })
 })

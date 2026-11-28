@@ -220,6 +220,10 @@ const PER: Record<
 
 const BOTH = ['shikimori', 'anilist'] as const
 
+// #705's per-title signals: nothing queued or unmapped, and only one tracker
+// with a row, so nothing differs from the primary.
+const NO_SIGNALS = { queued: false, unmapped: false, differs: [] }
+
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(T0 + 5_000_000)
@@ -239,7 +243,8 @@ describe('tracker:get-rate, per tracker (#570 cases)', () => {
     PER[id].serverHas(r, MAL, rv(5))
     expect(await r.invoke(CHANNELS.TRACKER_GET_RATE, id, MAL)).toEqual({
       values: rv(5),
-      stale: false
+      stale: false,
+      ...NO_SIGNALS
     })
   })
 
@@ -247,7 +252,8 @@ describe('tracker:get-rate, per tracker (#570 cases)', () => {
     const r = rig()
     expect(await r.invoke(CHANNELS.TRACKER_GET_RATE, id, MAL)).toEqual({
       values: null,
-      stale: false
+      stale: false,
+      ...NO_SIGNALS
     })
   })
 
@@ -258,7 +264,8 @@ describe('tracker:get-rate, per tracker (#570 cases)', () => {
     PER[id].failRead(r)
     expect(await r.invoke(CHANNELS.TRACKER_GET_RATE, id, MAL)).toEqual({
       values: rv(3),
-      stale: true
+      stale: true,
+      ...NO_SIGNALS
     })
   })
 
@@ -268,7 +275,8 @@ describe('tracker:get-rate, per tracker (#570 cases)', () => {
     r.offline.value = true
     expect(await r.invoke(CHANNELS.TRACKER_GET_RATE, id, MAL)).toEqual({
       values: rv(3),
-      stale: true
+      stale: true,
+      ...NO_SIGNALS
     })
     expect(fakeApi.getUserRate).not.toHaveBeenCalled()
   })
@@ -281,7 +289,8 @@ describe('tracker:get-rate, per tracker (#570 cases)', () => {
       PER[id].failRead(r)
       expect(await r.invoke(CHANNELS.TRACKER_GET_RATE, id, MAL)).toEqual({
         values: null,
-        stale: true
+        stale: true,
+        ...NO_SIGNALS
       })
       if (id === 'shikimori') {
         PER[id].failRead(r)
@@ -659,7 +668,8 @@ describe('failure isolation', () => {
 
     expect(await r.invoke(CHANNELS.TRACKER_GET_RATE, 'shikimori', MAL)).toEqual({
       values: rv(3),
-      stale: false
+      stale: false,
+      ...NO_SIGNALS
     })
     expect(await r.invoke(CHANNELS.TRACKER_UPDATE_RATE, MAL, rv(4), { only: 'shikimori' })).toEqual(
       rv(4)

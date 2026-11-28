@@ -172,6 +172,8 @@ export const CHANNELS = {
   TRACKER_BEGIN_AUTH: 'tracker:begin-auth',
   TRACKER_CANCEL_AUTH: 'tracker:cancel-auth',
   TRACKER_COMPLETE_AUTH: 'tracker:complete-auth',
+  // The detail page's "Copy from primary" to one mirror (#705).
+  TRACKER_COPY_FROM_PRIMARY: 'tracker:copy-from-primary',
   TRACKER_DISCARD_PARKED_QUEUE: 'tracker:discard-parked-queue',
   // The airing calendar from the resolved `calendar` source (#709).
   TRACKER_GET_CALENDAR: 'tracker:get-calendar',

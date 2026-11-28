@@ -14,6 +14,7 @@ import {
 import { rateFromCacheEntry, type StoredRateEntry } from '../lib/shikimori-rate-cache'
 import { type CalendarEntry, type ShikiSyncStatus } from '../services/shikimori-sync'
 import { createShikimoriCalendar } from '../services/shikimori-sync/calendar'
+import { createShikimoriChronology } from '../services/shikimori-sync/chronology'
 import {
   cachedShikimoriRate,
   createShikimoriPrimary,
@@ -674,122 +675,14 @@ export function register({
       getShikimoriCalendar(force)
   )
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_RELATED, async (_event, malId: number) => {
-    const franchise = await shikimori.getFranchise(malId)
+  // The body is shared with `tracker:get-related`'s Shikimori branch (#710);
+  // this alias keeps its key and behaviour (statuses from `shikimoriUserRates`)
+  // until v7.0 (#717).
+  const getShikimoriRelated = createShikimoriChronology({ store, lookupByMalIds })
 
-    const CANONICAL_RELATIONS = new Set([
-      'sequel',
-      'prequel',
-      'side_story',
-      'parent_story',
-      'alternative_version',
-      'summary',
-      'full_story',
-      'spin_off',
-      'alternative_setting'
-    ])
-
-    const adjacency = new Map<number, { nodeId: number; relation: string }[]>()
-    for (const link of franchise.links) {
-      if (!CANONICAL_RELATIONS.has(link.relation)) continue
-      if (!adjacency.has(link.source_id)) adjacency.set(link.source_id, [])
-      adjacency.get(link.source_id)!.push({ nodeId: link.target_id, relation: link.relation })
-      if (!adjacency.has(link.target_id)) adjacency.set(link.target_id, [])
-      adjacency.get(link.target_id)!.push({ nodeId: link.source_id, relation: link.relation })
-    }
-
-    const reachable = new Set<number>([franchise.current_id])
-    const queue = [franchise.current_id]
-    for (let i = 0; i < queue.length; i++) {
-      const cur = queue[i]
-      for (const { nodeId } of adjacency.get(cur) || []) {
-        if (reachable.has(nodeId)) continue
-        reachable.add(nodeId)
-        queue.push(nodeId)
-      }
-    }
-
-    const filteredNodes = franchise.nodes.filter((n) => reachable.has(n.id))
-    const malIds = Array.from(new Set(filteredNodes.map((n) => n.id)))
-    const malMap = await lookupByMalIds(malIds)
-
-    const relationByNodeId = new Map<number, string>()
-    for (const link of franchise.links) {
-      if (link.source_id === franchise.current_id) {
-        relationByNodeId.set(link.target_id, link.relation)
-      }
-    }
-
-    const cachedDetails = store.get('shikimoriAnimeDetails') as Record<
-      string,
-      { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
-    >
-    const cachedRates = store.get('shikimoriUserRates') as {
-      rate: { status: shikimori.ShikiUserRateStatus }
-      shikiAnime: { id: number; kind?: string }
-    }[]
-    const kindByMalId = new Map<number, string>()
-    const statusByMalId = new Map<number, shikimori.ShikiUserRateStatus>()
-    for (const r of cachedRates) {
-      const id = r.shikiAnime?.id
-      if (id == null) continue
-      if (r.shikiAnime.kind) kindByMalId.set(id, r.shikiAnime.kind)
-      if (r.rate?.status) statusByMalId.set(id, r.rate.status)
-    }
-
-    function normalizeKind(
-      node: shikimori.ShikiFranchiseNode,
-      smotretType: string | undefined
-    ): string | null {
-      const cached = cachedDetails[String(node.id)]?.details?.kind
-      if (cached) return cached
-      const rated = kindByMalId.get(node.id)
-      if (rated) return rated
-      if (smotretType) return smotretType.toLowerCase()
-      const k = (node.kind || '').toLowerCase()
-      if (k.includes('проморолик') || k === 'pv') return 'pv'
-      if (k.includes('реклама') || k === 'cm') return 'cm'
-      if (k.includes('клип') || k === 'music') return 'music'
-      if (k.includes('тв-спешл') || k === 'tv_special') return 'tv_special'
-      if (k.includes('спешл') || k === 'special') return 'special'
-      if (k.includes('полнометраж') || k === 'movie') return 'movie'
-      if (k.includes('ova')) return 'ova'
-      if (k.includes('ona')) return 'ona'
-      if (k.includes('tv')) return 'tv'
-      return node.kind ?? null
-    }
-
-    const EXCLUDED_KINDS = new Set(['pv', 'cm', 'music'])
-
-    const sorted = [...filteredNodes].sort((a, b) => {
-      if (a.date == null && b.date == null) return 0
-      if (a.date == null) return 1
-      if (b.date == null) return -1
-      return a.date - b.date
-    })
-
-    return sorted
-      .map((n) => {
-        const smotret = malMap[n.id] ?? null
-        const kind = normalizeKind(n, smotret?.type)
-        return {
-          relation: relationByNodeId.get(n.id) ?? null,
-          shikiAnime: {
-            id: n.id,
-            name: n.name,
-            image_url: n.image_url,
-            url: n.url,
-            year: n.year,
-            kind,
-            date: n.date
-          },
-          smotretAnime: smotret,
-          isCurrent: n.id === franchise.current_id,
-          watchStatus: statusByMalId.get(n.id) ?? null
-        }
-      })
-      .filter((e) => e.isCurrent || !(e.shikiAnime.kind && EXCLUDED_KINDS.has(e.shikiAnime.kind)))
-  })
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_RELATED, (_event, malId: number) =>
+    getShikimoriRelated(malId)
+  )
 
   // The rate funnels, for a caller that writes with `stamp: false` and supplies
   // its own clocks (the Shared Library merge, #584).

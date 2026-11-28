@@ -414,7 +414,7 @@ describe('DeleteMediaListEntry', () => {
 // (#712's real-account check: `Following($userId: Int)` was a 400).
 describe('variable types', () => {
   it('every document binds a non-null argument to a non-null variable', () => {
-    const docs = Object.entries(Q).filter(
+    const docs = Object.entries(Q as Record<string, unknown>).filter(
       (e): e is [string, string] =>
         typeof e[1] === 'string' && /^\s*(?:query|mutation)\s/.test(e[1])
     )

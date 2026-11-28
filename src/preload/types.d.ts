@@ -366,6 +366,8 @@ interface Api {
   // Details (#706)
   trackerGetDetails: (malId: number, trackerId?: TrackerId) => Promise<TrackerDetails | null>
   onTrackerDetailsUpdated: (callback: (data: TrackerDetailsUpdatedEvent) => void) => Unsubscribe
+  // The chronology (#710)
+  trackerGetRelated: (malId: number) => Promise<ShikiRelatedEntry[]>
   // Friends (#712)
   trackerGetFriends: () => Promise<TrackerFriendsResult>
   trackerGetFriendsActivity: () => Promise<TrackerFriendsActivityResult>

@@ -6,6 +6,8 @@ import type { TrackerLifecycle } from '../trackers/lifecycle'
 import type { TrackerAuthSessions } from '../trackers/auth-session'
 import type { MalSetup } from '../trackers/mal/setup'
 import type { AniListCalendar } from '../trackers/anilist/calendar'
+import type { AniListRelated } from '../trackers/anilist/related'
+import type { MalRelated } from '../trackers/mal/related'
 import type { TrackerRateEntry } from '../trackers/types'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
@@ -151,6 +153,10 @@ export interface AppDeps {
   malSetup?: MalSetup
   /** AniList's calendar, `tracker:get-calendar`'s AniList branch (#709). */
   anilistCalendar?: AniListCalendar
+  /** AniList's chronology walk, `tracker:get-related`'s AniList branch (#710). */
+  anilistRelated?: AniListRelated
+  /** MyAnimeList's chronology walk and its 1-hour cache, `tracker:get-related`'s MAL branch (#710). */
+  malRelated?: MalRelated
   /**
    * The merged Friends reads (#712), behind `tracker:get-friends*` and their
    * `shikimori:*` aliases. Without it the `tracker:*` reads have no sources

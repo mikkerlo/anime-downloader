@@ -1,0 +1,324 @@
+{
+  "data": {
+    "Page": {
+      "media": [
+        {
+          "id": 3001,
+          "idMal": 601,
+          "format": "TV",
+          "startDate": { "year": 2015, "month": 4, "day": 5 },
+          "title": { "romaji": "Kisetsu", "english": "Season One" },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3001.jpg" },
+          "siteUrl": "https://anilist.co/anime/3001",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "SEQUEL",
+                "node": {
+                  "id": 3002,
+                  "idMal": null,
+                  "type": "ANIME",
+                  "format": "SPECIAL",
+                  "startDate": { "year": 2016, "month": null, "day": null },
+                  "title": { "romaji": "Hashi", "english": null },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3002.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3002"
+                }
+              },
+              {
+                "relationType": "COMPILATION",
+                "node": {
+                  "id": 3004,
+                  "idMal": 604,
+                  "type": "ANIME",
+                  "format": "MOVIE",
+                  "startDate": { "year": 2016, "month": 1, "day": 9 },
+                  "title": { "romaji": "Soushuuhen", "english": "The Recap Movie" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3004.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3004"
+                }
+              },
+              {
+                "relationType": "SIDE_STORY",
+                "node": {
+                  "id": 3006,
+                  "idMal": 606,
+                  "type": "ANIME",
+                  "format": "MUSIC",
+                  "startDate": { "year": 2015, "month": 5, "day": 1 },
+                  "title": { "romaji": "Uta", "english": "Opening Theme" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3006.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3006"
+                }
+              },
+              {
+                "relationType": "CHARACTER",
+                "node": {
+                  "id": 3005,
+                  "idMal": 605,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2019, "month": 4, "day": 9 },
+                  "title": { "romaji": "Kurossu", "english": "The Crossover" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3005.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3005"
+                }
+              },
+              {
+                "relationType": "OTHER",
+                "node": {
+                  "id": 3009,
+                  "idMal": 609,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2018, "month": 1, "day": 1 },
+                  "title": { "romaji": "Hoka", "english": "Something Else" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3009.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3009"
+                }
+              },
+              {
+                "relationType": "SOURCE",
+                "node": {
+                  "id": 9001,
+                  "idMal": 99001,
+                  "type": "MANGA",
+                  "format": "MANGA",
+                  "startDate": { "year": 2012, "month": 3, "day": 1 },
+                  "title": { "romaji": "Gensaku", "english": "The Manga" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/9001.jpg" },
+                  "siteUrl": "https://anilist.co/manga/9001"
+                }
+              },
+              {
+                "relationType": "SPIN_OFF",
+                "node": {
+                  "id": 9002,
+                  "idMal": 99002,
+                  "type": "MANGA",
+                  "format": "MANGA",
+                  "startDate": { "year": 2014, "month": 6, "day": 1 },
+                  "title": { "romaji": "Gaiden", "english": "The Spin-off Manga" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/9002.jpg" },
+                  "siteUrl": "https://anilist.co/manga/9002"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 3002,
+          "idMal": null,
+          "format": "SPECIAL",
+          "startDate": { "year": 2016, "month": null, "day": null },
+          "title": { "romaji": "Hashi", "english": null },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3002.jpg" },
+          "siteUrl": "https://anilist.co/anime/3002",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "PREQUEL",
+                "node": {
+                  "id": 3001,
+                  "idMal": 601,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2015, "month": 4, "day": 5 },
+                  "title": { "romaji": "Kisetsu", "english": "Season One" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3001.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3001"
+                }
+              },
+              {
+                "relationType": "SEQUEL",
+                "node": {
+                  "id": 3003,
+                  "idMal": 603,
+                  "type": "ANIME",
+                  "format": "TV_SHORT",
+                  "startDate": { "year": 2017, "month": 10, "day": null },
+                  "title": { "romaji": "Kisetsu 2", "english": null },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3003.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3003"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 3003,
+          "idMal": 603,
+          "format": "TV_SHORT",
+          "startDate": { "year": 2017, "month": 10, "day": null },
+          "title": { "romaji": "Kisetsu 2", "english": null },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3003.jpg" },
+          "siteUrl": "https://anilist.co/anime/3003",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "PREQUEL",
+                "node": {
+                  "id": 3002,
+                  "idMal": null,
+                  "type": "ANIME",
+                  "format": "SPECIAL",
+                  "startDate": { "year": 2016, "month": null, "day": null },
+                  "title": { "romaji": "Hashi", "english": null },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3002.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3002"
+                }
+              },
+              {
+                "relationType": "SIDE_STORY",
+                "node": {
+                  "id": 3007,
+                  "idMal": 607,
+                  "type": "ANIME",
+                  "format": "OVA",
+                  "startDate": { "year": null, "month": null, "day": null },
+                  "title": { "romaji": "Omake A", "english": null },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3007.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3007"
+                }
+              },
+              {
+                "relationType": "SIDE_STORY",
+                "node": {
+                  "id": 3008,
+                  "idMal": 607,
+                  "type": "ANIME",
+                  "format": "OVA",
+                  "startDate": { "year": 2018, "month": 2, "day": 2 },
+                  "title": { "romaji": "Omake B", "english": null },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3008.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3008"
+                }
+              },
+              {
+                "relationType": "SPIN_OFF",
+                "node": {
+                  "id": 3010,
+                  "idMal": 610,
+                  "type": "ANIME",
+                  "format": "ONA",
+                  "startDate": { "year": 2020, "month": 7, "day": 1 },
+                  "title": { "romaji": "Supin", "english": "Spin-off" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3010.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3010"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 3004,
+          "idMal": 604,
+          "format": "MOVIE",
+          "startDate": { "year": 2016, "month": 1, "day": 9 },
+          "title": { "romaji": "Soushuuhen", "english": "The Recap Movie" },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3004.jpg" },
+          "siteUrl": "https://anilist.co/anime/3004",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "CONTAINS",
+                "node": {
+                  "id": 3001,
+                  "idMal": 601,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2015, "month": 4, "day": 5 },
+                  "title": { "romaji": "Kisetsu", "english": "Season One" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3001.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3001"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 3006,
+          "idMal": 606,
+          "format": "MUSIC",
+          "startDate": { "year": 2015, "month": 5, "day": 1 },
+          "title": { "romaji": "Uta", "english": "Opening Theme" },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3006.jpg" },
+          "siteUrl": "https://anilist.co/anime/3006",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "PARENT",
+                "node": {
+                  "id": 3001,
+                  "idMal": 601,
+                  "type": "ANIME",
+                  "format": "TV",
+                  "startDate": { "year": 2015, "month": 4, "day": 5 },
+                  "title": { "romaji": "Kisetsu", "english": "Season One" },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3001.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3001"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 3007,
+          "idMal": 607,
+          "format": "OVA",
+          "startDate": { "year": null, "month": null, "day": null },
+          "title": { "romaji": "Omake A", "english": null },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3007.jpg" },
+          "siteUrl": "https://anilist.co/anime/3007",
+          "relations": { "edges": [] }
+        },
+        {
+          "id": 3008,
+          "idMal": 607,
+          "format": "OVA",
+          "startDate": { "year": 2018, "month": 2, "day": 2 },
+          "title": { "romaji": "Omake B", "english": null },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3008.jpg" },
+          "siteUrl": "https://anilist.co/anime/3008",
+          "relations": { "edges": [] }
+        },
+        {
+          "id": 3010,
+          "idMal": 610,
+          "format": "ONA",
+          "startDate": { "year": 2020, "month": 7, "day": 1 },
+          "title": { "romaji": "Supin", "english": "Spin-off" },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3010.jpg" },
+          "siteUrl": "https://anilist.co/anime/3010",
+          "relations": {
+            "edges": [
+              {
+                "relationType": "ALTERNATIVE",
+                "node": {
+                  "id": 3011,
+                  "idMal": 611,
+                  "type": "ANIME",
+                  "format": null,
+                  "startDate": { "year": 2021, "month": 1, "day": 1 },
+                  "title": { "romaji": "Betsu", "english": null },
+                  "coverImage": { "large": "https://s4.anilist.co/cover/3011.jpg" },
+                  "siteUrl": "https://anilist.co/anime/3011"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": 3011,
+          "idMal": 611,
+          "format": null,
+          "startDate": { "year": 2021, "month": 1, "day": 1 },
+          "title": { "romaji": "Betsu", "english": null },
+          "coverImage": { "large": "https://s4.anilist.co/cover/3011.jpg" },
+          "siteUrl": "https://anilist.co/anime/3011",
+          "relations": { "edges": [] }
+        }
+      ]
+    }
+  }
+}

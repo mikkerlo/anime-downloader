@@ -518,6 +518,9 @@ const api = {
   onTrackerDetailsUpdated: subscribe<TrackerDetailsUpdatedEvent>(
     EVENT_CHANNELS.TRACKER_DETAILS_UPDATED
   ),
+  // The chronology from the resolved `chronology` source (#710).
+  trackerGetRelated: (malId: number) =>
+    ipcRenderer.invoke(CHANNELS.TRACKER_GET_RELATED, malId) as Promise<ShikiRelatedEntry[]>,
   // The merged Friends page and detail block (#712).
   trackerGetFriends: () =>
     ipcRenderer.invoke(CHANNELS.TRACKER_GET_FRIENDS) as Promise<TrackerFriendsResult>,

@@ -833,6 +833,14 @@ body, or AniList's calendar ([The calendar](#the-calendar-709)). MyAnimeList
 has no schedule, so a MyAnimeList-only account gets the empty shape and the
 view's not-available state.
 
+**The `chronology` source** (#710): the detail page's Chronology panel reads
+`tracker:get-related`, which routes on `storedFeatureSource(store,
+'chronology')` at call time ([The chronology](#the-chronology-710)).
+`shikimori` and `null` (no tracker) run Shikimori's public franchise read,
+`anilist` the AniList walk (or Shikimori's franchise for a title AniList
+doesn't map) and `mal` the MAL walk, which the panel loads on its first
+expand.
+
 **The `airing` source and auto-download.** The auto-downloader's one `airing`
 dep is `createAiringDep({ store, providers })`: `source()` (the resolved
 `airing` source at call time), `hasCredentials(id)` (`<provider>Credentials`
@@ -923,6 +931,98 @@ Shikimori's classifier never returns `config`, so its "Needs setup" never
 changes. #703 (T7) passes `notifyAccountsChanged()` as AniList's instance's
 `onNeedsSetupChanged` (AniList never produces `config` either, so it stays
 quiet) and calls it from its expiry handling; #702 (T6) does the same for MAL.
+
+### The chronology (#710)
+
+`tracker:get-related(malId)` returns the panel's `ShikiRelatedEntry[]`
+(unchanged, so `ChronologyPanel.vue` is too) from the resolved `chronology`
+source:
+
+| Source | Branch |
+|---|---|
+| `shikimori` | `shikimori:get-related`'s body (`services/shikimori-sync/chronology.ts`): the public franchise read, Shikimori's kind rule |
+| `anilist` | The AniList walk (`trackers/anilist/related.ts`); a title the id map answers with no AniList id falls back to the Shikimori branch |
+| `mal` | The MAL walk (`trackers/mal/related.ts`), from its 1-hour memory cache |
+| `null` | The Shikimori branch, token-less, as for a logged-out user before #710 |
+
+A failed read throws, at level 0 or mid-walk: there is no partial graph and
+nothing is cached. An id-map lookup that fails throws too; only an answer that
+omits the MAL id is "unmapped".
+
+**One shared step.** Each branch builds a `ChronologyGraph` (`{ current, nodes,
+edges }`, in `trackers/chronology.ts`) and `buildChronology(graph, deps)` does
+the rest, reading no store:
+
+- the BFS from `current` over `CANONICAL_RELATIONS` edges (a named export,
+  which T11d imports): `sequel`, `prequel`, `side_story`, `parent_story`,
+  `alternative_version`, `summary`, `full_story`, `spin_off`,
+  `alternative_setting`;
+- then nodes with `malId: null` are dropped (walked through, never returned),
+  then nodes sharing a MAL id are deduped: the current node, else the one
+  `isOnList` marks, else the lowest key (#703's rule);
+- `isCurrent` and the `relation` labels (from edges out of `current`) compare
+  node `key`s, AniList's media ids for AniList; `shikiAnime.id` is the MAL id;
+- the date sort (null last), `EXCLUDED_KINDS` (`pv`, `cm`, `music`, never the
+  current title), the smotret join and the status join.
+
+The deps: `kindOf` (Shikimori's details cache, then its rate cache, then
+smotret's type, then the node's localized kind, for the Shikimori branch; the
+adapter's kind, then smotret's type, then null, `adapterKindOf`, for AniList
+and MAL, so a connected Shikimori never overrides them), `statusByMalId`, and
+`isOnList` (AniList: a media id in `anilistUserRates`). `tracker:get-related`
+builds `statusByMalId` from the **primary's** normalized entries
+(`trackerRates.primaryEntries()`, canonical statuses), empty with no primary;
+`shikimori:get-related` keeps `shikimoriUserRates`' map. For a Shikimori-only
+user the two are the same.
+
+**`date` is unix seconds for every source**, in UTC: a partial date is the 1st
+of its period (AniList's `startDate` with a null month or day, MAL's
+`start_date` as `YYYY` or `YYYY-MM`), and no year is null.
+
+**AniList.** Level 0 is `resolveRef(malId)` (the id map with #703's
+duplicate-`idMal` rule); every level after it walks AniList media ids. Each
+level is one `getRelatedBatch` request (`Page.media(id_in)`, chunked by 50,
+ANIME edges only, token-less) at the `interactive` class, so a status change
+queued during a walk waits behind at most one walk request. Only canonical
+edges are walked, and the graph stops at 40 nodes (`ANILIST_WALK_CAP`). Nodes
+with no `idMal` stay in the graph, so a special without one between two
+seasons doesn't cut the second season off. `ANILIST_RELATION_MAP` (a named
+export) maps all 14 `MediaRelation` values, as a live introspection listed them
+on 2026-11-28 (`test/fixtures/anilist/media-relation-enum.json` holds the same
+list, and the exhaustiveness test fails on a value with no row):
+
+| `MediaRelation` | Canonical | Walked |
+|---|---|---|
+| `SEQUEL` / `PREQUEL` | `sequel` / `prequel` | yes |
+| `SIDE_STORY` / `PARENT` | `side_story` / `parent_story` | yes |
+| `ALTERNATIVE` | `alternative_version` | yes |
+| `SUMMARY` / `SPIN_OFF` | `summary` / `spin_off` | yes |
+| `COMPILATION` | `summary` (`A → B: COMPILATION`: B compiles A) | yes |
+| `CONTAINS` | `full_story` (the inverse) | yes |
+| `SAME_UNIVERSE` | `alternative_setting` | yes |
+| `CHARACTER` / `OTHER` / `ADAPTATION` / `SOURCE` | the same, lowercased | no |
+
+`format` is the kind, lowercased (`TV_SHORT` is `tv`, `MUSIC` is `music`, which
+`EXCLUDED_KINDS` drops); the title is English, else romaji; `url` is `siteUrl`
+and `imageUrl` `coverImage.large`. AniList walks aren't cached.
+
+**MyAnimeList.** One `getRelated` read (`GET /anime/{id}?fields=title,
+main_picture,media_type,start_date,related_anime&nsfw=true`) per node, each
+awaited before the next is queued on the client's limiter (≥ 1 s apart), so a
+MAL write waits behind at most one walk request. `relation_type` maps
+one-to-one; `character` and `other` aren't walked. At most 15 nodes are
+fetched (`MAL_WALK_CAP`). A node seen only inside a `related_anime` list
+carries its id, title and picture: smotret's type and year stand in for its
+kind and year, and its null date sorts it last. `media_type` `unknown` counts
+as missing. The walked graph, before the status join, is kept in memory per
+requested MAL id for an hour (`MAL_RELATED_TTL_MS`), never persisted.
+
+**The renderer** (`use-chronology.ts`): `loadRelated` waits for the store's
+`accountsLoaded`, then reads `featureSource('chronology')` once. A `mal`
+source sets `relatedDeferred` instead of fetching, so the panel renders
+collapsed with no count; its first expand (once per mount) fetches, and
+`relatedDeferred` clears when that settles, so an empty or failed walk hides
+the panel as a failed read does. Every other source fetches on open.
 
 ## The renderer store
 

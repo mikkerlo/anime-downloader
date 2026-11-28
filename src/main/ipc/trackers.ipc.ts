@@ -1,7 +1,8 @@
 // The `tracker:*` account, auth and logout channels (#695), the primary,
 // mirror and feature-source setters (#696), the rate, sync-status and
 // queue channels (#694, epic #688), the details read (#706), the calendar
-// (#709) and the merged Friends reads (#712). Each handler validates its
+// (#709), the chronology (#710) and the merged Friends reads (#712). Each
+// handler validates its
 // arguments, calls the shared function its `shikimori:*` alias calls too (in
 // `services/trackers/rates.ts`, or `trackers/lifecycle.ts` for the accounts),
 // and shapes the reply per `trackerId`. This router names none of the
@@ -22,7 +23,10 @@ import { storedFeatureSource } from '../trackers/feature-source'
 import { assertMayConnect } from '../trackers/flags'
 import { isConnected } from '../trackers/primary'
 import { createShikimoriCalendar } from '../services/shikimori-sync/calendar'
+import { createShikimoriChronology } from '../services/shikimori-sync/chronology'
+import { adapterKindOf, buildChronology } from '../trackers/chronology'
 import { TRACKER_LABELS } from '../trackers/types'
+import type { ShikiUserRateStatus } from '../shikimori'
 import type { AppDeps } from './index'
 
 function trackerIdArg(value: unknown): TrackerId {
@@ -123,6 +127,8 @@ export function register({
   lookupByMalIds,
   offlineService,
   anilistCalendar,
+  anilistRelated,
+  malRelated,
   trackerFriends
 }: AppDeps): void {
   // `shikimori:get-calendar`'s body (#709): the same function, so the two
@@ -133,6 +139,8 @@ export function register({
     lookupByMalIds,
     isOffline: () => offlineService?.isOffline() ?? false
   })
+  // `shikimori:get-related`'s body (#710), with the primary's statuses passed in.
+  const getShikimoriRelated = createShikimoriChronology({ store, lookupByMalIds })
 
   const clientConfigView = (): TrackerClientConfig => ({
     ...getClientConfig(store),
@@ -374,6 +382,40 @@ export function register({
     async (_event, malId: unknown): Promise<TrackerFriendRates[]> => {
       const id = malIdArg(malId)
       return trackerFriends ? trackerFriends.getRates(id) : []
+    }
+  )
+
+  // The chronology from the resolved `chronology` source (#710), read at call
+  // time. Shikimori's branch is `shikimori:get-related`'s body; it is also the
+  // public, token-less answer with no source and for a title AniList doesn't
+  // map. Status chips come from the primary's normalized cache: none without one.
+  ipcMain.handle(
+    CHANNELS.TRACKER_GET_RELATED,
+    async (_event, malId: unknown): Promise<ShikiRelatedEntry[]> => {
+      const mal = malIdArg(malId)
+      const source = storedFeatureSource(store, 'chronology')
+      const statusByMalId = new Map<number, ShikiUserRateStatus>()
+      for (const e of rates.primaryEntries()) statusByMalId.set(e.malId, e.values.status)
+      if (source === 'anilist' && anilistRelated) {
+        const graph = await anilistRelated.walk(mal)
+        if (graph) {
+          return buildChronology(graph, {
+            lookupByMalIds,
+            kindOf: adapterKindOf,
+            statusByMalId,
+            isOnList: anilistRelated.isOnList
+          })
+        }
+      } else if (source === 'mal' && malRelated) {
+        return buildChronology(await malRelated.walk(mal), {
+          lookupByMalIds,
+          kindOf: adapterKindOf,
+          // A node MAL listed but the walk didn't fetch has no year of its own.
+          yearOf: (node, smotret) => node.year ?? smotret?.year ?? null,
+          statusByMalId
+        })
+      }
+      return getShikimoriRelated(mal, statusByMalId)
     }
   )
 

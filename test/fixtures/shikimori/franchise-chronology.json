@@ -1,0 +1,186 @@
+{
+  "plain": [
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 121,
+        "name": "Fullmetal Alchemist",
+        "image_url": "https://shikimori.one/system/animes/original/121.jpg",
+        "url": "https://shikimori.one/animes/121",
+        "year": 2003,
+        "kind": "tv",
+        "date": 1097010000
+      },
+      "smotretAnime": {
+        "id": 1,
+        "type": "TV"
+      },
+      "isCurrent": false,
+      "watchStatus": null
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 5114,
+        "name": "Fullmetal Alchemist: Brotherhood",
+        "image_url": "https://shikimori.one/system/animes/original/5114.jpg",
+        "url": "https://shikimori.one/animes/5114",
+        "year": 2009,
+        "kind": "tv",
+        "date": 1238792400
+      },
+      "smotretAnime": null,
+      "isCurrent": true,
+      "watchStatus": null
+    }
+  ],
+  "rich": [
+    {
+      "relation": "prequel",
+      "shikiAnime": {
+        "id": 121,
+        "name": "Fullmetal Alchemist",
+        "image_url": "https://shikimori.one/system/animes/original/121.jpg",
+        "url": "https://shikimori.one/animes/121",
+        "year": 2003,
+        "kind": "tv",
+        "date": 1065000000
+      },
+      "smotretAnime": {
+        "id": 1,
+        "type": "TV",
+        "title": "FMA",
+        "posterUrlSmall": "p121.jpg",
+        "year": 2003
+      },
+      "isCurrent": false,
+      "watchStatus": "watching"
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 8889,
+        "name": "FMA: TV Special",
+        "image_url": "https://shikimori.one/system/animes/original/8889.jpg",
+        "url": "https://shikimori.one/animes/8889",
+        "year": 2004,
+        "kind": "tv_special",
+        "date": 1100000000
+      },
+      "smotretAnime": null,
+      "isCurrent": false,
+      "watchStatus": null
+    },
+    {
+      "relation": "alternative_version",
+      "shikiAnime": {
+        "id": 9999,
+        "name": "FMA: The Movie",
+        "image_url": "https://shikimori.one/system/animes/original/9999.jpg",
+        "url": "https://shikimori.one/animes/9999",
+        "year": 2005,
+        "kind": "movie",
+        "date": 1121000000
+      },
+      "smotretAnime": null,
+      "isCurrent": false,
+      "watchStatus": null
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 5114,
+        "name": "FMA: Brotherhood",
+        "image_url": "https://shikimori.one/system/animes/original/5114.jpg",
+        "url": "https://shikimori.one/animes/5114",
+        "year": 2009,
+        "kind": "tv",
+        "date": 1239000000
+      },
+      "smotretAnime": null,
+      "isCurrent": true,
+      "watchStatus": null
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 2222,
+        "name": "FMA: Premium",
+        "image_url": "https://shikimori.one/system/animes/original/2222.jpg",
+        "url": "https://shikimori.one/animes/2222",
+        "year": 2009,
+        "kind": "special",
+        "date": 1260000000
+      },
+      "smotretAnime": null,
+      "isCurrent": false,
+      "watchStatus": "dropped"
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 3333,
+        "name": "FMA: Odd",
+        "image_url": "https://shikimori.one/system/animes/original/3333.jpg",
+        "url": "https://shikimori.one/animes/3333",
+        "year": 2010,
+        "kind": "special",
+        "date": 1270000000
+      },
+      "smotretAnime": {
+        "id": 3,
+        "type": "Special",
+        "title": "Odd",
+        "posterUrlSmall": "p3333.jpg",
+        "year": 2010
+      },
+      "isCurrent": false,
+      "watchStatus": null
+    },
+    {
+      "relation": "side_story",
+      "shikiAnime": {
+        "id": 9135,
+        "name": "Sacred Star of Milos",
+        "image_url": "https://shikimori.one/system/animes/original/9135.jpg",
+        "url": "https://shikimori.one/animes/9135",
+        "year": 2011,
+        "kind": "movie",
+        "date": 1309000000
+      },
+      "smotretAnime": null,
+      "isCurrent": false,
+      "watchStatus": null
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 1111,
+        "name": "FMA: Mini",
+        "image_url": "https://shikimori.one/system/animes/original/1111.jpg",
+        "url": "https://shikimori.one/animes/1111",
+        "year": 2020,
+        "kind": "ona",
+        "date": 1600000000
+      },
+      "smotretAnime": null,
+      "isCurrent": false,
+      "watchStatus": "completed"
+    },
+    {
+      "relation": null,
+      "shikiAnime": {
+        "id": 8888,
+        "name": "FMA: Reflections",
+        "image_url": "https://shikimori.one/system/animes/original/8888.jpg",
+        "url": "https://shikimori.one/animes/8888",
+        "year": null,
+        "kind": "special",
+        "date": null
+      },
+      "smotretAnime": null,
+      "isCurrent": false,
+      "watchStatus": null
+    }
+  ]
+}

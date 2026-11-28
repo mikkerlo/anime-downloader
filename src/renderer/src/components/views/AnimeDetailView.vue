@@ -88,7 +88,7 @@ const prefs = useAnimeDetailPrefs();
 const { translationType, selectedAuthor } = prefs;
 
 const chronology = useChronology();
-const { shikiRelated, relatedLoading, relatedCollapsed } = chronology;
+const { shikiRelated, relatedLoading, relatedCollapsed, relatedDeferred } = chronology;
 
 const dataSource = ref<'api' | 'cache' | null>(null);
 const isOffline = computed(() => dataSource.value === 'cache');
@@ -931,7 +931,9 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
           />
 
           <ChronologyPanel
-            v-if="anime.myAnimeListId && (relatedLoading || shikiRelated.length > 0)"
+            v-if="
+              anime.myAnimeListId && (relatedLoading || relatedDeferred || shikiRelated.length > 0)
+            "
             v-model:collapsed="relatedCollapsed"
             :shiki-related="shikiRelated"
             :related-loading="relatedLoading"

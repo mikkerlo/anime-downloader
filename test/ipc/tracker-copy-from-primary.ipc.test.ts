@@ -604,3 +604,377 @@ describe("tracker:get-rate's per-title signals", () => {
     expect(await r.getRate('anilist')).toMatchObject({ queued: true, differs: [] })
   })
 })
+
+// #752: `readRate` writes a live entry that differs from the cached row back
+// into the cache, with the server's clock, so the panel (the live read), the
+// chips' `differs` and the copy (the projection) read one snapshot.
+
+const SHIKI_RATE_UPDATED = EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED
+const OTHER_SHIKI_USER = { id: 8, nickname: 'other', avatar: '' }
+
+const sent = (r: Rig, channel: string) => r.broadcast.mock.calls.filter(([c]) => c === channel)
+
+/** The cached Shikimori row's `rate`, both clocks included. */
+const shikiRate = (r: Rig) =>
+  (r.store.get(SHIKIMORI_KEYS.userRates) as { rate: Record<string, unknown> }[]).find(
+    (e) => e.rate.target_id === MAL
+  )!.rate
+
+/** A live Shikimori rate as `/api/v2/user_rates` sends it. */
+const liveShiki = (v: RateValues, at = T0 + 2_000_000) => ({
+  id: MAL * 10,
+  target_id: MAL,
+  target_type: 'Anime',
+  ...v,
+  updated_at: iso(at)
+})
+
+/** Holds the next Shikimori single-entry read until `resolve`. */
+function holdShikiRead(): { resolve: (rate: unknown) => void } {
+  let resolve!: (rate: unknown) => void
+  const held = new Promise<unknown>((r) => (resolve = r))
+  fakeApi.getUserRate.mockImplementationOnce((() => held) as never)
+  return { resolve }
+}
+
+/** Lets the reads started so far reach `getUserRate`. */
+async function untilReads(n: number): Promise<void> {
+  for (let i = 0; i < 50 && fakeApi.getUserRate.mock.calls.length < n; i++) await Promise.resolve()
+  expect(fakeApi.getUserRate).toHaveBeenCalledTimes(n)
+}
+
+/** #751's check A: both trackers at episode 2, then the user moves Shikimori to 3 on its site. */
+const CACHED = rv({ episodes: 2 })
+const SITE = rv({ episodes: 3 })
+function siteEditSetup(r: Rig): void {
+  r.cacheShiki([MAL, CACHED])
+  server.set(MAL, SITE)
+  r.cache('anilist', [MAL, CACHED])
+  r.alFake.set(MAL, CACHED)
+}
+
+describe('tracker:get-rate: a live read that differs from the cache', () => {
+  it("#751's check A: after a site edit the panel's read patches the primary's cache, so the chip's differs agrees with the panel", async () => {
+    const r = rig()
+    siteEditSetup(r)
+
+    // The panel reads 3 on the base too: the live read.
+    expect(await r.getRate('shikimori')).toMatchObject({ values: SITE, stale: false, differs: [] })
+    // The chip shows AniList's 2 under the panel's 3. On the base its differs is [].
+    expect(await r.getRate('anilist')).toMatchObject({
+      values: CACHED,
+      stale: false,
+      differs: ['episodes']
+    })
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(SITE)
+    expect(r.fan.projection('shikimori', MAL)).toEqual(SITE)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+  })
+
+  it("the read-patched Shikimori row carries the server's updated_at as both clocks", async () => {
+    const r = rig()
+    siteEditSetup(r)
+    expect(shikiRate(r).serverUpdatedAt).toBeUndefined()
+
+    await r.getRate('shikimori')
+
+    const served = server.get(MAL)!.updated_at
+    expect(shikiRate(r)).toMatchObject({ episodes: 3, updated_at: served, serverUpdatedAt: served })
+  })
+
+  it('the backwards copy: a mirror already at the live value is offered no copy, and keeps it', async () => {
+    const r = rig()
+    const AT_10 = rv({ episodes: 10 })
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, AT_10)
+    r.cache('anilist', [MAL, AT_10])
+    r.alFake.set(MAL, AT_10)
+
+    await r.getRate('shikimori')
+    expect(await r.getRate('anilist')).toMatchObject({ differs: [] })
+    const apply = vi.spyOn(r.fan, 'applyChange')
+
+    expect(await r.copy('anilist')).toEqual(AT_10)
+
+    expect(apply).not.toHaveBeenCalled()
+    expect(r.queueOf('anilist')).toEqual([])
+    await r.anilist.syncQueue()
+    expect(r.alFake.upserts).toEqual([])
+    expect(r.alFake.rows.get(MAL)!.values.episodes).toBe(10)
+  })
+
+  it("the mirror's own lag: AniList's live read patches its cache and broadcasts the row once", async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, PRIMARY)
+    r.cache('anilist', [MAL, MIRROR])
+    r.alFake.set(MAL, { ...MIRROR, episodes: 8 }, { scoreRaw: MIRROR_RAW })
+
+    expect(await r.getRate('anilist')).toMatchObject({ values: { episodes: 8 }, stale: false })
+
+    expect(r.anilist.cachedRate(MAL)!.values).toEqual({ ...MIRROR, episodes: 8 })
+    const updates = sent(r, 'anilist:rate')
+    expect(updates).toHaveLength(1)
+    // What the store's `rateFor('anilist', MAL)` upserts.
+    expect(testRateCodec('anilist').entryOf(updates[0][1] as TestRow).values.episodes).toBe(8)
+  })
+
+  it('equal values never patch: a second read of the same live value broadcasts nothing more', async () => {
+    const r = rig()
+    siteEditSetup(r)
+    await r.getRate('shikimori')
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+
+    await r.getRate('shikimori')
+    await r.getRate('anilist')
+
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+    expect(sent(r, 'anilist:rate')).toHaveLength(0)
+  })
+
+  it('a queued title is not patched: its projection already overlays the queue', async () => {
+    const r = rig()
+    siteEditSetup(r)
+    r.store.set(SHIKIMORI_KEYS.updateQueue, [
+      {
+        malId: MAL,
+        rateId: MAL * 10,
+        before: CACHED,
+        after: rv({ episodes: 2, score: 9 }),
+        queuedAt: T0
+      }
+    ])
+
+    expect(await r.getRate('shikimori')).toMatchObject({ values: SITE, stale: false })
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(CACHED)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(0)
+  })
+
+  it('a stale read never patches: offline, or a live read that fails the way a queued write survives', async () => {
+    const r = rig()
+    siteEditSetup(r)
+    r.offline.value = true
+    expect(await r.getRate('shikimori')).toMatchObject({ values: CACHED, stale: true })
+
+    r.offline.value = false
+    fakeApi.ensureFreshToken.mockRejectedValueOnce(new TypeError('fetch failed'))
+    expect(await r.getRate('shikimori')).toMatchObject({ values: CACHED, stale: true })
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(CACHED)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(0)
+  })
+
+  it('an account switch during the read: the owner guard drops the patch, and nothing is kicked', async () => {
+    const r = rig()
+    siteEditSetup(r)
+    const refresh = vi.spyOn(r.shiki.tracker, 'refreshRates').mockResolvedValue(null)
+    const held = holdShikiRead()
+    const read = r.getRate('shikimori')
+    await untilReads(1)
+
+    r.store.set('shikimoriUser', OTHER_SHIKI_USER)
+    held.resolve(liveShiki(SITE))
+    await read
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(CACHED)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(0)
+    expect(refresh).not.toHaveBeenCalled()
+  })
+})
+
+describe('tracker:get-rate: the in-flight guard', () => {
+  it('the drain race: a read the server answered before the POST landed never puts the old value back', async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, PRIMARY)
+    const held = holdShikiRead()
+    const read = r.getRate('shikimori')
+    await untilReads(1)
+
+    // The edit path: the enqueue patches the cache to 10, then the drain writes and settles it.
+    r.shiki.tracker.enqueue({
+      malId: MAL,
+      rateId: MAL * 10,
+      before: PRIMARY,
+      after: rv({ episodes: 10 }),
+      queuedAt: T0
+    })
+    await r.shiki.tracker.syncQueue()
+    expect(server.get(MAL)!.episodes).toBe(10)
+    expect(r.queueOf('shikimori')).toEqual([])
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(10)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(2)
+
+    held.resolve(liveShiki(PRIMARY))
+    expect(await read).toMatchObject({ values: PRIMARY, stale: false })
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(10)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(2)
+    r.stopTimers()
+  })
+
+  it('two overlapping reads resolving out of order: the newer patches, the older stands down', async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, rv({ episodes: 10 }))
+    const a = holdShikiRead()
+    const readA = r.getRate('shikimori')
+    await untilReads(1)
+    server.set(MAL, rv({ episodes: 11 }))
+    const b = holdShikiRead()
+    const readB = r.getRate('shikimori')
+    await untilReads(2)
+
+    b.resolve(liveShiki(rv({ episodes: 11 }), T0 + 3_000_000))
+    await readB
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(11)
+    a.resolve(liveShiki(rv({ episodes: 10 })))
+    await readA
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(11)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+  })
+
+  it('two overlapping reads resolving in order: the later one stands down, and the next read heals the row', async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, rv({ episodes: 10 }))
+    const a = holdShikiRead()
+    const readA = r.getRate('shikimori')
+    await untilReads(1)
+    server.set(MAL, rv({ episodes: 11 }))
+    const b = holdShikiRead()
+    const readB = r.getRate('shikimori')
+    await untilReads(2)
+
+    a.resolve(liveShiki(rv({ episodes: 10 })))
+    await readA
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(10)
+    b.resolve(liveShiki(rv({ episodes: 11 }), T0 + 3_000_000))
+    await readB
+    // B snapshotted 9, and A moved the row: B stands down though the server holds 11.
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(10)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+
+    // A's rate-updated makes the store refetch the held title; that read patches.
+    expect(await r.getRate('shikimori')).toMatchObject({ values: rv({ episodes: 11 }) })
+    expect(r.shiki.tracker.cachedRate(MAL)!.values.episodes).toBe(11)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(2)
+  })
+
+  it('an entry queued while the read was in flight: no read-patch', async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, rv({ episodes: 10 }))
+    const held = holdShikiRead()
+    const read = r.getRate('shikimori')
+    await untilReads(1)
+
+    // Its `after` is the cached values, so the row reads unchanged and only the queue check sees it.
+    r.shiki.tracker.enqueue({
+      malId: MAL,
+      rateId: MAL * 10,
+      before: PRIMARY,
+      after: PRIMARY,
+      queuedAt: T0
+    })
+    expect(r.shiki.tracker.cachedRate(MAL)).toEqual({ remoteId: MAL * 10, values: PRIMARY })
+    const updates = sent(r, SHIKI_RATE_UPDATED).length
+
+    held.resolve(liveShiki(rv({ episodes: 10 })))
+    await read
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(PRIMARY)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(updates)
+  })
+})
+
+describe('tracker:get-rate: a presence mismatch kicks one list refresh', () => {
+  it('removed on the site: once per title, and once more for another account', async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    const refresh = vi.spyOn(r.shiki.tracker, 'refreshRates').mockResolvedValue(null)
+
+    expect(await r.getRate('shikimori')).toMatchObject({ values: null, stale: false })
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith({ keepQueued: false })
+    await r.getRate('shikimori')
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    r.store.set('shikimoriUser', OTHER_SHIKI_USER)
+    await r.getRate('shikimori')
+    expect(refresh).toHaveBeenCalledTimes(2)
+    // A single read can't remove the row: the refresh does.
+    expect(r.shiki.tracker.cachedRate(MAL)).not.toBeNull()
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(0)
+  })
+
+  it('added on the site: once per title, and once more for another account', async () => {
+    const r = rig()
+    r.cacheShiki([OTHER, PRIMARY])
+    server.set(MAL, PRIMARY)
+    const refresh = vi.spyOn(r.shiki.tracker, 'refreshRates').mockResolvedValue(null)
+
+    expect(await r.getRate('shikimori')).toMatchObject({ values: PRIMARY, stale: false })
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith({ keepQueued: false })
+    await r.getRate('shikimori')
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    r.store.set('shikimoriUser', OTHER_SHIKI_USER)
+    await r.getRate('shikimori')
+    expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  it("an in-app first add kicks too: the mirror's create drains, and neither its enqueue nor its settle can create the row", async () => {
+    const r = rig()
+    r.cacheShiki([OTHER, PRIMARY])
+    r.cache('anilist', [OTHER, MIRROR])
+    // The user adds the title from the panel: Shikimori writes it, AniList's mirror entry creates it.
+    await r.invoke(CHANNELS.TRACKER_UPDATE_RATE, MAL, PRIMARY)
+    await r.anilist.drainNow()
+    expect(r.alFake.rows.get(MAL)!.values).toEqual(PRIMARY)
+    expect(r.queueOf('anilist')).toEqual([])
+    expect(r.anilist.cachedRate(MAL)).toBeNull()
+    const refresh = vi.spyOn(r.anilist, 'refreshRates').mockResolvedValue(null)
+
+    expect(await r.getRate('anilist')).toMatchObject({ values: PRIMARY, stale: false })
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith({ keepQueued: false })
+    r.stopTimers()
+  })
+
+  it("an account switch during the read kicks nothing: the cache is the new account's by then", async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    const refresh = vi.spyOn(r.shiki.tracker, 'refreshRates').mockResolvedValue(null)
+    const held = holdShikiRead()
+    const read = r.getRate('shikimori')
+    await untilReads(1)
+
+    r.store.set('shikimoriUser', OTHER_SHIKI_USER)
+    held.resolve(null)
+    expect(await read).toMatchObject({ values: null, stale: false })
+
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('the presence check reads the cache after the await: a refresh that wrote the row meanwhile is no mismatch', async () => {
+    const r = rig()
+    r.cacheShiki([OTHER, PRIMARY])
+    server.set(MAL, PRIMARY)
+    const held = holdShikiRead()
+    const read = r.getRate('shikimori')
+    await untilReads(1)
+
+    await r.shiki.tracker.refreshRates({ keepQueued: false })
+    expect(r.shiki.tracker.cachedRate(MAL)).not.toBeNull()
+    const refresh = vi.spyOn(r.shiki.tracker, 'refreshRates').mockResolvedValue(null)
+    held.resolve(liveShiki(PRIMARY))
+    await read
+
+    expect(refresh).not.toHaveBeenCalled()
+  })
+})

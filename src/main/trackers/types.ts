@@ -251,9 +251,10 @@ export { TRACKER_LABELS } from '@shared/trackers/labels'
 /**
  * How a tracker's rate cache (its `userRates` key) is written (#691). Rows are
  * built from each listed entry's `native`, never from the lossy normalized
- * fields, so Shikimori's `shikimoriUserRates` keeps its bytes.
+ * fields, so Shikimori's `shikimoriUserRates` keeps its bytes. `TRate` is the
+ * provider's single-entry rate, the `native` of what `getEntry` returns.
  */
-export interface TrackerRateCacheCodec<TNative, TRow> {
+export interface TrackerRateCacheCodec<TNative, TRow, TRate = unknown> {
   /** The cache rows for a listed page, from each entry's `native` and `smotretAnime`. */
   fromEntries(entries: readonly TrackerRateEntry<TNative>[]): TRow[]
   /** A row's MAL id, as a refresh with `keepQueued` matches it. */
@@ -267,6 +268,13 @@ export interface TrackerRateCacheCodec<TNative, TRow> {
    * `remoteId`, when given, becomes the row's id; otherwise the id is left alone.
    */
   patch(row: TRow, values: RateValues, remoteId?: number): TRow
+  /**
+   * `row` with a live single-entry read written over its rate fields (#752):
+   * the fields `entry.values` came from, taken from `entry.native` with the
+   * server's own update time, so `read` of the result returns `entry.values`.
+   * The row's media block and smotret join are left alone.
+   */
+  patchFromRead(row: TRow, entry: TrackerEntry<TRate>): TRow
   /**
    * A cached row as the read side normalizes it (#694): what `tracker:*`
    * replies and broadcasts carry. It reads the row and writes nothing.
@@ -285,7 +293,7 @@ export interface TrackerSyncProvider<
   TRate,
   TRow
 > extends TrackerProvider<TSession, TNative, TRate> {
-  readonly rateCache: TrackerRateCacheCodec<TNative, TRow>
+  readonly rateCache: TrackerRateCacheCodec<TNative, TRow, TRate>
   /**
    * True when an `auth()` failure means the stored credentials are gone, so the
    * timer stops. Narrower than the `auth` class: Shikimori's is

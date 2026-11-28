@@ -8,6 +8,7 @@ import {
   rewritePrioritySlots,
   type ApplyDeps
 } from '../../../src/main/lib/sync-state/apply'
+import { shikimoriRateCache } from '../../../src/main/trackers/shikimori.provider'
 
 const NOW = Date.UTC(2026, 9, 27, 12)
 const A = '101'
@@ -333,6 +334,32 @@ describe('rate clocks: only a clock that records the projected value counts', ()
     expect(rate.malId).toBe(42)
     expect(rate.episodes).toEqual({ value: 3, at: 900, origin: 'pc-a' })
     expect(rate.score).toEqual({ value: 7, at: Date.parse(SERVER_AT), origin: 'shikimori' })
+  })
+
+  // #752: a live get-rate read writes the server's `updated_at` as `serverUpdatedAt`.
+  it("a read-patched row's unstamped fields take the read's server clock", () => {
+    const READ_AT = '2026-11-20T10:00:00.000Z'
+    const [row] = rateStore().get('shikimoriUserRates') as Record<string, unknown>[]
+    const patched = shikimoriRateCache.patchFromRead(row as never, {
+      trackerId: 'shikimori',
+      malId: 42,
+      remoteId: 1,
+      values: { episodes: 4, status: 'watching', score: 7, rewatches: 0 },
+      native: {
+        id: 1,
+        target_id: 42,
+        target_type: 'Anime',
+        episodes: 4,
+        status: 'watching',
+        score: 7,
+        rewatches: 0,
+        updated_at: READ_AT
+      }
+    })
+    const s = rateStore({ shikimoriUserRates: [patched] })
+    const rate = projectSyncDoc(s, [A], projectDeps).titles[A].rate!
+    expect(rate.episodes).toEqual({ value: 4, at: Date.parse(READ_AT), origin: 'shikimori' })
+    expect(rate.score).toEqual({ value: 7, at: Date.parse(READ_AT), origin: 'shikimori' })
   })
 
   it("a discarded edit's leftover clock is inert: the field keeps the Shikimori clock", () => {

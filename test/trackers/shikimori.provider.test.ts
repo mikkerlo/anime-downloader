@@ -397,6 +397,66 @@ describe('the rate-cache codec', () => {
     }
   })
 
+  // #752: a live read's write-back carries the server's clock on both fields.
+  it("patchFromRead takes the live rate's updated_at as both clocks and keeps the media and smotret join", () => {
+    const [row] = buildRateCacheEntries([ROWS[0]], SMOTRET)
+    const at = '2026-11-20T10:00:00.000Z'
+    const live = { ...rate(row.rate.id, row.rate.target_id, 9), status: 'completed' as const }
+    const patched = shikimoriRateCache.patchFromRead(row, {
+      trackerId: 'shikimori',
+      malId: row.rate.target_id,
+      remoteId: live.id,
+      values: { episodes: 9, status: 'completed', score: 7, rewatches: 1 },
+      native: { ...live, updated_at: at }
+    })
+    expect(patched.rate).toEqual({
+      ...row.rate,
+      episodes: 9,
+      status: 'completed',
+      score: 7,
+      rewatches: 1,
+      updated_at: at,
+      serverUpdatedAt: at
+    })
+    expect(Object.keys(patched.rate)).toEqual(Object.keys(row.rate))
+    expect(patched.shikiAnime).toBe(row.shikiAnime)
+    expect(patched.smotretAnime).toBe(row.smotretAnime)
+    expect(shikimoriRateCache.read(patched).values).toEqual({
+      episodes: 9,
+      status: 'completed',
+      score: 7,
+      rewatches: 1
+    })
+  })
+
+  it('patch still leaves serverUpdatedAt alone (#572)', () => {
+    const [row] = buildRateCacheEntries([ROWS[0]], SMOTRET)
+    const values = { episodes: 9, status: 'completed' as const, score: 10, rewatches: 1 }
+    expect(shikimoriRateCache.patch(row, values).rate.serverUpdatedAt).toBe(
+      row.rate.serverUpdatedAt
+    )
+  })
+
+  it("patchFromRead with no updated_at keeps the row's serverUpdatedAt and stamps updated_at locally", () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 10, 1) })
+    try {
+      const [row] = buildRateCacheEntries([ROWS[0]], SMOTRET)
+      const live = rate(row.rate.id, row.rate.target_id, 9)
+      const patched = shikimoriRateCache.patchFromRead(row, {
+        trackerId: 'shikimori',
+        malId: row.rate.target_id,
+        remoteId: live.id,
+        values: { episodes: 9, status: 'watching', score: 7, rewatches: 1 },
+        native: live
+      })
+      expect(patched.rate.episodes).toBe(9)
+      expect(patched.rate.serverUpdatedAt).toBe(row.rate.serverUpdatedAt)
+      expect(patched.rate.updated_at).toBe('2026-11-01T00:00:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('the session is gone only for a ShikiAuthError, not for a 403 from the refresh', () => {
     const p = provider()
     expect(p.isSessionGone(new ShikiAuthError('expired', 400))).toBe(true)

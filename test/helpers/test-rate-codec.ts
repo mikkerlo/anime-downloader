@@ -31,6 +31,13 @@ export function testRateCodec(
       values: { ...values },
       updated_at: new Date().toISOString()
     }),
+    // A row keeps no native, so the read's values stand in for it.
+    patchFromRead: (row, entry) => ({
+      ...row,
+      remoteId: entry.remoteId,
+      values: { ...entry.values },
+      updated_at: 'read'
+    }),
     entryOf: (row) => ({
       trackerId,
       malId: row.malId,

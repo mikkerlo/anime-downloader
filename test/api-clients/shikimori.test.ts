@@ -133,7 +133,9 @@ describe('shikimori client — fixture replay', () => {
         id: 12345,
         episodes: 5,
         status: 'watching',
-        target_id: 5114
+        target_id: 5114,
+        // The server's clock that a read-patch writes into the cache (#752).
+        updated_at: '2026-05-01T12:00:00.000+03:00'
       })
     })
 
@@ -178,7 +180,12 @@ describe('shikimori client — fixture replay', () => {
     it('PATCHes the rate-id endpoint with the user_rate delta', async () => {
       mockFetchOnce(fixture('user-rate-updated.json'))
       const rate = await shikimori.updateUserRate('tok', 12345, 64, 'completed', 9, 1)
-      expect(rate).toMatchObject({ id: 12345, episodes: 64, status: 'completed' })
+      expect(rate).toMatchObject({
+        id: 12345,
+        episodes: 64,
+        status: 'completed',
+        updated_at: '2026-05-03T18:30:00.000+03:00'
+      })
       const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit
       expect(init.method).toBe('PATCH')
       expect(lastFetchUrl()).toContain('/api/v2/user_rates/12345')

@@ -690,6 +690,23 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     return provider.getEntry(session, { malId, remoteId: cachedRate(malId)?.remoteId ?? null })
   }
 
+  // `patchCachedRate`'s guards and emit order, with the server-sourced codec patch (#752).
+  function patchCachedRateFromRead(
+    ownerId: number,
+    malId: number,
+    entry: TrackerEntry<TRate>
+  ): TRow | null {
+    if (currentUserId() !== ownerId) return null
+    const cached = store.get(keys.userRates) as TRow[]
+    const idx = codec.indexOf(cached, malId)
+    if (idx === -1) return null
+    cached[idx] = codec.patchFromRead(cached[idx], entry)
+    store.set(keys.userRates, cached)
+    deps.onRateUpdated?.(trackerId, malId)
+    broadcast(deps.rateUpdatedChannel, cached[idx])
+    return cached[idx]
+  }
+
   return {
     trackerId,
     keys,
@@ -706,6 +723,7 @@ export function createTrackerSyncService<TSession extends { userId: number }, TN
     fetchAndCacheRates,
     refreshRates,
     patchCachedRate,
+    patchCachedRateFromRead,
     cachedRate,
     rateCache: codec,
     fetchEntry,
@@ -735,6 +753,14 @@ export interface TrackerSyncReads<TRate, TRow> extends TrackerDetailsCache {
    * `getEntry` with that session. Null when the user has none.
    */
   fetchEntry(malId: number): Promise<TrackerEntry<TRate> | null>
+  /**
+   * A live `fetchEntry` answer written into the cached row for `malId` (#752):
+   * `patchCachedRate`'s owner guard, no-row no-op and `store.set` →
+   * `onRateUpdated` → `rateUpdatedChannel` sequence, with the codec's
+   * server-sourced `patchFromRead`, so the row carries the server's update
+   * time. Queues nothing and stamps no rate clock. Returns the written row.
+   */
+  patchCachedRateFromRead(ownerId: number, malId: number, entry: TrackerEntry<TRate>): TRow | null
   /**
    * A failure a queued write would survive: a `network`-class error, or the
    * session is gone (`isSessionGone`). Get-rate answers from the cache on one;

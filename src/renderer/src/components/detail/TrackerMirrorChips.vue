@@ -6,6 +6,9 @@
 //
 // - The values are the store's `rateFor` (the mirror's cache with its last
 //   queued `after`); the total is its entry's `anime.episodes`, else the page's.
+//   Main writes each live `tracker:get-rate` read into that cache (#752), so
+//   `rateFor` already holds the live values online: don't swap it for
+//   `result.values`, which `differs` doesn't read.
 // - `stale`, `queued`, `unmapped` and `differs` are main's, from the held
 //   title's `tracker:get-rate` result. Nothing here evaluates a difference:
 //   "Copy from primary" shows exactly when `differs` is non-empty.

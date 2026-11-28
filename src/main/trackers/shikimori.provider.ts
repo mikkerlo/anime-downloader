@@ -52,7 +52,8 @@ export type ShikimoriProvider = TrackerSyncProvider<
  */
 export const shikimoriRateCache: TrackerRateCacheCodec<
   shikimori.ShikiAnimeRateEntry,
-  CachedRateEntry
+  CachedRateEntry,
+  shikimori.ShikiUserRate
 > = {
   fromEntries(entries) {
     const malMap: Record<number, AnimeSearchResult> = {}
@@ -80,6 +81,25 @@ export const shikimoriRateCache: TrackerRateCacheCodec<
         score: values.score,
         rewatches: values.rewatches,
         updated_at: new Date().toISOString()
+      }
+    }
+  },
+  // The server's `updated_at` is both clocks, as a refresh writes them. A rate
+  // without one keeps the row's `serverUpdatedAt` and stamps `updated_at` as
+  // `patch` does.
+  patchFromRead(row, { native: rate }) {
+    const at = typeof rate.updated_at === 'string' ? rate.updated_at : undefined
+    return {
+      ...row,
+      rate: {
+        ...row.rate,
+        id: rate.id,
+        episodes: rate.episodes,
+        status: rate.status,
+        score: rate.score,
+        rewatches: rate.rewatches ?? 0,
+        updated_at: at ?? new Date().toISOString(),
+        ...(at !== undefined ? { serverUpdatedAt: at } : {})
       }
     }
   },

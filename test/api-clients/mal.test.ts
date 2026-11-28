@@ -176,6 +176,32 @@ describe('the rate cache codec', () => {
     })
     expect(malRateCache.entryOf(patched)).not.toHaveProperty('native')
   })
+
+  // #752: a live read written back with the server's own `updated_at`.
+  it("patchFromRead replaces list_status with readEntry's, updated_at included, and keeps node", async () => {
+    fake.on('GET', api('/anime/5114'), { json: malFixture('anime-entry.json') })
+    const r = rig()
+    const entry = (await r.provider.getEntry(r.session, { malId: 5114, remoteId: 5114 }))!
+    const listed = listRows().find((row) => row.node.id === 5114)!
+    const row = {
+      node: listed.node,
+      list_status: {
+        ...listed.list_status,
+        num_episodes_watched: 3,
+        updated_at: '2026-01-01T00:00:00+00:00'
+      },
+      smotretAnime: null
+    }
+
+    const patched = malRateCache.patchFromRead(row, entry)
+
+    expect(patched.list_status).toEqual(
+      malFixture<{ my_list_status: unknown }>('anime-entry.json').my_list_status
+    )
+    expect(patched.list_status.updated_at).toBe('2026-03-01T10:00:00+00:00')
+    expect(patched.node).toBe(row.node)
+    expect(malRateCache.read(patched)).toEqual({ remoteId: 5114, values: entry.values })
+  })
 })
 
 describe('getEntry', () => {

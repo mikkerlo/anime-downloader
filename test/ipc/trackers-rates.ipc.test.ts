@@ -306,6 +306,27 @@ describe('tracker:get-rate, per tracker (#570 cases)', () => {
   })
 })
 
+// #752: the alias goes through the same `readRate`, so Home and Library see the live row.
+describe('shikimori:get-rate writes a live read back into the cache', () => {
+  it('a lagging cached row is patched through the alias, with one rate-updated broadcast', async () => {
+    const r = rig()
+    PER.shikimori.cache(r, [MAL, rv(3)])
+    server.set(MAL, rv(5))
+
+    expect(await r.invoke(CHANNELS.SHIKIMORI_GET_RATE, MAL)).toMatchObject({
+      episodes: 5,
+      updated_at: server.get(MAL)!.updated_at
+    })
+
+    expect(r.shikiSvc.cachedRate(MAL)!.values).toEqual(rv(5))
+    const updates = r.broadcast.mock.calls.filter(
+      ([c]) => c === EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED
+    )
+    expect(updates).toHaveLength(1)
+    expect(shikimoriRateCache.entryOf(updates[0][1] as never).values).toEqual(rv(5))
+  })
+})
+
 describe('tracker:get-rates', () => {
   it('shikimori: cache-first with a background refresh; raw is the stored rows byte for byte', async () => {
     const r = rig()

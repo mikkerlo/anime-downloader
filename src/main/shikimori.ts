@@ -36,6 +36,8 @@ export interface ShikiUserRate {
   rewatches: number
   target_id: number
   target_type: string
+  /** The server's update time: `/api/v2/user_rates` sends it (#752). */
+  updated_at?: string
 }
 
 export interface ShikiAnimeRateEntry {

@@ -256,7 +256,7 @@ function payloadOf(
 }
 
 /** `myanimelistUserRates`: the `native` rows as read, with their smotret join. */
-export const malRateCache: TrackerRateCacheCodec<MalListRow, MalCachedRow> = {
+export const malRateCache: TrackerRateCacheCodec<MalListRow, MalCachedRow, MalListStatus> = {
   fromEntries: (entries) =>
     entries.map((e) => ({
       node: e.native.node,
@@ -267,6 +267,8 @@ export const malRateCache: TrackerRateCacheCodec<MalListRow, MalCachedRow> = {
   indexOf: (rows, malId) => rows.findIndex((r) => r.node?.id === malId),
   read: (row) => ({ remoteId: row.node.id, values: malValues(row.list_status) }),
   patch: (row, values) => ({ ...row, list_status: listStatusOf(values, row.list_status) }),
+  // `readEntry`'s `my_list_status` as read, its `updated_at` included.
+  patchFromRead: (row, { native }) => ({ ...row, list_status: { ...native } }),
   entryOf: (row) => payloadOf(row, row.smotretAnime ?? null)
 }
 

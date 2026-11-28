@@ -1053,6 +1053,10 @@ describe('the Shikimori handlers own their reply shape (#692 review)', () => {
     server.set(1, { episodes: 5, score: 7 })
     r.shikiCache([1, rv(5)])
     const invoke = router(r)
-    expect(await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 6, 'watching', 7, 0)).toEqual(rate(6))
+    // The served rate carries the server's `updated_at`, as `/api/v2/user_rates` does.
+    expect(await invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, 1, 6, 'watching', 7, 0)).toEqual({
+      ...rate(6),
+      updated_at: server.get(1)!.updated_at
+    })
   })
 })

@@ -284,6 +284,20 @@ one tracker: `createTrackerSyncService(provider, keys, deps)`.
   then the `rateUpdatedChannel` broadcast. A settled rate passes its `remoteId`;
   an enqueue patch leaves the row's id alone. It invalidates no
   recommendations, and the queue broadcast is the caller's.
+- **`patchCachedRateFromRead(ownerId, malId, entry)`** (#752) is the
+  server-sourced twin: the same owner guard, no-row no-op and `store.set` →
+  `onRateUpdated` → `rateUpdatedChannel` sequence, with the codec's
+  `patchFromRead(row, entry)` in place of `patch`. `patchFromRead` writes the
+  row's rate fields from the live entry's `native` (the codec's third type
+  parameter, `TRate`), the server's update time included, and leaves the
+  media block and smotret join alone: Shikimori sets `rate.updated_at` and
+  `rate.serverUpdatedAt` from the `/api/v2/user_rates` rate's `updated_at`
+  (a rate without one keeps `serverUpdatedAt` and stamps `updated_at`
+  locally), AniList writes the native `id`, `status`, raw `score`,
+  `progress`, `repeat` and `updatedAt`, and MAL replaces `list_status` with
+  `readEntry`'s. Each writes the fields `entry.values` came from, so `read` of
+  the result is `entry.values`, AniList's lossy score scales included. Only
+  `readRate` calls it; the drain's settle keeps `patch`.
 - **The emit order is a contract:** on both the create and the update branch
   the drain patches the cache before it drops the consumed entries, so a
   drained item broadcasts `rateUpdatedChannel` before
@@ -499,6 +513,32 @@ is a shared function in `src/main/services/trackers/rates.ts`
   has no row, cached or queued). A queued-only change emits
   `tracker:offline-queue-changed` and no `tracker:rate-updated`, so the
   renderer refetches the result on both events.
+- **A live read lands in the cache** (#752), before the signals are computed,
+  so the panel (the live read), the chips' `differs` and the copy (the
+  projection) read one snapshot. `readRate` takes `cachedRate(malId)` before
+  the `fetchEntry` await. After it, it calls `patchCachedRateFromRead` with
+  the account the read started for, and only when the read is live, the entry
+  and a cached row both exist, the row still equals that snapshot (same
+  `remoteId` and four values), the live queue (read after the await) has no
+  entry for the title, and the values differ. So a stale or failed read, a
+  queued title, a title with no row, a row another write moved while the read
+  was in flight, and an equal read never patch; the last is what ends the
+  `rate-updated` → held refetch → `get-rate` chain. A stand-down heals for a
+  held title: every write that can move the row broadcasts `rate-updated`
+  (`patchCachedRate`, the read-patch) or `rates-refreshed` (`refreshRates`),
+  and the store refetches the held title on either, so the next read starts
+  from the new row. The one unbroadcast cache write, `getRates`'
+  `fetchAndCacheRates`, runs only into an empty cache, where there is no row
+  to protect. A presence mismatch against the post-await cache kicks
+  `refreshInBackground` once per `${tracker}:${user}:${malId}` per session: a
+  live entry with no row (a site-side add, or an in-app first add whose
+  enqueue and settle had no row to patch), or a null entry over a row (a
+  site-side removal). The key is never cleared, and an account switch during
+  the read kicks nothing. The patch queues nothing, stamps no rate clock and
+  mirrors nothing. It runs for every user, single-tracker ones included,
+  through both `tracker:get-rate` and the `shikimori:get-rate` alias. The
+  write-back is best-effort: a throw in it is logged, and `get-rate` still
+  answers with the live read.
 - **"Copy from primary"** (#705, `tracker:copy-from-primary`,
   `copyFromPrimary` in `rates.ts`) reads the primary's projection, gates on
   the same `differs`, and only when it is non-empty calls `applyChange(malId,
@@ -1110,7 +1150,8 @@ queue length, `sessionExpired` and sync state from the primary's entry. Its
 for the primary's rate. A response is applied, and clears `loading`, only while
 its tracker and MAL id are still current, so a late reply from the old primary
 after a switch is dropped. `tracker:get-rate` answers the remote or cached row
-without the queue on top, so the panel lays the primary's queued `after` over
+without the queue on top (a remote row that differs from the cache also lands
+in the cache, #752), so the panel lays the primary's queued `after` over
 the reply, as `projectRate` does: a switch or a mount with a change still queued
 shows that change, and a Save can't write the remote value back over it. The
 AniList "Open ↗" link needs the result's `mediaId` and is hidden without it.
@@ -1121,7 +1162,8 @@ connected tracker that isn't the primary, in tracker order; with one tracker
 the component isn't mounted, so it holds no title and reads nothing. Each
 chip holds the title (`holdTitle`) and shows the badge, then `status ·
 eps/total · score` from `rateFor` (the total is the entry's `anime.episodes`,
-else the page's), then its state: queued, stale, "Session expired" or "Needs
+else the page's; online, its held `get-rate` read has already landed in that
+cache, #752), then its state: queued, stale, "Session expired" or "Needs
 setup" (from `syncStatusFor`, each a link to that tracker's Settings →
 Trackers card), and "mirroring off" when its toggle is off. `unmapped`
 replaces the values with "Not on ‹tracker›" and offers no copy. A non-empty

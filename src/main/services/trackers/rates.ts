@@ -36,6 +36,19 @@ export function isTrackerId(value: unknown): value is TrackerId {
 }
 
 type Instance = TrackerSyncService<unknown, unknown>
+type CachedRate = NonNullable<ReturnType<Instance['cachedRate']>>
+
+const RATE_FIELDS = ['episodes', 'status', 'score', 'rewatches'] as const
+
+function sameValues(a: RateValues, b: RateValues): boolean {
+  return RATE_FIELDS.every((f) => a[f] === b[f])
+}
+
+/** The same `remoteId` and the same four values. */
+function sameCachedRate(a: CachedRate | null, b: CachedRate | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.remoteId === b.remoteId && sameValues(a.values, b.values)
+}
 
 /**
  * What `readRate` answered: the live entry (null when the user has none), or,
@@ -63,7 +76,10 @@ export interface TitleSignals {
   queued: boolean
   /** A fresh negative id-map entry: the tracker can't hold the title (AniList's only). */
   unmapped: boolean
-  /** Where its projection differs from the primary's (`rateDiff`); [] for the primary. */
+  /**
+   * Where its projection differs from the primary's (`rateDiff`); [] for the
+   * primary. A projection's cached row includes the last live read (#752).
+   */
   differs: SyncRateField[]
 }
 
@@ -94,7 +110,14 @@ export interface TrackerRates {
    * `[]` with no primary, or for a primary whose instance hasn't landed.
    */
   primaryEntries(): TrackerRateEntry<unknown>[]
-  /** Null with no instance. Rejects as today's `shikimori:get-rate` does. */
+  /**
+   * Null with no instance. Rejects as today's `shikimori:get-rate` does. A
+   * live entry that differs from the cached row is written into it
+   * (`patchCachedRateFromRead`) unless the row changed while the read was in
+   * flight or the title is queued; a live entry with no row, or a null one
+   * over a row, kicks one background refresh per tracker, account and title
+   * per session (#752).
+   */
   readRate(trackerId: TrackerId, malId: number): Promise<RateRead | null>
   /**
    * The rate cache's rows, cache-first: a cached list answers at once and
@@ -139,7 +162,8 @@ export interface TrackerRates {
    */
   titleSignals(trackerId: TrackerId, malId: number): TitleSignals
   /**
-   * "Copy from primary" (#705 § 3): the primary's projection, as a `'user'`
+   * "Copy from primary" (#705 § 3): the primary's projection (its cached row
+   * includes the last live read, #752), as a `'user'`
    * set to that tracker alone (`applyChange`'s non-primary branch, queued
    * with `via: 'copy'`). Refuses the primary, a tracker that isn't connected,
    * an unmapped title and a primary with no row; calls nothing when nothing
@@ -173,6 +197,9 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
   const log = deps.log ?? console
   const isOffline = (): boolean => deps.isOffline?.() ?? false
   const hooks = new Map<TrackerId, TrackerRefreshHooks>()
+  // `${tracker}:${user}:${malId}` keys whose presence mismatch already kicked a
+  // refresh this session. Never cleared: the key carries the account (#752).
+  const presenceKicked = new Set<string>()
 
   function instance(id: TrackerId): Instance | null {
     return trackers.syncServices().find((t) => t.trackerId === id) ?? null
@@ -211,13 +238,55 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
       if (userAtStart === undefined) throw new Error(`Not logged in to ${TRACKER_LABELS[id]}`)
       return { stale: true, row: fromCache(t, malId, new OfflineError()) }
     }
+    const before = t.cachedRate(malId)
+    let entry: TrackerEntry<unknown> | null
     try {
-      return { stale: false, entry: await t.fetchEntry(malId) }
+      entry = await t.fetchEntry(malId)
     } catch (err) {
       // After an account switch the cache is the new account's list.
       if (!t.isQueueableError(err) || userIdOf(id) !== userAtStart) throw err
       return { stale: true, row: fromCache(t, malId, err) }
     }
+    // Best-effort: the live read is the answer even when the write-back fails.
+    if (userAtStart !== undefined) {
+      try {
+        settleLiveRead(t, malId, userAtStart, before, entry)
+      } catch (err) {
+        log.warn(`[${id}] live-read write-back failed:`, err)
+      }
+    }
+    return { stale: false, entry }
+  }
+
+  // #752: a live read lands in the cache, so the projection, `differs` and the
+  // copy read what the panel shows. Every write that can trip the in-flight
+  // check broadcasts `rate-updated` or `rates-refreshed`, and the store then
+  // refetches a held title, so a stand-down heals on the next read.
+  function settleLiveRead(
+    t: Instance,
+    malId: number,
+    owner: number,
+    before: CachedRate | null,
+    entry: TrackerEntry<unknown> | null
+  ): void {
+    const id = t.trackerId
+    const row = t.cachedRate(malId)
+    if ((entry === null) !== (row === null) && userIdOf(id) === owner) {
+      // A single read can't create a row or announce a removal: the list refresh does both.
+      const key = `${id}:${owner}:${malId}`
+      if (!presenceKicked.has(key)) {
+        presenceKicked.add(key)
+        refreshInBackground(id)
+      }
+    }
+    if (!entry || !row) return
+    // The row moved while the read was in flight: a drain, an enqueue or another read wrote it.
+    if (!sameCachedRate(row, before)) return
+    // A queued title's projection overlays the queue, and its drain settles the row itself.
+    if (liveQueue(id).some((q) => q.malId === malId)) return
+    // Equal values never patch: that is what ends the `rate-updated` → refetch chain.
+    if (sameValues(row.values, entry.values)) return
+    t.patchCachedRateFromRead(owner, malId, entry)
   }
 
   function refreshInBackground(id: TrackerId): void {

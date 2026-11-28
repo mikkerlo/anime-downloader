@@ -32,6 +32,11 @@ export function plainCodec(trackerId: TrackerId): TrackerRateCacheCodec<unknown,
       ...(remoteId !== undefined ? { remoteId } : {}),
       values: { ...values }
     }),
+    patchFromRead: (row, entry) => ({
+      ...row,
+      remoteId: entry.remoteId,
+      values: { ...entry.values }
+    }),
     entryOf: (row) => ({
       trackerId,
       malId: row.malId,

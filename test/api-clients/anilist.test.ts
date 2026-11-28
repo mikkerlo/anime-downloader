@@ -248,6 +248,55 @@ describe('MediaList: getEntry', () => {
   })
 })
 
+// #752: a live read written back into the cache, with the server's fields.
+describe('the rate cache codec: patchFromRead', () => {
+  const cachedRow = () => {
+    const listed = anilistFixture<{
+      data: { MediaListCollection: { lists: { entries: AniListListEntry[] }[] } }
+    }>('media-list-collection-1').data.MediaListCollection.lists[0].entries[0]
+    // An older row for the same entry: episodes 5, a POINT_100 60, an older clock.
+    return {
+      entry: { ...listed, score: 60, progress: 5, updatedAt: 1_700_000_000 },
+      smotretAnime: { id: 100 } as never
+    }
+  }
+
+  it("writes the native fields and updatedAt seconds, not now(), and keeps the media and smotret join; on POINT_5 the row reads back as getEntry's values", async () => {
+    serve((call) =>
+      call.operation === 'IdMap'
+        ? { body: { data: { Page: { media: [{ id: 101, idMal: 1 }] } } } }
+        : { body: anilistFixture('media-list') }
+    )
+    const { provider } = await createTestAniList({
+      user: { ...ALICE, scoreFormat: 'POINT_5' },
+      provider: { now: () => 1_800_000_000_000 }
+    })
+    const entry = (await provider.getEntry(SESSION, { malId: 1, remoteId: null }))!
+    const row = cachedRow()
+
+    const patched = provider.rateCache.patchFromRead(row, entry)
+
+    expect(patched.entry).toEqual({
+      ...row.entry,
+      id: 9001,
+      status: 'CURRENT',
+      score: 85,
+      progress: 7,
+      repeat: 0,
+      updatedAt: 1_764_000_000
+    })
+    expect(patched.entry.media).toBe(row.entry.media)
+    expect(patched.smotretAnime).toBe(row.smotretAnime)
+    // The raw 85 reads as the app's 9, which a POINT_5 `patch` can't keep.
+    expect(provider.rateCache.read(patched)).toEqual({ remoteId: 9001, values: entry.values })
+    expect(
+      provider.rateCache.read(provider.rateCache.patch(row, entry.values)).values.score
+    ).not.toBe(entry.values.score)
+    // A second identical read-patch changes nothing.
+    expect(provider.rateCache.patchFromRead(patched, entry)).toEqual(patched)
+  })
+})
+
 describe('SaveMediaListEntry: upsertEntry', () => {
   const values: RateValues = { episodes: 8, status: 'watching', score: 8, rewatches: 0 }
 

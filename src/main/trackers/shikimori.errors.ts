@@ -12,7 +12,7 @@ export function classifyShikimoriError(err: unknown): TrackerErrorClass {
   // A dead session, whatever its status: `ensureFreshToken` re-throws the
   // refresh's own status, and an `invalid_grant` expiry is a 400. The class is
   // discriminated by call site, never by status (its doc comment above
-  // `src/main/shikimori.ts:89`), so it is checked ahead of the status rows.
+  // `src/main/shikimori.ts:91`), so it is checked ahead of the status rows.
   if (err instanceof shikimori.ShikiAuthError) return 'auth'
   if (err instanceof shikimori.ShikiApiError) {
     if (err.status === 401 || err.status === 403) return 'auth'

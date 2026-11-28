@@ -57,15 +57,24 @@ export const server = {
   }
 }
 
-const rateOf = (malId: number, r: Row) => ({
+// `updated_at` is optional, as on `ShikiUserRate`: a test's own stand-in may leave it out.
+const rateOf = (malId: number, r: Row): Vals & FakeRate => ({
   id: r.id,
   target_id: malId,
   target_type: 'Anime',
   episodes: r.episodes,
   status: r.status,
   score: r.score,
-  rewatches: r.rewatches
+  rewatches: r.rewatches,
+  updated_at: r.updated_at
 })
+
+interface FakeRate {
+  id: number
+  target_id: number
+  target_type: string
+  updated_at?: string
+}
 
 export const fakeApi = {
   ensureFreshToken: vi.fn(async () => 'tok'),

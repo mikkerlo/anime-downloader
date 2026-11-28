@@ -441,7 +441,7 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
     return typeof id === 'number' ? id : undefined
   }
 
-  const rateCache: TrackerRateCacheCodec<AniListListEntry, AniListCachedRow> = {
+  const rateCache: TrackerRateCacheCodec<AniListListEntry, AniListCachedRow, AniListRate> = {
     fromEntries: (entries) =>
       entries.map((e) => ({ entry: e.native, smotretAnime: e.smotretAnime ?? null })),
     malIdOf: malIdOfRow,
@@ -464,6 +464,19 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
         }
       }
     },
+    // The raw score as the server holds it: `read` then gives `toEntry`'s values on any scale.
+    patchFromRead: (row, { native }) => ({
+      ...row,
+      entry: {
+        ...row.entry,
+        id: native.id,
+        status: native.status,
+        score: native.score,
+        progress: native.progress,
+        repeat: native.repeat,
+        updatedAt: native.updatedAt
+      }
+    }),
     entryOf: (row) =>
       ({
         trackerId: 'anilist',

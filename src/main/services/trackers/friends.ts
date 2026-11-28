@@ -466,7 +466,9 @@ export function createTrackerFriends(deps: TrackerFriendsDeps): TrackerFriends {
           fetchedAt: Date.now(),
           userId: session.userId
         }
-        // Stored only while `session.userId` is still the signed-in user.
+        // An account switch while this ran: the old user's, neither stored nor
+        // shown, as the card fetch drops its cards.
+        if (anilistUserId() !== session.userId) return { data: [], fetchedAt: record.fetchedAt }
         al.snapshots.put('friendsActivity', record)
         return record
       }

@@ -1537,7 +1537,8 @@ built once in `index.ts` and passed to both routers as `AppDeps.trackerFriends`.
   snapshot's `fetchedAt` as its stamp.
 - **Ownership.** An AniList card fetch records the user it began with and
   writes `anilistFriends` (and broadcasts) only if that is still
-  `anilistUser.id`; the snapshot's `put` has the same rule. AniList's logout
+  `anilistUser.id`. An activity fetch that outlived a switch is neither stored
+  nor returned: its source reads as empty. AniList's logout
   and switch reset clears `anilistFriends` (`USER_SCOPED_STATE`) and deletes
   the whole snapshot file, calendar included; `anilistIdMap` survives.
 - **AniList paging and budget.** `Page.following` 4 × 50, `Page.activities`

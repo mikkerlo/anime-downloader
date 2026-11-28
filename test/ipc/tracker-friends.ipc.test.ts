@@ -485,6 +485,30 @@ describe('tracker:get-friends', () => {
     expect(r.store.get('anilistFriends')).toEqual([])
     expect(broadcastsOn(r, EVENT_CHANNELS.TRACKER_FRIENDS_REFRESHED)).toEqual([])
   })
+
+  it('an AniList account switch mid-fetch: the old user’s activity is neither stored nor returned', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const r = await rig({
+      shikimori: false,
+      anilist: ALICE,
+      route: async (call) => {
+        if (call.operation === 'FriendsActivity') await held
+        return friendsRoute(call)
+      }
+    })
+    const pending = r.invoke(
+      CHANNELS.TRACKER_GET_FRIENDS_ACTIVITY
+    ) as Promise<TrackerFriendsActivityResult>
+    await vi.waitFor(() => expect(server!.of('FriendsActivity')).toHaveLength(1))
+    r.store.set('anilistUser', BOB)
+    release()
+    const res = await pending
+    expect(res.data).toEqual([])
+    expect(res.sources.anilist?.data).toEqual([])
+    expect(fs.existsSync(r.anilistFile)).toBe(false)
+    expect(r.calendar.snapshots.get('friendsActivity')).toBeNull()
+  })
 })
 
 describe('AniList logout', () => {

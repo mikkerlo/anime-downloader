@@ -134,7 +134,7 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
     }),
     trackerGetDetails: vi.fn().mockResolvedValue(null),
     shikimoriGetAnimeDetails: vi.fn().mockResolvedValue(null),
-    shikimoriGetRelated: vi.fn().mockResolvedValue([]),
+    trackerGetRelated: vi.fn().mockResolvedValue([]),
     getAnimeCache: overrides.getAnimeCache ?? vi.fn().mockResolvedValue(null),
     getAnime: overrides.getAnime ?? vi.fn().mockResolvedValue({ source: 'api', data: detail() }),
     getEpisodesBatchCached: vi
@@ -568,7 +568,7 @@ describe('AnimeDetailView — tracker panel gate (#704)', () => {
     return {
       shikimoriGetFriendsRates: vi.fn().mockResolvedValue([]),
       shikimoriGetAnimeDetails: vi.fn().mockResolvedValue(null),
-      shikimoriGetRelated: vi.fn().mockResolvedValue([]),
+      trackerGetRelated: vi.fn().mockResolvedValue([]),
       trackerGetRates: vi.fn(async (trackerId: TrackerId) => ({
         trackerId,
         entries: [],
@@ -659,5 +659,91 @@ describe('AnimeDetailView — tracker panel gate (#704)', () => {
     expect(continueButton(wrapper).attributes('disabled')).toBeUndefined()
     expect(continueButton(wrapper).text()).toBe('Continue · Ep 3')
     wrapper.unmount()
+  })
+})
+
+describe('AnimeDetailView — the chronology source (#710)', () => {
+  const MAL_ID = 5114
+  const ENTRY: ShikiRelatedEntry = {
+    relation: 'sequel',
+    shikiAnime: {
+      id: 6000,
+      name: 'Season 2',
+      image_url: 'https://cdn.myanimelist.net/s2.jpg',
+      url: 'https://myanimelist.net/anime/6000',
+      year: 2021,
+      kind: 'tv',
+      date: 1609459200
+    },
+    smotretAnime: null,
+    isCurrent: false,
+    watchStatus: null
+  }
+
+  function mountWith(accounts: TrackerAccountsState, related: ReturnType<typeof vi.fn>) {
+    const api = installApi({
+      getAnime: vi.fn().mockResolvedValue({
+        source: 'api',
+        data: detail({ myAnimeListId: MAL_ID } as Partial<AnimeDetail>)
+      }),
+      accounts,
+      extra: { trackerGetRelated: related }
+    })
+    return { api, wrapper: mount(AnimeDetailView, { props: { animeId: 1 } }) }
+  }
+
+  const panel = (w: ReturnType<typeof mount>) =>
+    w.findAll('.side-panel').find((p) => p.find('.chrono-icon').exists())
+
+  it('a MAL source renders the collapsed panel before any fetch; expanding it loads the entries', async () => {
+    const related = vi.fn().mockResolvedValue([ENTRY])
+    const { wrapper } = mountWith(trackerAccounts({ mal: 'active' }), related)
+    await flushPromises()
+
+    const before = panel(wrapper)
+    expect(before?.exists()).toBe(true)
+    expect(related).not.toHaveBeenCalled()
+    expect(before!.find('.panel-summary').exists()).toBe(false)
+    expect(before!.find('.chrono-list').exists()).toBe(false)
+
+    await before!.find('.panel-toggle').trigger('click')
+    await flushPromises()
+
+    expect(related).toHaveBeenCalledTimes(1)
+    expect(related).toHaveBeenCalledWith(MAL_ID)
+    expect(
+      panel(wrapper)!
+        .findAll('.chrono-row')
+        .map((r) => r.find('.chrono-title').text())
+    ).toEqual(['Season 2'])
+    wrapper.unmount()
+  })
+
+  it('a MAL walk that fails on expand hides the panel, as a failed read does', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const related = vi.fn().mockRejectedValue(new Error('MAL down'))
+    const { wrapper } = mountWith(trackerAccounts({ mal: 'active' }), related)
+    await flushPromises()
+    await panel(wrapper)!.find('.panel-toggle').trigger('click')
+    await flushPromises()
+    expect(related).toHaveBeenCalledTimes(1)
+    expect(panel(wrapper)).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('a Shikimori or AniList source (or none) fetches on open, as today', async () => {
+    for (const accounts of [
+      trackerAccounts({ shikimori: 'active' }),
+      trackerAccounts({ anilist: 'active' }),
+      trackerAccounts({})
+    ]) {
+      setActivePinia(createPinia())
+      const related = vi.fn().mockResolvedValue([ENTRY])
+      const { wrapper } = mountWith(accounts, related)
+      await flushPromises()
+      expect(related).toHaveBeenCalledWith(MAL_ID)
+      expect(panel(wrapper)!.find('.panel-summary').text()).toBe('1 entry')
+      wrapper.unmount()
+    }
   })
 })

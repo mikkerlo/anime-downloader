@@ -781,9 +781,73 @@ describe('tracker:get-rate: a live read that differs from the cache', () => {
     expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(0)
     expect(refresh).not.toHaveBeenCalled()
   })
+
+  // #755 review: the compare covers all four fields, `rewatches` included.
+  it('a rewatches-only site edit lands, and the same read again stops there', async () => {
+    const r = rig()
+    const REWATCHED = rv({ rewatches: 1 })
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, REWATCHED)
+
+    expect(await r.getRate('shikimori')).toMatchObject({ values: REWATCHED, stale: false })
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(REWATCHED)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+
+    await r.getRate('shikimori')
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(1)
+  })
+
+  // #755 review: the write-back is best-effort; the live read is the answer.
+  it('a write-back that throws is logged, and get-rate still resolves with the live values', async () => {
+    const r = rig()
+    siteEditSetup(r)
+    const codec = r.shiki.tracker.rateCache as unknown as { patchFromRead: () => never }
+    vi.spyOn(codec, 'patchFromRead').mockImplementation(() => {
+      throw new Error('codec broke')
+    })
+
+    expect(await r.getRate('shikimori')).toMatchObject({ values: SITE, stale: false })
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(CACHED)
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(0)
+    expect(console.warn).toHaveBeenCalledWith(
+      '[shikimori] live-read write-back failed:',
+      expect.objectContaining({ message: 'codec broke' })
+    )
+  })
 })
 
 describe('tracker:get-rate: the in-flight guard', () => {
+  it('a write that moved only rewatches while the read was in flight: the read stands down', async () => {
+    const r = rig()
+    r.cacheShiki([MAL, PRIMARY])
+    server.set(MAL, PRIMARY)
+    const held = holdShikiRead()
+    const read = r.getRate('shikimori')
+    await untilReads(1)
+
+    // A rewatches-only edit drains and settles: the row moves in `rewatches` alone.
+    r.shiki.tracker.enqueue({
+      malId: MAL,
+      rateId: MAL * 10,
+      before: PRIMARY,
+      after: rv({ rewatches: 1 }),
+      queuedAt: T0
+    })
+    await r.shiki.tracker.syncQueue()
+    expect(r.queueOf('shikimori')).toEqual([])
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(rv({ rewatches: 1 }))
+    const updates = sent(r, SHIKI_RATE_UPDATED).length
+
+    // An answer that also differs in episodes, so only the snapshot compare can stop it.
+    held.resolve(liveShiki(rv({ episodes: 10 })))
+    await read
+
+    expect(r.shiki.tracker.cachedRate(MAL)!.values).toEqual(rv({ rewatches: 1 }))
+    expect(sent(r, SHIKI_RATE_UPDATED)).toHaveLength(updates)
+    r.stopTimers()
+  })
+
   it('the drain race: a read the server answered before the POST landed never puts the old value back', async () => {
     const r = rig()
     r.cacheShiki([MAL, PRIMARY])

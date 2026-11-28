@@ -247,7 +247,14 @@ export function createTrackerRates(deps: TrackerRatesDeps): TrackerRates {
       if (!t.isQueueableError(err) || userIdOf(id) !== userAtStart) throw err
       return { stale: true, row: fromCache(t, malId, err) }
     }
-    if (userAtStart !== undefined) settleLiveRead(t, malId, userAtStart, before, entry)
+    // Best-effort: the live read is the answer even when the write-back fails.
+    if (userAtStart !== undefined) {
+      try {
+        settleLiveRead(t, malId, userAtStart, before, entry)
+      } catch (err) {
+        log.warn(`[${id}] live-read write-back failed:`, err)
+      }
+    }
     return { stale: false, entry }
   }
 

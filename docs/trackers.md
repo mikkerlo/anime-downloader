@@ -536,7 +536,9 @@ is a shared function in `src/main/services/trackers/rates.ts`
   site-side removal). The key is never cleared, and an account switch during
   the read kicks nothing. The patch queues nothing, stamps no rate clock and
   mirrors nothing. It runs for every user, single-tracker ones included,
-  through both `tracker:get-rate` and the `shikimori:get-rate` alias.
+  through both `tracker:get-rate` and the `shikimori:get-rate` alias. The
+  write-back is best-effort: a throw in it is logged, and `get-rate` still
+  answers with the live read.
 - **"Copy from primary"** (#705, `tracker:copy-from-primary`,
   `copyFromPrimary` in `rates.ts`) reads the primary's projection, gates on
   the same `differs`, and only when it is non-empty calls `applyChange(malId,

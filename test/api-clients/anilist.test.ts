@@ -549,6 +549,47 @@ describe('capabilities', () => {
     expect(s.calls[0].token).toBe('tok-alice')
   })
 
+  // #712's real-account check: `isFollowing: true` still answers the viewer's
+  // own list activity, which the Friends feed badged as a friend's.
+  it('the viewer’s own activity and own rate are never a friend’s, even with no follows', async () => {
+    const own = (over: Record<string, unknown>) => ({
+      user: { id: ALICE.id, name: ALICE.nickname, avatar: { medium: null } },
+      ...over
+    })
+    serve((call) => {
+      if (call.operation === 'IdMap') {
+        return { body: { data: { Page: { media: [{ id: 101, idMal: 1 }] } } } }
+      }
+      if (call.operation === 'FriendsRates') {
+        return {
+          body: {
+            data: { Page: { mediaList: [own({ status: 'CURRENT', score: 60, progress: 2 })] } }
+          }
+        }
+      }
+      return {
+        body: {
+          data: {
+            Page: {
+              activities: [
+                own({
+                  id: 1,
+                  status: 'watched episode',
+                  progress: '3',
+                  createdAt: 1,
+                  media: { id: 101, idMal: 1, isAdult: false }
+                })
+              ]
+            }
+          }
+        }
+      }
+    })
+    const { provider } = await createTestAniList()
+    expect(await provider.getFriendsActivity(SESSION)).toEqual([])
+    expect(await provider.getFriendsRates(SESSION, 1)).toEqual([])
+  })
+
   it('getFriends: Page.following(userId) over two pages, meanScore 0–100 normalized to 0–10', async () => {
     const s = serve((call) =>
       call.variables.page === 1

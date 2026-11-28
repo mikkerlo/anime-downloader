@@ -1057,21 +1057,35 @@ export function createAniListProvider(deps: AniListProviderDeps): AniListProvide
   async function getFriendsRates(session: AniListSession, malId: number): Promise<unknown[]> {
     const resolved = await resolveRef(malId)
     if (!resolved) return []
-    const data = await client.request<{ Page: { mediaList: unknown[] | null } }>(
+    const data = await client.request<{
+      Page: { mediaList: ({ user?: { id?: number | null } | null } | null)[] | null }
+    }>(
       Q.FRIENDS_RATES,
       { mediaId: resolved.mediaId, page: 1 },
       { priority: 'interactive', token: session.token }
     )
-    return data?.Page?.mediaList ?? []
+    return (data?.Page?.mediaList ?? []).filter((r) => r && notViewer(session, r)) as unknown[]
   }
+
+  // `isFollowing: true` also answers the viewer's own rows (#712's real-account
+  // check), so both friends reads drop the session's user.
+  const notViewer = (session: AniListSession, row: { user?: { id?: unknown } | null }): boolean =>
+    row.user?.id !== session.userId
 
   async function getFriendsActivity(session: AniListSession): Promise<unknown[]> {
     const data = await client.request<{
-      Page: { activities: ({ media?: { isAdult?: boolean | null } | null } | null)[] | null }
+      Page: {
+        activities:
+          | ({
+              user?: { id?: number | null } | null
+              media?: { isAdult?: boolean | null } | null
+            } | null)[]
+          | null
+      }
     }>(Q.FRIENDS_ACTIVITY, { page: 1 }, { priority: 'interactive', token: session.token })
     const adult = showAdult()
     return (data?.Page?.activities ?? []).filter(
-      (a) => a && a.media && (adult || !a.media.isAdult)
+      (a) => a && a.media && notViewer(session, a) && (adult || !a.media.isAdult)
     ) as unknown[]
   }
 

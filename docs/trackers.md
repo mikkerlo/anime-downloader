@@ -1388,6 +1388,10 @@ a title not on AniList throws; a mark-watched for one is null.
   - **`getFriendsActivity(session)`**: **one page of 50** of
     `Page.activities(isFollowing: true, type_in: [ANIME_LIST])`, adult media
     dropped unless `displayAdultContent`.
+  - `isFollowing: true` also answers the viewer's own rows (seen on a real
+    account with no follows), so both reads drop rows whose `user.id` is the
+    session's. `Page.following`'s `userId` is `Int!`, and a document that binds
+    it to a nullable `$userId` is a 400 before it runs.
 
 ### The calendar (#709)
 

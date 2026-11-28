@@ -19,6 +19,22 @@
           }
         },
         {
+          "id": 7004,
+          "status": "watched episode",
+          "progress": "12",
+          "createdAt": 1764099000,
+          "user": { "id": 5001, "name": "alice", "avatar": { "medium": null } },
+          "media": {
+            "id": 101,
+            "idMal": 1,
+            "isAdult": false,
+            "title": { "romaji": "Kimetsu no Yaiba", "english": "Demon Slayer" },
+            "coverImage": {
+              "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101.jpg"
+            }
+          }
+        },
+        {
           "id": 7003,
           "status": "watched episode",
           "progress": "1 - 3",

@@ -18,6 +18,14 @@
           "updatedAt": 1763000000
         },
         {
+          "user": { "id": 5001, "name": "alice", "avatar": { "medium": null } },
+          "status": "CURRENT",
+          "score": 70,
+          "progress": 5,
+          "repeat": 0,
+          "updatedAt": 1763400000
+        },
+        {
           "user": { "id": 6002, "name": "carol", "avatar": { "medium": null } },
           "status": "CURRENT",
           "score": 0,

@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia';
 import CleanupModal from '../shared/CleanupModal.vue';
 import ExportDialog from '../shared-library/ExportDialog.vue';
 import OfflineNotice from '../shared/OfflineNotice.vue';
+import { anyConnectedSource } from '../shared/view-sources';
 import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
 import { usePlayerStore } from '../../stores/player';
@@ -166,14 +167,12 @@ const {
 
 const trackerRate = useTrackerRate({ anime, shikimoriStore, trackersStore });
 provide(TrackerKey, trackerRate);
-const {
-  shikiUser,
-  shikiUserChecked,
-  resumeProgress,
-  friendsRates,
-  friendsLoading,
-  friendsCollapsed
-} = trackerRate;
+const { resumeProgress, friendsRates, friendsLoading, friendsCollapsed } = trackerRate;
+// The Friends block (#712): a connected friends source, as the sidebar's
+// Friends item; shown until the accounts are known, like TrackerPanel.
+const friendsSourceConnected = computed(() =>
+  anyConnectedSource('friends', trackersStore.connected)
+);
 
 const skipDetection = useSkipDetection({
   getAnimeId: () => props.animeId,
@@ -924,7 +923,7 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
           />
 
           <FriendsPanel
-            v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
+            v-if="anime.myAnimeListId && (friendsSourceConnected || !accountsLoaded)"
             v-model:collapsed="friendsCollapsed"
             :friends-rates="friendsRates"
             :friends-loading="friendsLoading"

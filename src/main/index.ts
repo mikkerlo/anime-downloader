@@ -91,6 +91,7 @@ import { createAiringDep, createTickIfAiringSource } from './trackers/feature-so
 import { createAniListProvider } from './trackers/anilist/provider'
 import { anilistSessionSteps, createAniListSyncService } from './trackers/anilist/sync'
 import { anilistCalendarSyncHooks, createAniListCalendar } from './trackers/anilist/calendar'
+import { createTrackerFriends } from './services/trackers/friends'
 import { createAniListRelated } from './trackers/anilist/related'
 import { createMalRelated } from './trackers/mal/related'
 import { createAniListEventBridge } from './trackers/anilist/events'
@@ -591,6 +592,22 @@ const trackerAuth = createTrackerAuthSessions({
   isOffline,
   openExternal: (url) => shell.openExternal(url)
 })
+// The merged Friends page (#712): Shikimori's friends and AniList's following.
+// Shikimori's refresh goes out on its alias with its cards only, and on
+// `tracker:friends-refreshed`; AniList's activity snapshot is a section of its
+// calendar's file, so the logout's deletion covers both.
+const trackerFriends = createTrackerFriends({
+  store,
+  shikimori: { provider: trackerProviders.shikimori, sync: shikimoriSyncService },
+  anilist: { provider: anilistProvider, snapshots: anilistCalendar.snapshots },
+  lookupByMalIds: (malIds) => lookupByMalIds(malIds),
+  isOffline,
+  broadcast: broadcastToAll,
+  channels: {
+    shikimoriFriendsRefreshed: EVENT_CHANNELS.SHIKIMORI_FRIENDS_REFRESHED,
+    friendsRefreshed: EVENT_CHANNELS.TRACKER_FRIENDS_REFRESHED
+  }
+})
 // The primary, mirror and feature-source setters (#696).
 const trackerChoices = createTrackerChoices({
   store,
@@ -941,6 +958,7 @@ function registerIpcHandlers(): void {
     secondTrackerEnabled: secondTracker,
     malSetup: mal.setup,
     anilistCalendar,
+    trackerFriends,
     anilistRelated,
     malRelated,
     lookupByMalIds,

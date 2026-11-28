@@ -15,11 +15,12 @@
 //   target first.
 // - A primary switch drops the form's edits and reloads from the new primary.
 //
-// Still Shikimori-only, as before: the Shikimori user read (`shikiUser`,
-// `shikiUserChecked`), the friends' rates (#712 moves them) and Shikimori's
-// details. A non-Shikimori `details` / `airing` source's details are read
-// through `tracker:get-details` and the trackers store (#706). Each is one
-// block below.
+// The friends' rates (#712) are every connected friends source's, through
+// `tracker:get-friends-rates`, once the accounts are known. Still
+// Shikimori-only, as before: the Shikimori user read (`shikiUser`,
+// `shikiUserChecked`) and Shikimori's details. A non-Shikimori `details` /
+// `airing` source's details are read through `tracker:get-details` and the
+// trackers store (#706). Each is one block below.
 //
 // Lifecycle hooks are NOT registered here: the component calls
 // loadTrackerData() from its own onMounted. The watchers bind to the caller's
@@ -29,6 +30,7 @@ import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { useShikimoriStore } from '../stores/shikimori'
 import type { useTrackersStore } from '../stores/trackers'
 import type { ResumeProgress } from './use-episode-downloads'
+import { anyConnectedSource } from '../components/shared/view-sources'
 
 export type LoadRelatedFn = (malId: number) => Promise<void>
 
@@ -73,7 +75,7 @@ export function useTrackerRate(deps: {
   shikiDetails: Ref<ShikiAnimeDetails | null>
   descExpanded: Ref<boolean>
   shikiDetailsDescription: ComputedRef<string>
-  friendsRates: Ref<ShikiFriendRate[]>
+  friendsRates: Ref<TrackerFriendRates[]>
   friendsLoading: Ref<boolean>
   friendsCollapsed: Ref<boolean>
   loadTrackerData: (loadRelated: LoadRelatedFn) => Promise<void>
@@ -98,7 +100,7 @@ export function useTrackerRate(deps: {
   const shikiUserChecked = ref(false)
   const shikiDetails = ref<ShikiAnimeDetails | null>(null)
   const descExpanded = ref(false)
-  const friendsRates = ref<ShikiFriendRate[]>([])
+  const friendsRates = ref<TrackerFriendRates[]>([])
   const friendsLoading = ref(false)
   const friendsCollapsed = ref(false)
 
@@ -215,6 +217,22 @@ export function useTrackerRate(deps: {
       })
   }
 
+  // Every connected friends source's rates on the title (#712), once the
+  // accounts are known; none connected loads nothing.
+  function loadFriendsRates(malId: number): Promise<void> {
+    if (!anyConnectedSource('friends', trackers.connected)) return Promise.resolve()
+    friendsLoading.value = true
+    return window.api
+      .trackerGetFriendsRates(malId)
+      .then((rates) => {
+        if (malIdOf() === malId) friendsRates.value = rates
+      })
+      .catch((err) => console.error('Failed to load friends rates:', err))
+      .finally(() => {
+        friendsLoading.value = false
+      })
+  }
+
   async function loadTrackerData(loadRelated: LoadRelatedFn): Promise<void> {
     if (!malIdOf()) loading.value = false
     try {
@@ -229,23 +247,12 @@ export function useTrackerRate(deps: {
 
     const relatedPromise = loadRelated(malId)
     const ratePromise = whenAccountsLoaded().then(loadPrimaryRate)
+    const friendsPromise = whenAccountsLoaded().then(() => loadFriendsRates(malId))
 
     if (!shikiUser.value) {
-      await Promise.all([relatedPromise, ratePromise])
+      await Promise.all([relatedPromise, ratePromise, friendsPromise])
       return
     }
-
-    friendsLoading.value = true
-
-    const friendsPromise = window.api
-      .shikimoriGetFriendsRates(malId)
-      .then((rates) => {
-        friendsRates.value = rates
-      })
-      .catch((err) => console.error('Failed to load friends rates:', err))
-      .finally(() => {
-        friendsLoading.value = false
-      })
 
     const detailsPromise = window.api
       .shikimoriGetAnimeDetails(malId)

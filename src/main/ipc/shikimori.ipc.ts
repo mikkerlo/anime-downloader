@@ -15,7 +15,6 @@ import { rateFromCacheEntry, type StoredRateEntry } from '../lib/shikimori-rate-
 import { type CalendarEntry, type ShikiSyncStatus } from '../services/shikimori-sync'
 import { createShikimoriCalendar } from '../services/shikimori-sync/calendar'
 import { createShikimoriChronology } from '../services/shikimori-sync/chronology'
-import { freshResult as fresh, staleResult as stale } from '../trackers/display-snapshots'
 import {
   cachedShikimoriRate,
   createShikimoriPrimary,
@@ -25,7 +24,8 @@ import {
 import type { TrackerStatus } from '../services/trackers/rates'
 import { assertMayConnect } from '../trackers/flags'
 import { isConnected } from '../trackers/primary'
-import { shikimoriAuthFlow } from '../trackers/shikimori.provider'
+import { createShikimoriProvider, shikimoriAuthFlow } from '../trackers/shikimori.provider'
+import { createTrackerFriends } from '../services/trackers/friends'
 import type { AppDeps } from './index'
 
 const SHIKI_BASE = SHIKIMORI_ORIGIN
@@ -43,7 +43,8 @@ export function register({
   broadcast,
   offlineService,
   syncRunner,
-  secondTrackerEnabled
+  secondTrackerEnabled,
+  trackerFriends
 }: AppDeps) {
   // The shared refresh (#694): the calendar, recs and `SHIKIMORI_RATES_REFRESHED`
   // go with the instance's `refreshRates`, and this tail runs after it.
@@ -64,44 +65,19 @@ export function register({
     trackerRates.refreshInBackground('shikimori')
   }
 
-  // Friends page cards (#179): friend list joined with presence + per-friend
-  // stats (titles/mean/mutual + current watch). Cache-first like the rate
-  // cache; `null` when logged out. `mutual` is shared rated titles with the
-  // signed-in user, derived from the cached own-rate list.
-  async function fetchAndCacheShikimoriFriends(): Promise<ShikiFriendCard[] | null> {
-    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-    if (!user) return null
-    const accessToken = await shikimori.ensureFreshToken(store)
-    const ownRates = store.get('shikimoriUserRates') as {
-      rate: { target_id?: number }
-      shikiAnime?: { id: number }
-    }[]
-    const ownMalIds = new Set<number>()
-    for (const e of ownRates) {
-      const malId = e.rate?.target_id ?? e.shikiAnime?.id
-      if (malId) ownMalIds.add(malId)
-    }
-    const cards = await shikimori.getFriendsWithStats(accessToken, user.id, ownMalIds)
-    // Resolve each friend's current-watch MAL id to a smotret-anime id so the
-    // card can deep-link in-app (one batched lookup for all friends).
-    const watchMalIds = cards.map((c) => c.watching?.malId).filter((m): m is number => m != null)
-    if (watchMalIds.length > 0) {
-      const malMap = await lookupByMalIds(watchMalIds)
-      for (const c of cards) {
-        if (c.watching) c.watching.animeId = malMap[c.watching.malId]?.id ?? null
-      }
-    }
-    store.set('shikimoriFriends', cards)
-    return cards
-  }
-
-  function refreshShikimoriFriendsInBackground(): void {
-    fetchAndCacheShikimoriFriends()
-      .then((cards) => {
-        if (cards) broadcast(EVENT_CHANNELS.SHIKIMORI_FRIENDS_REFRESHED, cards)
-      })
-      .catch((err) => console.warn('[shikimori] friends background refresh failed:', err))
-  }
+  // The friends reads (#712) live in `services/trackers/friends.ts`, shared
+  // with `tracker:get-friends*`. A router registered without `trackerFriends`
+  // (the tests) gets a Shikimori-only one over its own deps.
+  const friends =
+    trackerFriends ??
+    createTrackerFriends({
+      store,
+      shikimori: { provider: createShikimoriProvider({ store }), sync },
+      lookupByMalIds,
+      isOffline: () => offlineService?.isOffline() ?? false,
+      broadcast,
+      channels: { shikimoriFriendsRefreshed: EVENT_CHANNELS.SHIKIMORI_FRIENDS_REFRESHED }
+    })
 
   // Assemble the profile-dashboard payload (#178): identity from the cached
   // user, status-breakdown + score-distribution from the Shikimori stats block,
@@ -529,20 +505,8 @@ export function register({
     return store.get('shikimoriUser') as shikimori.ShikiUser | null
   })
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS, async () => {
-    if (!store.get('shikimoriUser')) return null
-    const cached = store.get('shikimoriFriends') as ShikiFriendCard[]
-    if (cached && cached.length > 0) {
-      refreshShikimoriFriendsInBackground()
-      return cached
-    }
-    try {
-      return await fetchAndCacheShikimoriFriends()
-    } catch (err) {
-      console.warn('[shikimori] friends fetch failed:', err)
-      return null
-    }
-  })
+  // `tracker:get-friends`'s Shikimori half, with today's payload until v7.0 (#717).
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS, () => friends.shikimoriCards())
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_PROFILE, async () => {
     if (!store.get('shikimoriUser')) return null
@@ -631,12 +595,9 @@ export function register({
     }
   )
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS_RATES, async (_event, malId: number) => {
-    const accessToken = await shikimori.ensureFreshToken(store)
-    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-    if (!user) throw new Error('Not logged in to Shikimori')
-    return shikimori.getFriendsRatesForAnime(accessToken, user.id, malId)
-  })
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS_RATES, (_event, malId: number) =>
+    friends.shikimoriRates(malId)
+  )
 
   ipcMain.handle(
     CHANNELS.SHIKIMORI_GET_ANIME_RATES,
@@ -690,34 +651,13 @@ export function register({
     trackerRates.triggerSync('shikimori')
   })
 
-  // Offline (#568) both lists come from the sync service's snapshot, whatever
+  // Offline (#568) the activity comes from the sync service's snapshot, whatever
   // its age, before anything that could reach the network; with none, an empty
   // stale shape. Online a failed fetch falls back to the snapshot the same way.
+  // The body is shared with `tracker:get-friends-activity` (#712).
   ipcMain.handle(
     CHANNELS.SHIKIMORI_GET_FRIENDS_ACTIVITY,
-    async (): Promise<ShikiSnapshotResult<ShikiFriendActivityEntry[]>> => {
-      if (offlineService?.isOffline()) return stale(sync.getCachedFriendsActivity())
-      try {
-        const accessToken = await shikimori.ensureFreshToken(store)
-        const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-        if (!user) throw new Error('Not logged in to Shikimori')
-
-        const activities = await shikimori.getFriendsActivity(accessToken, user.id)
-        const malIds = Array.from(new Set(activities.map((a) => a.malId)))
-        const malMap = await lookupByMalIds(malIds)
-
-        const data = activities.map((a) => ({
-          ...a,
-          smotretAnime: malMap[a.malId] ?? null
-        }))
-        return fresh(sync.setCachedFriendsActivity(user.id, data))
-      } catch (err) {
-        const snapshot = sync.getCachedFriendsActivity()
-        if (!snapshot) throw err
-        console.warn('[shikimori] friends activity fetch failed, serving the snapshot:', err)
-        return stale(snapshot)
-      }
-    }
+    (): Promise<ShikiSnapshotResult<ShikiFriendActivityEntry[]>> => friends.shikimoriActivity()
   )
 
   // The body is shared with `tracker:get-calendar`'s Shikimori branch (#709);

@@ -17,6 +17,7 @@ import type { ShikimoriSyncService } from '../services/shikimori-sync'
 import type { TrackerFanOut } from '../services/trackers/fan-out'
 import type { TrackerRates } from '../services/trackers/rates'
 import type { TrackerChoices } from '../services/trackers/choices'
+import type { TrackerFriends } from '../services/trackers/friends'
 import type { DownloadManager } from '../download-manager'
 import type { ShikiUserRateStatus } from '../shikimori'
 import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
@@ -156,6 +157,12 @@ export interface AppDeps {
   anilistRelated?: AniListRelated
   /** MyAnimeList's chronology walk and its 1-hour cache, `tracker:get-related`'s MAL branch (#710). */
   malRelated?: MalRelated
+  /**
+   * The merged Friends reads (#712), behind `tracker:get-friends*` and their
+   * `shikimori:*` aliases. Without it the `tracker:*` reads have no sources
+   * and the aliases build a Shikimori-only one.
+   */
+  trackerFriends?: TrackerFriends
   /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
   lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
   /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */

@@ -1,17 +1,42 @@
 <script setup lang="ts">
+// The merged Friends page (#712): every connected friends source's cards and
+// activity (`connectedSources('friends', …)`: Shikimori and AniList). With
+// Shikimori alone it reads exactly as before: no badges, no error lines, and
+// Shikimori's unresolved titles stay plain text.
 import { ref, computed, watch, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
+import { TRACKER_LABELS } from '@shared/trackers/labels';
+import { TRACKER_BADGES } from '@shared/trackers/title-links';
+import { friendListUrl, friendProfileUrl } from '@shared/trackers/friend-links';
 import OfflineNotice from '../shared/OfflineNotice.vue';
+import { connectedSources } from '../shared/view-sources';
 import { useLibraryStore } from '../../stores/library';
-import { useShikimoriStore } from '../../stores/shikimori';
+import { useTrackersStore } from '../../stores/trackers';
 import { useOfflineStore } from '../../stores/offline';
 import { formatAgo } from '../../utils';
 
 const libraryStore = useLibraryStore();
-const shikimoriStore = useShikimoriStore();
-const { friends } = storeToRefs(shikimoriStore);
+const trackersStore = useTrackersStore();
+const { friends, friendsSources, connected, accountsLoaded } = storeToRefs(trackersStore);
 const { isOffline } = storeToRefs(useOfflineStore());
+
+// The connected friends sources, in `shikimori`, `anilist` order.
+const sources = computed(() => connectedSources('friends', connected.value));
+const hasSource = computed(() => sources.value.length > 0);
+// Exactly today's page: no badges, no per-source error lines.
+const shikimoriOnly = computed(
+  () => sources.value.length === 1 && sources.value[0] === 'shikimori'
+);
+const sourceNames = computed(() => sources.value.map((id) => TRACKER_LABELS[id]).join(' or '));
+
+const headerCounts = computed(() =>
+  sources.value
+    .map(
+      (id) => `· ${friends.value.filter((f) => f.source === id).length} on ${TRACKER_LABELS[id]}`
+    )
+    .join(' ')
+);
 
 type Tab = 'all' | 'online' | 'activity';
 const tab = ref<Tab>('all');
@@ -25,7 +50,8 @@ const loadingFriends = ref(false);
 const loadingActivity = ref(false);
 const error = ref('');
 
-const activities = ref<ShikiFriendActivityEntry[]>([]);
+const activities = ref<TrackerFriendActivityEntry[]>([]);
+const activitySources = ref<TrackerFriendsActivityResult['sources']>({});
 let activityLoadedAt = 0;
 const ACTIVITY_CACHE_MS = 5 * 60 * 1000;
 // Main's snapshot (#568): `stale` when served offline or after a failed fetch,
@@ -41,6 +67,40 @@ const onlineCount = computed(() => friends.value.filter((f) => f.online).length)
 const displayedFriends = computed(() =>
   tab.value === 'online' ? friends.value.filter((f) => f.online) : friends.value
 );
+
+// A badge on every item once the feed shows items from 2 or more sources.
+const showBadges = computed(() => new Set(activities.value.map((e) => e.source)).size >= 2);
+
+interface SourceError {
+  source: TrackerId;
+  text: string;
+  sessionExpired: boolean;
+}
+
+function errorLines(states: Partial<Record<TrackerId, TrackerFriendsSourceState>>): SourceError[] {
+  if (shikimoriOnly.value) return [];
+  return sources.value.flatMap((id) => {
+    const s = states[id];
+    if (!s || s.status !== 'error') return [];
+    const label = TRACKER_LABELS[id];
+    return [
+      {
+        source: id,
+        text: s.sessionExpired
+          ? `${label}: session expired`
+          : `${label}: ${s.error ?? 'failed to load'}`,
+        sessionExpired: s.sessionExpired === true
+      }
+    ];
+  });
+}
+
+const gridErrors = computed(() => errorLines(friendsSources.value));
+const feedErrors = computed(() => errorLines(activitySources.value));
+
+function signInAgain(source: TrackerId): void {
+  libraryStore.navigateToSettingsTab('trackers', source);
+}
 
 function avatarBg(seed: string): string {
   let hue = 0;
@@ -82,14 +142,11 @@ function stripHtml(html: string): string {
 }
 
 async function loadFriends(): Promise<void> {
-  if (!shikimoriStore.loggedIn) {
-    await shikimoriStore.refreshUser();
-    if (!shikimoriStore.loggedIn) return;
-  }
+  if (!hasSource.value) return;
   loadingFriends.value = true;
   error.value = '';
   try {
-    await shikimoriStore.refreshFriends();
+    await trackersStore.refreshFriends();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load friends';
   } finally {
@@ -101,11 +158,12 @@ async function loadActivity(force = false): Promise<void> {
   if (!force && activities.value.length > 0 && Date.now() - activityLoadedAt < ACTIVITY_CACHE_MS) {
     return;
   }
-  if (!shikimoriStore.loggedIn) return;
+  if (!hasSource.value) return;
   loadingActivity.value = true;
   try {
-    const res = await window.api.shikimoriGetFriendsActivity();
+    const res = await window.api.trackerGetFriendsActivity();
     activities.value = res.data;
+    activitySources.value = res.sources;
     activityFetchedAt.value = res.fetchedAt;
     activityStale.value = res.stale;
     activityLoaded.value = true;
@@ -123,7 +181,7 @@ async function refresh(): Promise<void> {
   if (tab.value === 'activity') await loadActivity(true);
 }
 
-function openWatching(card: ShikiFriendCard): void {
+function openWatching(card: TrackerFriendCard): void {
   const w = card.watching;
   if (!w) return;
   if (w.animeId != null) {
@@ -133,7 +191,7 @@ function openWatching(card: ShikiFriendCard): void {
   }
 }
 
-function openActivity(entry: ShikiFriendActivityEntry): void {
+function openActivity(entry: TrackerFriendActivityEntry): void {
   if (entry.smotretAnime) libraryStore.openAnime(entry.smotretAnime.id);
 }
 
@@ -141,10 +199,40 @@ function openExternal(url: string): void {
   void window.api.shellOpenExternal(url);
 }
 
+// An unresolved title links to its source page, except Shikimori's, which
+// stays plain text as before.
+function externalTitleUrl(entry: TrackerFriendActivityEntry): string | null {
+  if (entry.smotretAnime || entry.source === 'shikimori') return null;
+  return entry.titleUrl;
+}
+
 // Lazily load the activity feed the first time the Activity tab is opened.
 watch(tab, (t) => {
   if (t === 'activity') void loadActivity();
 });
+
+// The accounts arrive after mount, and a source can connect or go while the
+// page is open: each change reloads the cards, and the feed if it is shown.
+const sourcesKey = computed(() =>
+  sources.value
+    .map((id) => `${id}:${trackersStore.accounts.find((a) => a.trackerId === id)?.user?.id}`)
+    .join(',')
+);
+
+watch(
+  () => (accountsLoaded.value ? sourcesKey.value : null),
+  (key, prev) => {
+    if (key === null) return;
+    if (prev !== undefined && prev !== null) {
+      activities.value = [];
+      activitySources.value = {};
+      activityLoaded.value = false;
+      activityLoadedAt = 0;
+    }
+    void loadFriends();
+    if (tab.value === 'activity') void loadActivity(true);
+  }
+);
 
 // Back online: one refetch of an activity feed that was served offline.
 watch(isOffline, (offline) => {
@@ -153,14 +241,16 @@ watch(isOffline, (offline) => {
   }
 });
 
-onMounted(() => loadFriends());
+onMounted(() => {
+  if (accountsLoaded.value) void loadFriends();
+});
 </script>
 
 <template>
   <main class="friends-view">
     <header class="topbar">
       <h2>Friends</h2>
-      <span class="sub">· {{ friends.length }} on Shikimori</span>
+      <span class="sub" data-testid="friends-counts">{{ headerCounts }}</span>
       <span class="topbar-spacer"></span>
       <span v-if="onlineCount > 0" class="chip green"
         ><span class="dot"></span>{{ onlineCount }} online</span
@@ -184,7 +274,7 @@ onMounted(() => loadFriends());
     </header>
 
     <div class="body">
-      <div v-if="!shikimoriStore.loggedIn && !loadingFriends" class="empty-state">
+      <div v-if="accountsLoaded && !hasSource && !loadingFriends" class="empty-state">
         <div class="es-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
             <path
@@ -194,8 +284,10 @@ onMounted(() => loadFriends());
             />
           </svg>
         </div>
-        <p>Connect your Shikimori account in Settings to see your friends.</p>
-        <button class="cta-btn" @click="libraryStore.navigate('settings')">Open Settings</button>
+        <p>Connect Shikimori or AniList in Settings to see your friends.</p>
+        <button class="cta-btn" @click="libraryStore.navigateToSettingsTab('trackers')">
+          Open Settings
+        </button>
       </div>
 
       <template v-else>
@@ -213,24 +305,40 @@ onMounted(() => loadFriends());
 
         <!-- Friend grid (All / Online) -->
         <template v-if="tab !== 'activity'">
-          <div v-if="loadingFriends && friends.length === 0" class="status-text">
+          <div
+            v-for="e in gridErrors"
+            :key="e.source"
+            class="source-error"
+            data-testid="source-error"
+          >
+            {{ e.text }}
+            <button v-if="e.sessionExpired" class="hdr-btn ghost sm" @click="signInAgain(e.source)">
+              Sign in again
+            </button>
+          </div>
+          <div
+            v-if="(!accountsLoaded || loadingFriends) && friends.length === 0"
+            class="status-text"
+          >
             Loading friends…
           </div>
           <div v-else-if="displayedFriends.length === 0" class="status-text">
-            {{ tab === 'online' ? 'No friends online right now.' : 'No Shikimori friends yet.' }}
+            {{
+              tab === 'online' ? 'No friends online right now.' : `No ${sourceNames} friends yet.`
+            }}
           </div>
           <div v-else class="friend-grid">
-            <div v-for="f in displayedFriends" :key="f.id" class="friend-card">
+            <div v-for="f in displayedFriends" :key="`${f.source}-${f.id}`" class="friend-card">
               <div class="fc-head">
                 <div class="fc-av" :style="{ background: avatarBg(f.nickname) }">
                   {{ initial(f.nickname) }}
-                  <span class="fc-dot" :class="{ on: f.online }"></span>
+                  <span v-if="f.presence" class="fc-dot" :class="{ on: f.online }"></span>
                 </div>
                 <div class="fc-id">
                   <div class="fc-name">{{ f.nickname }}</div>
                   <div class="fc-handle">@{{ f.nickname }}</div>
                 </div>
-                <span class="fc-pres" :class="f.online ? 'on' : 'off'">{{
+                <span v-if="f.presence" class="fc-pres" :class="f.online ? 'on' : 'off'">{{
                   f.online ? 'Online' : formatRelative(f.lastOnlineAt)
                 }}</span>
               </div>
@@ -250,7 +358,7 @@ onMounted(() => loadFriends());
               </button>
 
               <div class="fc-stats">
-                <div class="fc-stat">
+                <div v-if="f.mutual !== null" class="fc-stat">
                   <span class="v mono">{{ f.mutual }}</span
                   ><span class="l">Mutual</span>
                 </div>
@@ -267,13 +375,13 @@ onMounted(() => loadFriends());
               <div class="fc-actions">
                 <button
                   class="hdr-btn ghost sm"
-                  @click="openExternal(`${SHIKIMORI_ORIGIN}/@${f.nickname}/list/anime`)"
+                  @click="openExternal(friendListUrl(f.source, f.nickname))"
                 >
                   Compare
                 </button>
                 <button
                   class="hdr-btn ghost sm"
-                  @click="openExternal(`${SHIKIMORI_ORIGIN}/@${f.nickname}`)"
+                  @click="openExternal(friendProfileUrl(f.source, f.nickname))"
                 >
                   Message
                 </button>
@@ -292,7 +400,18 @@ onMounted(() => loadFriends());
             reason="Friends activity needs an internet connection"
           />
           <div v-else-if="activities.length === 0" class="status-text">
-            No recent activity from your Shikimori friends.
+            No recent activity from your {{ sourceNames }} friends.
+          </div>
+          <div
+            v-for="e in feedErrors"
+            :key="e.source"
+            class="source-error"
+            data-testid="source-error"
+          >
+            {{ e.text }}
+            <button v-if="e.sessionExpired" class="hdr-btn ghost sm" @click="signInAgain(e.source)">
+              Sign in again
+            </button>
           </div>
           <div v-if="showActivityStamp" class="stamp" data-testid="activity-stamp">
             Last updated {{ formatAgo(activityFetchedAt!) }}
@@ -300,7 +419,7 @@ onMounted(() => loadFriends());
           <div v-if="activities.length > 0" class="feed">
             <div
               v-for="(entry, idx) in activities"
-              :key="entry.friendId + '-' + entry.createdAt + '-' + idx"
+              :key="entry.source + '-' + entry.friendId + '-' + entry.createdAt + '-' + idx"
               class="feed-row"
             >
               <div class="feed-av" :style="{ background: avatarBg(entry.friendNickname) }">
@@ -308,8 +427,30 @@ onMounted(() => loadFriends());
               </div>
               <div class="feed-body">
                 <div class="feed-text">
-                  <strong>{{ entry.friendNickname }}</strong>
+                  <span
+                    v-if="showBadges"
+                    class="source-badge"
+                    data-testid="source-badge"
+                    :title="TRACKER_LABELS[entry.source]"
+                    >{{ TRACKER_BADGES[entry.source] }}</span
+                  >
+                  <button
+                    v-if="entry.source !== 'shikimori'"
+                    class="feed-friend"
+                    @click="openExternal(entry.friendUrl)"
+                  >
+                    {{ entry.friendNickname }}
+                  </button>
+                  <strong v-else>{{ entry.friendNickname }}</strong>
                   <button v-if="entry.smotretAnime" class="feed-link" @click="openActivity(entry)">
+                    {{ entry.animeName }}
+                  </button>
+                  <button
+                    v-else-if="externalTitleUrl(entry)"
+                    class="feed-link"
+                    data-testid="feed-external"
+                    @click="openExternal(externalTitleUrl(entry)!)"
+                  >
                     {{ entry.animeName }}
                   </button>
                   <span v-else class="feed-link-static">{{ entry.animeName }}</span>
@@ -761,6 +902,44 @@ onMounted(() => loadFriends());
 .feed-link-static {
   color: var(--text-3);
   font-size: 0.88rem;
+}
+
+.feed-friend {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.88rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.feed-friend:hover {
+  text-decoration: underline;
+}
+
+.source-badge {
+  min-width: 18px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--st-blue);
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 800;
+}
+
+.source-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-3);
+  font-size: 0.85rem;
+  margin-bottom: 10px;
 }
 
 .feed-detail {

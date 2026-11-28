@@ -37,12 +37,17 @@ export interface ShikimoriProviderDeps {
   refreshDetails?: (malId: number) => Promise<shikimori.ShikiAnimeDetails | null>
 }
 
-export type ShikimoriProvider = TrackerSyncProvider<
+export interface ShikimoriProvider extends TrackerSyncProvider<
   ShikimoriSession,
   shikimori.ShikiAnimeRateEntry,
   shikimori.ShikiUserRate,
   CachedRateEntry
->
+> {
+  /** `getFriendsWithStats`, `mutual` counted against the cached own list (#712). */
+  getFriends(session: ShikimoriSession): Promise<shikimori.ShikiFriendCard[]>
+  getFriendsActivity(session: ShikimoriSession): Promise<shikimori.ShikiFriendActivity[]>
+  getFriendsRates(session: ShikimoriSession, malId: number): Promise<shikimori.ShikiFriendRate[]>
+}
 
 /**
  * `shikimoriUserRates` (#691): `buildRateCacheEntries` over the `native`
@@ -138,9 +143,29 @@ export function isShikimoriSessionGone(err: unknown): boolean {
 }
 
 // The members this adapter implements; the rest land with their slices.
+const IMPLEMENTED = new Set<string>([
+  'getAiringInfo',
+  'getFriends',
+  'getFriendsActivity',
+  'getFriendsRates'
+])
 const SHIKIMORI_CAPABILITIES = Object.fromEntries(
-  TRACKER_CAPABILITIES.map((c) => [c, c === 'getAiringInfo'])
+  TRACKER_CAPABILITIES.map((c) => [c, IMPLEMENTED.has(c)])
 ) as unknown as TrackerCapabilities
+
+/** The MAL ids on the cached own list: the friend cards' `mutual` (#179). */
+function ownMalIds(store: StorageService): Set<number> {
+  const ownRates = store.get('shikimoriUserRates') as {
+    rate: { target_id?: number }
+    shikiAnime?: { id: number }
+  }[]
+  const out = new Set<number>()
+  for (const e of ownRates) {
+    const malId = e.rate?.target_id ?? e.shikiAnime?.id
+    if (malId) out.add(malId)
+  }
+  return out
+}
 
 interface DetailsCacheEntry {
   details: shikimori.ShikiAnimeDetails
@@ -291,6 +316,13 @@ export function createShikimoriProvider(deps: ShikimoriProviderDeps): ShikimoriP
         episodesAired: entry.details?.episodes_aired ?? 0,
         episodes: entry.details?.episodes ?? 0
       }
-    }
+    },
+
+    // The Friends page and detail block (#712): today's three reads, unchanged.
+    getFriends: (session) =>
+      shikimori.getFriendsWithStats(session.token, session.userId, ownMalIds(store)),
+    getFriendsActivity: (session) => shikimori.getFriendsActivity(session.token, session.userId),
+    getFriendsRates: (session, malId) =>
+      shikimori.getFriendsRatesForAnime(session.token, session.userId, malId)
   }
 }

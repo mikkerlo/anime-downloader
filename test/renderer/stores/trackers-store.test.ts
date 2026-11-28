@@ -26,6 +26,7 @@ let listeners: {
   queueChanged: Listener<TrackerOfflineQueueChangedEvent>[]
   accountsChanged: Listener<TrackerAccountsState>[]
   detailsUpdated: Listener<TrackerDetailsUpdatedEvent>[]
+  friendsRefreshed: Listener<TrackerFriendsRefreshedEvent>[]
 }
 
 let api: {
@@ -33,6 +34,7 @@ let api: {
   trackerGetRates: ReturnType<typeof vi.fn>
   trackerGetSyncStatus: ReturnType<typeof vi.fn>
   trackerGetRate: ReturnType<typeof vi.fn>
+  trackerGetFriends: ReturnType<typeof vi.fn>
 }
 
 function values(episodes: number, status: ShikiUserRateStatus = 'watching'): TrackerRateValues {
@@ -113,6 +115,7 @@ function installApi(opts: {
   accounts?: TrackerAccountsState | Promise<TrackerAccountsState>
   rates?: Partial<Record<TrackerId, TrackerRatesSnapshot>>
   statuses?: Partial<Record<TrackerId, TrackerSyncStatus>>
+  friends?: TrackerFriendsResult | Promise<TrackerFriendsResult>
 }): void {
   listeners = {
     rateUpdated: [],
@@ -120,7 +123,8 @@ function installApi(opts: {
     syncStatus: [],
     queueChanged: [],
     accountsChanged: [],
-    detailsUpdated: []
+    detailsUpdated: [],
+    friendsRefreshed: []
   }
   api = {
     trackerListAccounts: vi.fn(async () => opts.accounts ?? accountsState([])),
@@ -130,7 +134,8 @@ function installApi(opts: {
       values: values(malId % 100),
       stale: false,
       tag: `${id}:${malId}`
-    }))
+    })),
+    trackerGetFriends: vi.fn(async () => opts.friends ?? { cards: [], sources: {} })
   }
   const sub =
     <T>(list: Listener<T>[]) =>
@@ -146,7 +151,8 @@ function installApi(opts: {
       onTrackerSyncStatus: sub(listeners.syncStatus),
       onTrackerOfflineQueueChanged: sub(listeners.queueChanged),
       onTrackerAccountsChanged: sub(listeners.accountsChanged),
-      onTrackerDetailsUpdated: sub(listeners.detailsUpdated)
+      onTrackerDetailsUpdated: sub(listeners.detailsUpdated),
+      onTrackerFriendsRefreshed: sub(listeners.friendsRefreshed)
     }
   }
 }
@@ -157,7 +163,9 @@ const emit = {
   syncStatus: (e: TrackerSyncStatusEvent) => listeners.syncStatus.forEach((l) => l(e)),
   queueChanged: (e: TrackerOfflineQueueChangedEvent) => listeners.queueChanged.forEach((l) => l(e)),
   accountsChanged: (e: TrackerAccountsState) => listeners.accountsChanged.forEach((l) => l(e)),
-  detailsUpdated: (e: TrackerDetailsUpdatedEvent) => listeners.detailsUpdated.forEach((l) => l(e))
+  detailsUpdated: (e: TrackerDetailsUpdatedEvent) => listeners.detailsUpdated.forEach((l) => l(e)),
+  friendsRefreshed: (e: TrackerFriendsRefreshedEvent) =>
+    listeners.friendsRefreshed.forEach((l) => l(e))
 }
 
 async function makeStore(): Promise<ReturnType<typeof useTrackersStore>> {
@@ -1002,5 +1010,87 @@ describe('useTrackersStore — multi-account controls (#701)', () => {
     const store = await makeStore()
     expect(store.mirrorOn('anilist')).toBe(true)
     expect(store.mirrorOn('mal')).toBe(false)
+  })
+})
+
+describe('useTrackersStore — friends (#712)', () => {
+  function card(source: TrackerId, id: number, nickname = `${source}-${id}`): TrackerFriendCard {
+    return {
+      source,
+      id,
+      nickname,
+      avatar: '',
+      presence: source === 'shikimori',
+      lastOnlineAt: null,
+      online: false,
+      titles: 1,
+      mean: 7,
+      mutual: source === 'shikimori' ? 0 : null,
+      watching: null
+    }
+  }
+  const BOTH = accountsState([account('shikimori', 1), account('anilist', 2)])
+  const names = (cards: TrackerFriendCard[]): string[] => cards.map((c) => c.nickname)
+
+  it('refreshFriends splits the merged cards by source, Shikimori first', async () => {
+    installApi({
+      accounts: BOTH,
+      friends: {
+        cards: [card('anilist', 5), card('shikimori', 5)],
+        sources: { shikimori: { status: 'ok' }, anilist: { status: 'ok' } }
+      }
+    })
+    const store = await makeStore()
+    await store.refreshFriends()
+    expect(names(store.friends)).toEqual(['shikimori-5', 'anilist-5'])
+    expect(store.friendsSources).toEqual({ shikimori: { status: 'ok' }, anilist: { status: 'ok' } })
+  })
+
+  it('an AniList refresh replaces only the AniList cards, and a Shikimori one only Shikimori’s', async () => {
+    installApi({
+      accounts: BOTH,
+      friends: {
+        cards: [card('shikimori', 1), card('anilist', 1)],
+        sources: { shikimori: { status: 'ok' }, anilist: { status: 'ok' } }
+      }
+    })
+    const store = await makeStore()
+    await store.refreshFriends()
+
+    emit.friendsRefreshed({ trackerId: 'anilist', cards: [card('anilist', 2), card('anilist', 3)] })
+    expect(names(store.friends)).toEqual(['shikimori-1', 'anilist-2', 'anilist-3'])
+
+    emit.friendsRefreshed({ trackerId: 'shikimori', cards: [card('shikimori', 9)] })
+    expect(names(store.friends)).toEqual(['shikimori-9', 'anilist-2', 'anilist-3'])
+  })
+
+  it('a refresh that lands while the read is pending is kept over the older reply', async () => {
+    const reply = deferred<TrackerFriendsResult>()
+    installApi({ accounts: BOTH, friends: reply.promise })
+    const store = await makeStore()
+    const pending = store.refreshFriends()
+    emit.friendsRefreshed({ trackerId: 'anilist', cards: [card('anilist', 7)] })
+    reply.resolve({
+      cards: [card('shikimori', 1), card('anilist', 1)],
+      sources: { shikimori: { status: 'ok' }, anilist: { status: 'ok' } }
+    })
+    await pending
+    expect(names(store.friends)).toEqual(['shikimori-1', 'anilist-7'])
+  })
+
+  it('a disconnected tracker’s cards go, and its refresh is ignored', async () => {
+    installApi({
+      accounts: BOTH,
+      friends: {
+        cards: [card('shikimori', 1), card('anilist', 1)],
+        sources: { shikimori: { status: 'ok' }, anilist: { status: 'ok' } }
+      }
+    })
+    const store = await makeStore()
+    await store.refreshFriends()
+    emit.accountsChanged(accountsState([account('shikimori', 1)]))
+    expect(names(store.friends)).toEqual(['shikimori-1'])
+    emit.friendsRefreshed({ trackerId: 'anilist', cards: [card('anilist', 4)] })
+    expect(names(store.friends)).toEqual(['shikimori-1'])
   })
 })

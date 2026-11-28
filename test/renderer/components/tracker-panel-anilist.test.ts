@@ -135,7 +135,9 @@ function installApi(opts: { expired?: boolean; queueLength?: number } = {}) {
       values: { status: 'watching', episodes: 7, score: 8, rewatches: 0 },
       stale: false
     } satisfies TrackerRateResult),
-    trackerUpdateRate: vi.fn(async (_malId: number, change: TrackerRateValues) => change)
+    trackerUpdateRate: vi.fn(async (_malId: number, change: TrackerRateValues) => change),
+    // The Friends block's merged read (#712): an array, as main answers.
+    trackerGetFriendsRates: vi.fn().mockResolvedValue([])
   }
   const target = { ...offlineApi().api, ...api }
   ;(window as unknown as { api: unknown }).api = new Proxy(target, {

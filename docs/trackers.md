@@ -379,7 +379,9 @@ row behind) or null (mark-watched).
 - **A user change to a non-primary tracker** (T8b's "Copy from primary") is
   diffed against that tracker's projection, queued only with `via: 'copy'`,
   never fans out, never prompts, and is skipped when nothing differs. A
-  non-primary mark-watched has no caller and returns null.
+  non-primary mark-watched has no caller and returns null. The fan-out's
+  `projection(trackerId, malId)` exposes the view every builder diffs
+  against, for #705's `differs` and its copy.
 - **`'mirror'` and `'reconcile'` changes** use the same builder with
   `via: 'mirror'` / `via: 'reconcile'`, restricted to `fields` when given; a
   `'mirror'` change keeps a carried `origin` (#716) and never writes
@@ -484,12 +486,32 @@ is a shared function in `src/main/services/trackers/rates.ts`
   tracker takes the § 3a copy). It replies with the values written or queued.
   `mark-episode-watched` goes to the primary and resolves `null`, calling no
   provider, when no tracker is connected.
-- **`get-rate`'s per-title fields.** The result is `{ values, stale, mediaId? }`,
-  with `values` null when a connected tracker has no row for the title.
-  `mediaId` is the tracker's own media id where it isn't the MAL id (T7 fills
-  it for AniList). T8b (#705) adds `queued`, `unmapped` and `differs`. A
-  queued-only change emits `tracker:offline-queue-changed` and no
-  `tracker:rate-updated`, so the renderer refetches the result on both events.
+- **`get-rate`'s per-title fields.** The result is `{ values, stale, mediaId?,
+  queued, unmapped, differs }`, with `values` null when a connected tracker has
+  no row for the title. `mediaId` is the tracker's own media id where it isn't
+  the MAL id (T7 fills it for AniList). T8b (#705) adds the other three,
+  computed in main from its own state (`titleSignals` in `rates.ts`):
+  `queued` when that tracker's live queue holds an entry for the title,
+  `unmapped` when the provider's `hasTitle` is false (AniList's fresh negative
+  id-map entry; a cold map is mappable), and `differs`, which applies [the
+  difference rule](#the-difference-rule) to that tracker's projection and the
+  primary's (`[]` for the primary, for an unmapped title and when the primary
+  has no row, cached or queued). A queued-only change emits
+  `tracker:offline-queue-changed` and no `tracker:rate-updated`, so the
+  renderer refetches the result on both events.
+- **"Copy from primary"** (#705, `tracker:copy-from-primary`,
+  `copyFromPrimary` in `rates.ts`) reads the primary's projection, gates on
+  the same `differs`, and only when it is non-empty calls `applyChange(malId,
+  { kind: 'set', values }, { target, cause: 'user' })`, which takes the
+  non-primary branch above (`via: 'copy'`, field-scoped, queued, no fan-out,
+  no prompt). It refuses the primary, a tracker that isn't connected, a title
+  `hasTitle` rejects and a primary with no row, and resolves the target's
+  projection. The renderer never assembles the values, so a copy can't send
+  what it saw before a queued edit landed. On drift the copy is field-scoped
+  like any mirror entry: a mirror the user changed on its own site keeps that
+  value, the settle pulls it into the cache, and the chip shows the
+  difference again. That is intended; never switch the copy to
+  `resolvedFields`.
 - **The `shikimori:*` aliases** (get-rate, update-rate, mark-episode-watched,
   get-anime-rates, the queue length, the sync status, trigger-sync and the two
   parked-queue channels) call the same functions with `'shikimori'` and reply
@@ -1088,6 +1110,20 @@ the reply, as `projectRate` does: a switch or a mount with a change still queued
 shows that change, and a Save can't write the remote value back over it. The
 AniList "Open ↗" link needs the result's `mediaId` and is hidden without it.
 
+**The mirror chips** (#705, `TrackerMirrorChips.vue`) sit under the panel's
+header with two or more trackers connected (`multiAccount`), one per
+connected tracker that isn't the primary, in tracker order; with one tracker
+the component isn't mounted, so it holds no title and reads nothing. Each
+chip holds the title (`holdTitle`) and shows the badge, then `status ·
+eps/total · score` from `rateFor` (the total is the entry's `anime.episodes`,
+else the page's), then its state: queued, stale, "Session expired" or "Needs
+setup" (from `syncStatusFor`, each a link to that tracker's Settings →
+Trackers card), and "mirroring off" when its toggle is off. `unmapped`
+replaces the values with "Not on ‹tracker›" and offers no copy. A non-empty
+`differs` gives the chip a warning accent and a "Copy from primary" button,
+disabled while the copy runs; the chip computes no difference itself, so a
+pending mirror write that already matches shows only the queued icon.
+
 **The sidebar, the player and Watch Together** (#699). The sidebar's footer
 chip shows when `anyAccount`, with the primary account's nickname and avatar,
 and reads `aggregateSyncState`. With one tracker it is the chip it always was;
@@ -1596,6 +1632,36 @@ The drain's drift ranking, `STATUS_ORDER`, lives beside `RateValues` in
   format would round a stale low raw to 0. Otherwise the stored raw is kept
   (`anilistRawToStore`), so it is never part of `changedFields` and never a
   reconcile diff.
+
+### The difference rule
+
+`src/main/trackers/rate-diff.ts` (#705) is the one "which fields of this pair
+differ?" helper: `rateDiff(source, target, scoreFormat)` over two
+`{ trackerId, values }` projections in app values. `tracker:get-rate`'s
+`differs` and "Copy from primary" call it ([The IPC surface](#the-ipc-surface)),
+and T10's diff engine (#708) imports it, so the chip, the copy and the
+reconcile review never disagree. It lives in main, not `src/shared/`, because
+it imports `trackers/scores.ts`, and the AniList user's `scoreFormat` (cached
+with `anilistUser`, read through `storedAnilistScoreFormat`) never leaves main.
+
+- **Rounding is not a difference.** Each side's projection is already the app
+  score its raw score reads as (a `POINT_100` 84 is 8), and equal app scores
+  are equal.
+- **A score at the AniList user's scale step is not a difference.** On a lossy
+  scale the drain adopts the read-back (see [Statuses, scores and lossy
+  scales](#statuses-scores-and-lossy-scales)), so the AniList side also
+  equals the other side's score taken to that step (`anilistStepScore`: the
+  app score written, quantized to the format and read back), in either
+  direction: a `POINT_5` 8 or a `POINT_3` 9 against the app's 7. Without an
+  AniList side there is no step rule. When another field differs, the copy's
+  writer compares values field by field, so a step-only score rides along;
+  writing it lands on the stored step, a server-side no-op.
+- **`rewatches` is compared as-is.** The T6/T7 adapters normalize it to the
+  app's count-at-start on every read and write, so the helper takes no
+  provider semantics.
+- **One-sided pairs.** A missing target row (cached and queued) differs in
+  every field, so a `planned`/0/0/0 primary is still created; a missing
+  source row differs in none, since copying "nothing" would be a delete.
 
 ## MyAnimeList
 

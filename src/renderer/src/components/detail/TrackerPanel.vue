@@ -9,6 +9,7 @@ import { useTrackersStore } from '../../stores/trackers';
 import { useLibraryStore } from '../../stores/library';
 import { useOfflineStore } from '../../stores/offline';
 import { TrackerKey } from './keys';
+import TrackerMirrorChips from './TrackerMirrorChips.vue';
 
 const props = defineProps<{
   anime: AnimeDetail;
@@ -34,7 +35,7 @@ const {
 } = trackerRate;
 
 const trackersStore = useTrackersStore();
-const { primary } = storeToRefs(trackersStore);
+const { primary, multiAccount } = storeToRefs(trackersStore);
 const label = computed(() => (primary.value ? TRACKER_LABELS[primary.value] : ''));
 const badge = computed(() => (primary.value ? TRACKER_BADGES[primary.value] : ''));
 const titleUrl = computed(() =>
@@ -78,6 +79,8 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
           Open ↗
         </a>
       </h4>
+      <!-- The mirrors (#705): only with two or more trackers connected. -->
+      <TrackerMirrorChips v-if="multiAccount" :anime="props.anime" />
       <div v-if="loading" class="shiki-loading">Loading…</div>
       <template v-else>
         <div class="sk-field">

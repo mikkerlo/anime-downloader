@@ -9,7 +9,7 @@
 
 Dedup rule: if a `(animeId, _)` resume row exists, no Next-up row is emitted for that anime — Resume already represents the user's most recent intent on the show.
 
-Sort order: descending tracker `updatedAt` — same rule as the ShikimoriView "To Watch" tab. Resume rows look up their tracker entry by `animeId` (via `smotretAnime.id`, else `malIdMap`) and inherit its `updatedAt`; if the anime isn't on the list, or its `updatedAt` is null or 0, the row falls back to its local `watchProgress.updatedAt`. A Next-up row with a null or 0 `updatedAt` sorts as now. Resume and Next-up rows are mixed in this single ordering.
+Sort order: descending tracker `updatedAt` — same rule as the list page's "To Watch" tab (`TrackerListView`, #707). Resume rows look up their tracker entry by `animeId` (via `smotretAnime.id`, else `malIdMap`) and inherit its `updatedAt`; if the anime isn't on the list, or its `updatedAt` is null or 0, the row falls back to its local `watchProgress.updatedAt`. A Next-up row with a null or 0 `updatedAt` sorts as now. Resume and Next-up rows are mixed in this single ordering.
 
 The `malIdMap` joins and the emitted `malId` read the entry's `malId`, except on Shikimori, where they read `native.rate.target_id` as 6.x did: a row cached by an older version can lack it, and the codec's `malId` would fall back to `shikiAnime.id` and join a title that never joined before.
 

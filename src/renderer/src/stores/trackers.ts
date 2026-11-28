@@ -220,12 +220,15 @@ export const useTrackersStore = defineStore('trackers', () => {
     return cached ? cached.values : null
   }
 
-  // The primary's cache rows, overlaid. A title only in the queue has no
+  // A tracker's cache rows, overlaid. A title only in the queue has no
   // `anime` block to render, so it isn't a row here; `rateFor` reaches it.
+  function ratesFor(id: TrackerId): TrackerRateEntry[] {
+    return (ratesByTracker.value[id] ?? []).map((e) => overlaid(id, e))
+  }
+
   const primaryRates = computed<TrackerRateEntry[]>(() => {
     const id = primary.value
-    if (!id) return []
-    return (ratesByTracker.value[id] ?? []).map((e) => overlaid(id, e))
+    return id ? ratesFor(id) : []
   })
 
   const aggregateSyncState = computed<AggregateSyncState>(() => {
@@ -533,6 +536,7 @@ export const useTrackersStore = defineStore('trackers', () => {
     featureSource,
     canAutoDl,
     detailsFor,
+    ratesFor,
     rateFor,
     rateStateFor,
     holdTitle,

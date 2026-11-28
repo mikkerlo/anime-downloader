@@ -196,6 +196,26 @@ describe('useTrackersStore — queued overlay', () => {
     expect(store.ratesByTracker.anilist?.[0].values.episodes).toBe(7)
   })
 
+  // #707: the list page reads any connected tracker's rows this way.
+  it('ratesFor overlays a non-primary tracker’s own queue, and is [] for one with no rows', async () => {
+    const both = [account('shikimori', 1), account('anilist', 2)]
+    installApi({
+      accounts: accountsState(both, 'shikimori'),
+      rates: {
+        anilist: snapshot('anilist', [entry('anilist', 100, 7), entry('anilist', 200, 1)], {
+          100: values(8)
+        })
+      }
+    })
+    const store = await makeStore()
+    expect(store.ratesFor('anilist').map((e) => [e.malId, e.values.episodes])).toEqual([
+      [100, 8],
+      [200, 1]
+    ])
+    expect(store.ratesFor('mal')).toEqual([])
+    expect(store.ratesByTracker.anilist?.[0].values.episodes).toBe(7)
+  })
+
   it('the drain, in main emit order (rate first, then queue), never reads the cache-only value', async () => {
     installApi({
       accounts: accountsState([account('anilist', 2)]),

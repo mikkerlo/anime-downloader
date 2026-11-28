@@ -20,6 +20,7 @@ produce the expected typed objects.
 | `friend-history.json` | `GET /api/users/{id}/history?target_type=Anime` | `getFriendHistory` (private), `getFriendsActivity` |
 | `calendar.json` | `GET /api/calendar` | `getCalendar` |
 | `franchise.json` | `GET /api/animes/{id}/franchise` | `getFranchise` |
+| `franchise-chronology.json` | not a response: `shikimori:get-related(5114)`'s output captured on `main` (4fa7e3d1) before #710's extraction | the chronology characterization (`test/helpers/chronology-fixtures.ts`) |
 | `token-refresh.json` | `POST /oauth/token` | `refreshToken` (private), `ensureFreshToken` |
 
 ## Anonymization

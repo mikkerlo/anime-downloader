@@ -184,6 +184,8 @@ export const CHANNELS = {
   TRACKER_GET_PARKED_QUEUES: 'tracker:get-parked-queues',
   TRACKER_GET_RATE: 'tracker:get-rate',
   TRACKER_GET_RATES: 'tracker:get-rates',
+  // The chronology from the resolved `chronology` source (#710).
+  TRACKER_GET_RELATED: 'tracker:get-related',
   TRACKER_GET_SYNC_STATUS: 'tracker:get-sync-status',
   TRACKER_LIST_ACCOUNTS: 'tracker:list-accounts',
   TRACKER_LOGOUT: 'tracker:logout',

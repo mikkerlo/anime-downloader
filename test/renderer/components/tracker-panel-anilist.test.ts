@@ -112,7 +112,7 @@ function installApi(opts: { expired?: boolean; queueLength?: number } = {}) {
     shikimoriGetOfflineQueueLength: vi.fn().mockResolvedValue(0),
     shikimoriGetRate: vi.fn().mockResolvedValue(null),
     shikimoriUpdateRate: vi.fn().mockResolvedValue(null),
-    shikimoriGetRelated: vi.fn().mockResolvedValue([]),
+    trackerGetRelated: vi.fn().mockResolvedValue([]),
     trackerListAccounts: vi.fn().mockResolvedValue({
       accounts: [signedOut('shikimori'), anilistAccount(opts), signedOut('mal')],
       primary: 'anilist',

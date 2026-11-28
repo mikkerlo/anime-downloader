@@ -1,0 +1,84 @@
+{
+  "5114": {
+    "id": 5114,
+    "title": "Fullmetal Alchemist: Brotherhood",
+    "main_picture": {
+      "medium": "https://cdn.myanimelist.net/images/anime/1208/94745.jpg",
+      "large": "https://cdn.myanimelist.net/images/anime/1208/94745l.jpg"
+    },
+    "media_type": "tv",
+    "start_date": "2009-04-05",
+    "related_anime": [
+      {
+        "node": {
+          "id": 121,
+          "title": "Fullmetal Alchemist",
+          "main_picture": { "medium": "https://cdn.myanimelist.net/images/anime/10/75815.jpg" }
+        },
+        "relation_type": "alternative_version",
+        "relation_type_formatted": "Alternative version"
+      },
+      {
+        "node": { "id": 9135, "title": "Fullmetal Alchemist: The Sacred Star of Milos" },
+        "relation_type": "side_story",
+        "relation_type_formatted": "Side story"
+      },
+      {
+        "node": { "id": 6421, "title": "Isekai Quartet" },
+        "relation_type": "character",
+        "relation_type_formatted": "Character"
+      },
+      {
+        "node": { "id": 7000, "title": "Something Else" },
+        "relation_type": "other",
+        "relation_type_formatted": "Other"
+      }
+    ]
+  },
+  "121": {
+    "id": 121,
+    "title": "Fullmetal Alchemist",
+    "main_picture": { "medium": "https://cdn.myanimelist.net/images/anime/10/75815.jpg" },
+    "media_type": "unknown",
+    "start_date": "2003-10",
+    "related_anime": [
+      {
+        "node": { "id": 5114, "title": "Fullmetal Alchemist: Brotherhood" },
+        "relation_type": "alternative_version",
+        "relation_type_formatted": "Alternative version"
+      },
+      {
+        "node": { "id": 430, "title": "Fullmetal Alchemist: The Conqueror of Shamballa" },
+        "relation_type": "sequel",
+        "relation_type_formatted": "Sequel"
+      }
+    ]
+  },
+  "9135": {
+    "id": 9135,
+    "title": "Fullmetal Alchemist: The Sacred Star of Milos",
+    "main_picture": { "medium": "https://cdn.myanimelist.net/images/anime/9135.jpg" },
+    "start_date": "2011",
+    "related_anime": [
+      {
+        "node": { "id": 5114, "title": "Fullmetal Alchemist: Brotherhood" },
+        "relation_type": "parent_story",
+        "relation_type_formatted": "Parent story"
+      }
+    ]
+  },
+  "430": {
+    "id": 430,
+    "title": "Fullmetal Alchemist: The Conqueror of Shamballa",
+    "main_picture": { "medium": "https://cdn.myanimelist.net/images/anime/430.jpg" },
+    "media_type": "movie",
+    "start_date": "2005-07-23",
+    "related_anime": [
+      {
+        "node": { "id": 121, "title": "Fullmetal Alchemist" },
+        "relation_type": "prequel",
+        "relation_type_formatted": "Prequel"
+      }
+    ]
+  }
+}

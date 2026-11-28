@@ -228,6 +228,8 @@ function animeOf(node: MalNode | undefined): TrackerRateEntryPayload['anime'] {
   return {
     title: node?.title ?? '',
     poster: posterOf(node),
+    // `posterOf` already picks `large`, MAL's biggest picture.
+    posterOriginal: posterOf(node),
     kind: node?.media_type ?? null,
     // 0 is MAL's "unknown".
     episodes: total,

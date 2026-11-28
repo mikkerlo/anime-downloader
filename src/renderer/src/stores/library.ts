@@ -12,7 +12,7 @@ export type LibraryView =
   | 'home'
   | 'search'
   | 'library'
-  | 'shikimori'
+  | 'tracker-list'
   | 'friends'
   | 'calendar'
   | 'recommendations'
@@ -39,7 +39,7 @@ const STACKED_VIEWS = [
   'home',
   'search',
   'library',
-  'shikimori',
+  'tracker-list',
   'friends',
   'calendar',
   'recommendations'
@@ -51,7 +51,7 @@ function emptyStacks(): Record<StackedView, number | null> {
     home: null,
     search: null,
     library: null,
-    shikimori: null,
+    'tracker-list': null,
     friends: null,
     calendar: null,
     recommendations: null
@@ -63,7 +63,7 @@ function emptyHistory(): Record<StackedView, number[]> {
     home: [],
     search: [],
     library: [],
-    shikimori: [],
+    'tracker-list': [],
     friends: [],
     calendar: [],
     recommendations: []
